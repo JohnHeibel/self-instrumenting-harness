@@ -2,6 +2,8 @@
 
 **The single source of truth for who does what.** Only john-mac edits this file. Assignments and changes to them happen here, not in chat. When an assignment changes, john-mac updates this file and sends a short message pointing to it.
 
+**Roles:** john-mac is John's main point of contact and the coordinator. john-pc is the powerful machine, with Factorio (and room for more games) next to it. Nazeem's side owns the UI and the Minecraft host.
+
 Decisions live in `docs/BRIEF.md` ("Decisions already made"). Interfaces live in `docs/interfaces/`.
 
 ## Rules
@@ -11,15 +13,16 @@ Decisions live in `docs/BRIEF.md` ("Decisions already made"). Interfaces live in
 3. **Report through your status.** Set `status/<you>` in the mailbox when you start or finish a task, naming its ID (e.g. "T3 in progress: …"). Report finished work to john-mac with commits and test results.
 4. **Branches:** john-pc and john-mac commit to `main` in their own areas. Nazeem's side works on **one** UI branch at a time and merges to `main` through a PR that john-mac reviews.
 5. **Generality rule** (AGENTS.md) applies to every harness change.
-6. Anything that needs Factorio running is john-pc's. Nobody else writes Factorio launch, reload or grader code.
+6. Each game's host setup and grader belong to the side that runs that game: Factorio is john-pc's, Minecraft is Nazeem's. Nobody else writes launch, reload or grader code for a host they can't run.
 
 ## Areas
 
 | Area | Owner |
 |---|---|
 | `toolserver/`, `runner/`, `agent/` (image, container) | john-pc |
-| `hosts/`, `graders/` (Factorio host setup and grader) | john-pc |
+| `hosts/factorio*`, `graders/factorio/` (Factorio host setup and grader) | john-pc |
 | `ui/` (all views), the SpacetimeDB module and publisher, `tools/fakerun/` | nazeemkamel1 |
+| `hosts/minecraft*`, `graders/minecraft/` (Minecraft host setup, testing and grader) | nazeemkamel1 |
 | `docs/BRIEF.md`, `docs/TASKS.md`, `docs/interfaces/`, `AGENTS.md`, `tools/mailbox/` | john-mac |
 | `docs/research/` | anyone (append-only notes) |
 
@@ -36,7 +39,7 @@ Decisions live in `docs/BRIEF.md` ("Decisions already made"). Interfaces live in
 
 If something needs John (e.g. the launch design hits Steam's prompt), stop and report to john-mac.
 
-## nazeemkamel1 (UI only)
+## nazeemkamel1 (UI, plus the Minecraft host)
 
 | ID | Task | Status | Done when |
 |---|---|---|---|
@@ -45,7 +48,8 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 | N3 | **SpacetimeDB module and publisher.** The publisher tails a run's top-level `*.jsonl` and batches writes; tested against fake runs; john-pc runs it on the PC | queued | Story replays a run from SpacetimeDB |
 | N4 | **Stage overlay** (live, over the game screen) | later | |
 | N5 | **Ops view** (health, alerts, STOP/PAUSE controls through reducers) | later | |
-| — | **Stop all Factorio host work.** PR #1 will not be merged: John wants the Factorio setup built against the real game, by john-pc. | — | |
+| N6 | **Minecraft host** on Nazeem's Mac, the second host: get the modded game running, then `hosts/minecraft.toml` (data only, per the generality rule), then live plumbing tests (state out, reload) and a grader. It must work with the unchanged harness; anything the harness can't express generically goes to john-mac as a `request`. | in progress (setup) | the harness loads an agent-written extension into Minecraft and calls its tool |
+| — | **No Factorio host work.** PR #1 was closed: the Factorio setup is built against the real game by john-pc. | — | |
 
 ## john-mac (coordination, design, review)
 
@@ -56,10 +60,8 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 | M3 | A generic agent brief and goal-file format (host notes come from the host config), plus the Factorio goal file | queued |
 | M4 | Evaluation plan: screenshot-only baseline, ablation, planted break, held-out tasks | queued |
 
-## Waiting on John
+## Open questions
 
-| Question | Raised by |
+| Question | Waiting on |
 |---|---|
-| Real-world showcase: Tennessee Eastman chemical-plant control room (Nazeem's proposal) vs Odoo vs Business Central | nazeemkamel1 |
-| Second host: Minecraft (Nazeem researching on his Mac) vs KSP; and is that research part of Nazeem's UI-only scope? | john-mac |
-| Close PR #1 now, or once P4 lands? | john-mac |
+| Real-world showcase: Tennessee Eastman chemical-plant control room vs Odoo vs Business Central. John defers to Nazeem, who is still deciding | Nazeem |
