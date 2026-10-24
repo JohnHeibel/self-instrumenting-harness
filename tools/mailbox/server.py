@@ -148,16 +148,18 @@ class GitHub:
         q = urllib.parse.quote(path)
         # Two writers committing to the branch at once can collide on the branch head (409)
         # even for different files; retry those. A stale `sha` on the same file also returns
-        # 409, which the caller turns into a conflict, so only retry when no sha was given.
+        # 409, so with a sha, retry only while the file itself is still at that sha.
         for attempt in range(5):
             try:
                 res = self.req("PUT", f"/repos/{self.repo}/contents/{q}", body)
                 return res["content"]["sha"]
             except MailboxError as e:
                 status = getattr(e, "status", None)
-                if status == 409 and sha is None and attempt < 4:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
+                if status == 409 and attempt < 4:
+                    current = self.get_file(path) if sha else None
+                    if sha is None or (current and current[1] == sha):
+                        time.sleep(0.5 * (attempt + 1))
+                        continue
                 raise
         raise MailboxError("unreachable")
 
