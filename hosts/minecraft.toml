@@ -14,6 +14,9 @@ stop = ["{python}", "minecraft/hostctl.py", "stop"]
 start_timeout_s = 300
 # The agent's own Minescript script may serve HTTP on this port (see notes).
 agent_ports = [8777]
+# Calls go through a logging forwarder on port+offset (toolserver/forward.py): reach the bridge at
+# host.docker.internal:18777 so every call is recorded as a hook call.
+forward_offset = 10000
 notes = """
 Minecraft Java 1.21.1 (NeoForge 21.1.264) with the Minescript 4.0 mod, one client window on a Mac. A survival
 world is already open and you are its only player; the window should stay in front. Keyboard focus and
@@ -23,8 +26,8 @@ Minescript runs Python scripts (the Mac's python3, a real process each time) tha
 in chat: press T, type \\name (for a script in a folder, \\folder/name), press Enter. Your in-host files land in
 the game's minescript folder as the install_as folder. A script is read from disk on every run, so an edit takes
 effect on the next run with no restart; running one by typing takes about a second. \\jobs lists running scripts
-and \\killjob <id> stops one. A script can serve HTTP on 0.0.0.0:8777 (the only port open to your sandbox, as
-host.docker.internal:8777): run one bridge script that answers queries and starts or stops actions, and keep
+and \\killjob <id> stops one. A script can serve HTTP on 0.0.0.0:8777 (the only port open to your sandbox). Your sandbox must call it at
+host.docker.internal:18777, a forwarder that records each call in the run log (the raw 8777 is not logged): run one bridge script that answers queries and starts or stops actions, and keep
 your sandbox tools thin. The script must make all Minescript calls from its main thread.
 The `minescript` module (read_docs lists its API; the installed 4.0 has: player_position, player_orientation,
 player_set_orientation, player_inventory, player_hand_items, player_get_targeted_block and _entity, player_health,

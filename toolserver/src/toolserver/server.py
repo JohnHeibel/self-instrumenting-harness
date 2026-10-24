@@ -249,6 +249,9 @@ def main() -> None:
     executor = LocalExecutor(workspace) if container == "local" else ContainerExecutor(container)
     log = EventLog(args.run_dir / "events.jsonl", args.run_id)
     log.write("server_started", host=args.host, port=args.port, host_config=host_config.name)
+    if host_config.forward_offset and host_config.agent_ports:
+        from . import forward
+        forward.start(log, host_config.agent_ports, host_config.forward_offset)
     if not args.no_spectator:
         spectator.start(Target(title=args.window_title or host_config.window_title, process=host_config.process,
                                mode=host_config.capture), args.run_dir)

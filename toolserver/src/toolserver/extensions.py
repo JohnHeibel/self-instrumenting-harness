@@ -68,6 +68,7 @@ class HostConfig:
     capture: str = "window"                   # window | process | monitor (see capture.py)
     up_check: str | list[str] = "window"      # window | always | [argv]: up when it exits 0
     agent_ports: list[int] = field(default_factory=list)  # host ports the agent's sandbox may reach
+    forward_offset: int = 0                   # >0: log traffic to agent_ports through port+offset (forward.py)
     start: list[str] = field(default_factory=list)   # brings the host up when it is down
     stop: list[str] = field(default_factory=list)    # run once when the run ends
     start_timeout_s: int = 300
@@ -96,6 +97,7 @@ class HostConfig:
             capture=_one_of(host.get("capture", "window"), CAPTURE_MODES, "capture"),
             up_check=[fill(a) for a in up] if isinstance(up, list) else up,
             agent_ports=_ports(host.get("agent_ports", [])),
+            forward_offset=int(host.get("forward_offset", 0)),
             start=[fill(a) for a in _argv(host.get("start", []), "start")],
             stop=[fill(a) for a in _argv(host.get("stop", []), "stop")],
             start_timeout_s=int(host.get("start_timeout_s", 300)),
