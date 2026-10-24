@@ -56,8 +56,8 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 | ID | Task | Status |
 |---|---|---|
 | M1 | Keep this board, BRIEF and the interfaces current; review PRs into `main`  | ongoing |
-| M2 | Generic `read_docs` design: the host config lists doc sources, and the tool searches them | in progress |
-| M3 | A generic agent brief and goal-file format (host notes come from the host config), plus the Factorio goal file | queued |
+| M2 | Generic `read_docs` design: the host config lists doc sources, and the tool searches them | done (toolserver/src/toolserver/docs.py) |
+| M3 | A generic agent brief and goal-file format (host notes come from the host config), plus the Factorio goal file | in progress |
 | M4 | Evaluation plan: screenshot-only baseline, ablation, planted break, held-out tasks | queued |
 | M5 | **macOS screenshot and input backend** (`toolserver/src/toolserver/macos.py`, plus dispatch edits in capture.py, inputs.py and io_tools.py, agreed with john-pc), so hosts can run on a Mac (Nazeem's Minecraft). Tests with a fake, plus a live check on John's Mac | in progress |
 
