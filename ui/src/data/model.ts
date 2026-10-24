@@ -23,6 +23,23 @@ export type FeedItem = {
   text: string; count: number; tone?: Tone
 }
 export type Milestone = { id: string; name: string; t?: number; evidence?: string }
+/** One 30-minute bin of leverage: what the program did per model step. */
+export type LeverageBin = {
+  t0: number; t1: number; steps: number; tokens: number; actions: number; kinds: Record<string, number>
+  estimated: boolean  // only estimates (made afterwards from host commands) exist for this bin
+  aps?: number; tpa?: number  // actions per step; tokens per action
+}
+/** Everything the program counted before its first record, which arrives as one lump covering the run so far. */
+export type LeveragePre = { t0: number; t1: number; actions: number; kinds: Record<string, number>; steps: number; tokens: number; aps?: number; tpa?: number }
+export type Leverage = {
+  bins: LeverageBin[]; binMs: number; pre?: LeveragePre
+  now?: { aps: number; tpa: number; estimated: boolean }  // the trailing 30 minutes
+  kinds: string[]  // every kind seen, most frequent first
+  anyEstimated: boolean
+}
+export const LEVERAGE_BIN_MS = 30 * 60_000
+export const ESTIMATED = 'estimated_from_host_commands'
+
 export type MarkerKind = 'milestone' | 'hook' | 'break' | 'repair' | 'compaction' | 'message'
   | 'restart' | 'interrupt' | 'prompt' | 'violation' | 'grew' | 'note'
 export type Marker = { t: number; kind: MarkerKind; label: string; detail?: string }
@@ -159,6 +176,74 @@ export class Run {
     const ids = new Set<string>(asOf ? (asOf.milestones ?? []).map((m: { id: string }) => m.id) : [])
     const list = this.milestonesDefined.filter(m => ids.has(m.id) || reached.has(m.id) || !asOf)
     return list.map(m => ({ ...m, t: reached.get(m.id)?.t, evidence: reached.get(m.id)?.evidence }))
+  }
+
+  /** Leverage in 30-minute bins up to `at`: `program_actions` (counted by the program) per model step (`usage` record), with
+   *  tokens per action beside it. Kind names are whatever the host writes. Where real and estimated counts overlap a bin the real
+   *  ones win. A first real record that covers far more than one bin is the run so far in one lump: it is taken out of the bins
+   *  and reported as `pre`, with the steps and tokens of the same stretch. */
+  leverage(at: number): Leverage {
+    const BIN = LEVERAGE_BIN_MS
+    const acts = this.upTo('program_actions', at)
+    const real = acts.filter(a => a.source !== ESTIMATED)
+    // The lump: the first real record, when what came before it (estimates, or the run's start) is more than a bin and a half away.
+    const before = real[0] ? acts.filter(a => a.t < real[0].t).reduce((m, a) => Math.max(m, a.t), this.t0) : this.t0
+    const lump = real[0] && real[0].t - before > BIN * 1.5 ? real[0] : undefined
+    const from = lump?.t ?? -Infinity  // steps and records at or before this belong to `pre`
+    const tracked = acts.filter(a => a !== lump && a.t > from)
+    const kindMap = (a: TRec): Record<string, number> => Object.fromEntries(Object.entries(a.kinds ?? {}).map(([k, n]) => [k, Number(n) || 0]))
+    const total = (a: TRec) => Number(a.count) || Object.values(kindMap(a)).reduce((x, y) => x + y, 0)
+
+    const stepAt: { t: number; tokens: number }[] = []
+    let prev = 0
+    for (const u of this.tokenSeries) { stepAt.push({ t: u.t, tokens: u.cum - prev }); prev = u.cum }
+    const steps = stepAt.filter(u => u.t <= at)
+
+    const bi = (t: number) => Math.floor((t - this.t0) / BIN)
+    const mk = (i: number): LeverageBin & { real: boolean } => ({ t0: this.t0 + i * BIN, t1: this.t0 + (i + 1) * BIN, steps: 0, tokens: 0, actions: 0, kinds: {}, estimated: false, real: false })
+    const map = new Map<number, LeverageBin & { real: boolean }>()
+    const get = (i: number) => { let b = map.get(i); if (!b) { b = mk(i); map.set(i, b) } return b }
+    for (const u of steps) if (u.t > from) { const b = get(bi(u.t)); b.steps++; b.tokens += u.tokens }
+    // Real counts first; estimates only fill bins that have none.
+    for (const pass of [false, true]) {
+      for (const a of tracked) {
+        if ((a.source === ESTIMATED) !== pass) continue
+        const b = get(bi(a.t))
+        if (pass && b.real) continue
+        if (!pass) b.real = true
+        b.actions += total(a)
+        for (const [k, n] of Object.entries(kindMap(a))) b.kinds[k] = (b.kinds[k] ?? 0) + n
+        b.estimated = pass
+      }
+    }
+    // A bin with estimates from several records must not also have real ones: handled by `real` above; mixed bins keep real only.
+    for (const b of map.values()) if (b.real) b.estimated = false
+    const bins: LeverageBin[] = [...map.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b)
+      .filter(b => b.actions > 0 && b.steps > 0)
+      .map(b => ({ t0: b.t0, t1: b.t1, steps: b.steps, tokens: b.tokens, actions: b.actions, kinds: b.kinds, estimated: b.estimated,
+                   aps: b.actions / b.steps, tpa: b.tokens / b.actions }))
+
+    let pre: LeveragePre | undefined
+    if (lump) {
+      const ps = stepAt.filter(u => u.t <= lump.t)
+      const tokens = ps.reduce((x, u) => x + u.tokens, 0), actions = total(lump)
+      pre = { t0: this.t0, t1: lump.t, actions, kinds: kindMap(lump), steps: ps.length, tokens,
+              aps: ps.length ? actions / ps.length : undefined, tpa: actions ? tokens / actions : undefined }
+    }
+
+    // The headline is the trailing 30 minutes, so it doesn't swing with one half-filled bin.
+    const w0 = Math.max(at - BIN, from)
+    const inWin = tracked.filter(a => a.t > w0 && a.t <= at)
+    const useReal = inWin.some(a => a.source !== ESTIMATED)
+    const win = inWin.filter(a => (a.source !== ESTIMATED) === useReal)
+    const ws = steps.filter(u => u.t > w0)
+    const wa = win.reduce((x, a) => x + total(a), 0), wt = ws.reduce((x, u) => x + u.tokens, 0)
+    const now = ws.length && wa ? { aps: wa / ws.length, tpa: wt / wa, estimated: !useReal } : undefined
+
+    const counts = new Map<string, number>()
+    for (const a of [...tracked, ...(lump ? [lump] : [])]) for (const [k, n] of Object.entries(kindMap(a))) counts.set(k, (counts.get(k) ?? 0) + n)
+    const kinds = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k)
+    return { bins, binMs: BIN, pre, now, kinds, anyEstimated: bins.some(b => b.estimated) }
   }
 
   /** Tokens used so far: the sum of per-request growth of the thread total, so a counter reset doesn't undo progress. */

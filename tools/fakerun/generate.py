@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -28,6 +29,7 @@ class Writer:
     def __init__(self, path: Path, run_id: str, writer: str) -> None:
         self.f = path.open("w", encoding="utf-8")
         self.run_id, self.writer, self.seq = run_id, writer, 0
+        self.totals: dict[str, int] = {}  # running per-kind totals, for program_actions
 
     def __call__(self, t: datetime, type_: str, **fields) -> None:
         self.seq += 1
@@ -46,6 +48,10 @@ def generate(out: Path, seed: int, hours: float, scenario: dict, rich: bool = Fa
     run_id = out.name
     tools, runner, grader = (Writer(out / f, run_id, w) for f, w in
                              [("events.jsonl", "toolserver"), ("runner.jsonl", "runner"), ("grader.jsonl", "grader")])
+    # Leverage: a separate random stream, so adding it leaves every other fake record as it was.
+    lev_rng = random.Random(seed + 1)
+    lev_kinds = LEVERAGE_KINDS.get(scenario["host"], {"act": 1})
+    estimator = Writer(_estimates_file(out), run_id, "estimator")
     t0 = datetime(*scenario.get("start", (2026, 10, 24, 4, 0)), tzinfo=timezone.utc)
     end = t0 + timedelta(hours=hours)
     at = lambda frac: t0 + timedelta(seconds=frac * hours * 3600)
@@ -132,6 +138,7 @@ def generate(out: Path, seed: int, hours: float, scenario: dict, rich: bool = Fa
             runner(t, "usage", input_tokens=per, cached_input_tokens=int(per * 0.7),
                    output_tokens=per // 30, reasoning_output_tokens=per // 15, total_tokens=total_tokens,
                    **({"context_window": 400_000} if rich else {}))
+            _program_actions(lev_rng, lev_kinds, grader, estimator, t, (t - t0).total_seconds() / (hours * 3600))
             next_usage = t + timedelta(minutes=5)
             if rng.random() < 0.06:  # a turn ended; the runner sends "continue"
                 runner(t, "turn_completed", turn=turn + 1, **({"status": "completed", "duration_ms": 1_800_000} if rich else {}))
@@ -141,6 +148,33 @@ def generate(out: Path, seed: int, hours: float, scenario: dict, rich: bool = Fa
     runner(end, "turn_completed", turn=turn + 1)
     runner(end, "agent_state", state="ended", text="Goal reached")
     runner(end, "run_ended", reason="goal reached")
+
+
+# Kinds of action each fake host counts for itself, with how often. Free-form per host, like the real ones.
+LEVERAGE_KINDS = {"factorio": {"build": 5, "mine": 2, "craft": 2, "rotate": 1},
+                  "spreadsheet-app": {"edit": 5, "format": 2, "filter": 1, "sort": 1}}
+ESTIMATED_UNTIL = 0.3  # the first stretch has only estimates (made afterwards from host commands), the rest real counts
+
+
+def _estimates_file(out: Path) -> Path:
+    (out / "estimates").mkdir(exist_ok=True)
+    return out / "estimates" / "program_actions.jsonl"
+
+
+def _program_actions(rng: random.Random, kinds: dict, grader: Writer, estimator: Writer, t: datetime, frac: float) -> None:
+    """One program_actions record per model step. Actions per step climb from ~1.6 to a peak, then settle lower as the
+    agent's own tools take over, so tokens per action fall by an order of magnitude."""
+    rise = 1 - math.exp(-frac * 9)
+    per_step = 1.6 + 26 * rise * (1 - 0.45 * max(0.0, (frac - 0.25) / 0.75))
+    count = max(1, round(per_step * rng.uniform(0.75, 1.25)))
+    mix = rng.choices(list(kinds), weights=list(kinds.values()), k=count)
+    split = {k: mix.count(k) for k in kinds if k in mix}
+    w = estimator if frac < ESTIMATED_UNTIL else grader
+    for k, n in split.items():
+        w.totals[k] = w.totals.get(k, 0) + n
+    tick = int(t.timestamp() % 10_000_000) * 60
+    w(t, "program_actions", count=count, kinds=split, totals=dict(w.totals), tick=tick,
+      source="estimated_from_host_commands" if w is estimator else "player events")
 
 
 def _hook(scenario: dict, name: str) -> dict:

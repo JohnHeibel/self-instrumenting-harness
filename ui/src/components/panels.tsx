@@ -355,11 +355,13 @@ export function Feed({ run, at, items }: { run: Run; at: number; items: FeedItem
   for (const c of calls) if (!c.ok && c.via !== 'health_check') { failed++; last = c }
   return (
     <section className="feed">
+      <div className="fhead">
       <h2>What it is doing</h2>
       <div className={`pin ${failed ? 'has' : ''}`}>
         <span className="n">{failed}</span>
         <span className="pl">failed tool call{failed === 1 ? '' : 's'}</span>
         {last && <span className="pm" title={`${last.tool}: ${last.error}`}>latest: {last.tool}: {last.error}</span>}
+      </div>
       </div>
       <div className="lines">
         {items.map((it, i) => {

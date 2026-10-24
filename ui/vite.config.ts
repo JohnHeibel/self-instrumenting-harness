@@ -35,7 +35,11 @@ function localRuns(): Plugin {
           if (!dir || !fs.existsSync(dir)) return send(res, 404, 'text/plain', 'no such run')
           // ?since=<ISO ts>: only records at or after it, for live polling (clients dedupe by writer+seq).
           const since = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('since') ?? ''
-          const records = fs.readdirSync(dir).filter(f => f.endsWith('.jsonl')).flatMap(f =>
+          // Estimates made afterwards (tools/leverage_from_commands.py) live in <run>/estimates/ and are read too: their
+          // records say `source: "estimated_from_host_commands"`, so the UI labels them.
+          const files = [...fs.readdirSync(dir).filter(f => f.endsWith('.jsonl')),
+            ...(fs.existsSync(path.join(dir, 'estimates')) ? fs.readdirSync(path.join(dir, 'estimates')).filter(f => f.endsWith('.jsonl')).map(f => `estimates/${f}`) : [])]
+          const records = files.flatMap(f =>
             fs.readFileSync(path.join(dir, f), 'utf8').split('\n').filter(Boolean).flatMap(line => {
               try { return [JSON.parse(line)] } catch { return [] }  // a line still being written
             })).filter(r => !since || (typeof r.ts === 'string' && r.ts >= since))
