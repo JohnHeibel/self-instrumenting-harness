@@ -9,7 +9,7 @@ Background research gathered Oct 23–24, 2026, while waiting for the work split
 | [prior-art.md](prior-art.md) | Re-check of the BRIEF's prior-art list (one item not found), plus Alita, LATM, DGM, Continual Harness, CUA-Skill |
 | [long-horizon-harnesses.md](long-horizon-harnesses.md) | METR horizons, Anthropic's long-running harness lessons, compaction vs. reset, how they map onto our hook library |
 | [backends-and-primitives.md](backends-and-primitives.md) | Claude Code / Agent SDK, Codex exec vs app-server, Droid exec, computer-use MCP options on Windows/Docker |
-| [live-company-scenario.md](live-company-scenario.md) | **Proposal:** the agent works as the AP/bookkeeping clerk of a simulated company on customized Odoo, continuously until judging, with exact ground truth from a world simulator |
+| [live-company-scenario.md](live-company-scenario.md) | **Proposal:** the agent works as the AP/bookkeeping clerk of a simulated company on Business Central (Odoo as fallback), continuously until judging, with exact ground truth from a world simulator |
 | [real-world-applications.md](real-world-applications.md) | Non-game showcase: ERP-Bench on Odoo 19 (recommended), other professional domains ranked, a proposed experiment, an open policy question |
 | [other-hosts-and-sponsors.md](other-hosts-and-sponsors.md) | Odoo + OCA reconcile, Minecraft and KSP reload costs, SpacetimeDB 2.0, Hyphenate |
 
