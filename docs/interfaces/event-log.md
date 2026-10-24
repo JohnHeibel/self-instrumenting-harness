@@ -33,8 +33,8 @@ Readers merge the `*.jsonl` files at the **top level** of the run directory only
 | `ok`, `error` | `error` is `"Type: message"` when `ok` is false |
 | `duration_ms` | Wall time inside the server |
 | `result_kind`, `result_bytes` | `image`, `text`, `json` or `none`, and its size |
-| `via` | Hook calls only: `direct` (its own named tool) or `call_hook` (fallback) |
-| `hook` | Hook calls only: `{name, version}` |
+| `via` | Hook calls only: `direct` (its own named tool), `call_hook` (fallback) or `health_check` (run by `load_extension`) |
+| `hook` | Hook calls only: `{name, version, extension}` |
 
 Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` and `image_size`.
 
@@ -42,13 +42,14 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 
 | Field | Meaning |
 |---|---|
-| `hook`, `version` | Name (also its tool name) and version, 1, 2, 3, … |
+| `hook`, `version` | Tool name and version, 1, 2, 3, … (the version of the extension that provides it) |
+| `extension` | The agent's extension that provides this tool; one extension can provide several |
 | `reason` | Why the agent wrote or changed it, in its own words |
 | `language` | Main language, e.g. `lua`, `python`, `csharp` |
 | `kind` | `in_host` (runs inside the host, e.g. a mod) or `helper` (runs outside it, in the agent's sandbox) |
 | `depends_on` | Names of hooks it calls; this is the library hierarchy |
 | `files` | `[{path, content}]`. Source inline so a replay is self-contained; content is capped at 64 KB per file |
-| `source_ref` | Commit in the hook library repo, when there is one |
+| `source_ref` | Where this version is archived, relative to the run directory, e.g. `extensions/factory_probe/v2` |
 
 **`hook_status`**: `hook`, `status` (`ok`, `broken` or `repaired`), `detail`. Written by health checks and repairs.
 
