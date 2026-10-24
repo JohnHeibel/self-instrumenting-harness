@@ -200,7 +200,18 @@ class Host:
         self.start()
         return f"host restarted in {time.monotonic() - t0:.0f} s"
 
-    def check(self) -> tuple[bool, str]:
+    def check(self, tries: int = 3) -> tuple[bool, str]:
+        """Up only if a check passes; retries so one slow RCON reply (say, while the agent's
+        tool runs a big query) doesn't count as the host being down."""
+        for i in range(tries):
+            up, detail = self._check_once()
+            if up:
+                return up, detail
+            if i + 1 < tries:
+                time.sleep(2)
+        return up, detail
+
+    def _check_once(self) -> tuple[bool, str]:
         if not _alive(self._pids().get("server")):
             return False, "server not running"
         if not self._rcon_ok():
@@ -301,10 +312,22 @@ class Host:
 
 
 def _alive(pid: int | None) -> bool:
+    """Asks Windows directly. (tasklist sometimes leaves out a live process under load, which
+    made the host look down.)"""
     if not pid:
         return False
-    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
-    return str(pid) in out
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    h = k32.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return ctypes.get_last_error() == 5           # access denied: it exists
+    try:
+        code = wintypes.DWORD()
+        return bool(k32.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+    finally:
+        k32.CloseHandle(h)
 
 
 def _listening(port: int) -> bool:
