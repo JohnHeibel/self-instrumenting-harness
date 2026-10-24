@@ -39,7 +39,15 @@ PY
 )
 [ "$D" = "0" ] || { echo "world $WORLD: Difficulty is '$D', not 0 (peaceful). See the manual steps above."; exit 1; }
 
-mkdir -p "$R"                       # fresh run dir; the runner creates an empty workspace
+# Fresh start: never reuse a run dir, and move whatever earlier agents installed into the game's minescript
+# folder (bridges, plugins) out of reach, into this run's dir. Minescript's own files stay.
+[ -e "$R" ] && { echo "$R already exists: every run starts fresh, pick a new run dir."; exit 1; }
+mkdir -p "$R/previous-in-game"      # the runner creates an empty workspace
+MS="$SAVES/../minescript"
+for f in "$MS"/*(N); do
+  case "${f:t}" in config.txt|system|blockpacks) ;; *) mv "$f" "$R/previous-in-game/" ;; esac
+done
+pkill -f "minescript/.*\.py" 2>/dev/null   # bridges still running from an earlier run
 (cd toolserver && uv run python ../hosts/minecraft/hostctl.py focus)
 sleep 1
 # Grader first, so it is watching before the agent acts.
