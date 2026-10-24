@@ -7,12 +7,15 @@ The agent's only interface to the host: screenshots, input, docs, and its own ex
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 import anyio
 
 from mcp import types
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.transport_security import TransportSecuritySettings
@@ -21,10 +24,11 @@ from mcp.server.fastmcp.exceptions import ToolError
 from . import costs as costs_mod, io_tools, scripts, spectator
 from .capture import Target
 from .docs import Docs, answer as answer_docs
-from .events import EventLog
+from .events import VIA, EventLog
 from .extensions import ContainerExecutor, Executor, Extensions, HostConfig, LocalExecutor
 
 READ_ONLY = types.ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+SCRIPT_BLOCKED = {"screenshot", "load_extension", "run_script", "wait", "call_hook"}
 # Names agents can't give their own tools, including ones reserved for tools still to come.
 BUILTIN = {"screenshot", "load_extension", "list_hooks", "call_hook", "set_goal", "wait",
            "click", "drag", "move", "scroll", "key", "type", "read_docs", "costs", "run_script"}
@@ -148,7 +152,8 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
                 raise ToolError("give either code or file")
             if file.startswith(("/", "\\")) or ".." in file.replace("\\", "/").split("/"):
                 raise ToolError("file is a path inside your workspace, relative to it")
-            ok, text, calls = await scripts.run(ext, code, timeout_s, file, args)
+            ok, text, calls = await scripts.run(ext, code, timeout_s, file, args, script_url,
+                                                sorted(BUILTIN - SCRIPT_BLOCKED))
             for c in calls:   # each inner call is recorded like a direct one, for review and for costs
                 log.write("tool_call", tool=c.get("tool"), channel="hook", args=c.get("args"), ok=c.get("ok"),
                           error=c.get("error"), duration_ms=c.get("ms"), result_kind="text",
@@ -158,6 +163,31 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
             if not ok:
                 raise ToolError(text)
             return text
+
+    # Scripts reach the built-in tools here (the MCP endpoint needs a session; this doesn't).
+    in_container = isinstance(ext.executor, ContainerExecutor)
+    script_url = f"http://{'host.docker.internal' if in_container else '127.0.0.1'}:{port}/script-call"
+
+    @mcp.custom_route("/script-call", methods=["POST"])
+    async def script_call(request: Request) -> JSONResponse:
+        body = await request.json()
+        name, call_args = body.get("name"), body.get("args") or {}
+        if name not in BUILTIN or name in SCRIPT_BLOCKED:
+            return JSONResponse({"ok": False, "error": f"{name} can't be called from a script"})
+        token = VIA.set("script")
+        try:
+            result = await mcp.call_tool(name, call_args)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)[:2000]})
+        finally:
+            VIA.reset(token)
+        if isinstance(result, tuple):   # (content blocks, structured): a typed result, e.g. a list
+            content, structured = result
+            if isinstance(structured, dict) and set(structured) == {"result"}:
+                return JSONResponse({"ok": True, "text": json.dumps(structured["result"])})
+        else:
+            content = result
+        return JSONResponse({"ok": True, "text": "\n".join(getattr(c, "text", "") for c in content)})
 
     run_dir = (archive_dir or Path("extensions")).parent
 

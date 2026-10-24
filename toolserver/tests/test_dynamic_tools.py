@@ -264,6 +264,15 @@ def test_run_script_composes_tool_calls_in_one_step(server):
         saved = await s.call_tool("run_script", {"file": "chores/probe_many.py", "args": {"n": 2}})
         assert not saved.isError and saved.content[0].text.startswith('{"qs":["0","1"]}'), saved.content[0].text
         assert (await s.call_tool("run_script", {"file": "../events.jsonl"})).isError
+        builtin_code = textwrap.dedent("""
+            print(call('set_goal', text='g', serves='s'), call('list_hooks')[0]['tool'])
+            try:
+                call('screenshot')
+            except ToolFailed as e:
+                print('blocked')
+        """)
+        both = await s.call_tool("run_script", {"code": builtin_code})
+        assert not both.isError and both.content[0].text.startswith("ok probe_state\nblocked"), both.content[0].text
         assert (await s.call_tool("run_script", {})).isError
 
     anyio.run(_session, server["url"], body)
@@ -272,4 +281,6 @@ def test_run_script_composes_tool_calls_in_one_step(server):
     assert len(inner) == 6 and [e["ok"] for e in inner] == [True, True, True, False, True, True]
     assert inner[0]["hook"]["extension"] == "probe_kit" and inner[0]["args"] == {"q": "0"}
     outer = [e for e in ev if e["type"] == "tool_call" and e["tool"] == "run_script"]
-    assert [e["ok"] for e in outer] == [True, False, True, False, False] and outer[0]["inner_calls"] == 4
+    assert [e["ok"] for e in outer] == [True, False, True, False, False, True] and outer[0]["inner_calls"] == 4
+    scripted = [e["tool"] for e in ev if e["type"] == "tool_call" and e.get("via") == "script" and e["channel"] != "hook"]
+    assert scripted == ["set_goal", "list_hooks"]

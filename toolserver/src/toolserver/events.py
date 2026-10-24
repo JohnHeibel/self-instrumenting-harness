@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 import threading
 import time
@@ -29,6 +30,10 @@ class _Result:
         """`save(seq)` writes a file named after the record's seq and returns its path
         relative to the run dir; it runs when the record is written."""
         self.artifact = save
+
+
+# Set while a run_script script calls a built-in tool, so its record says via="script".
+VIA: contextvars.ContextVar[str | None] = contextvars.ContextVar("via", default=None)
 
 
 class EventLog:
@@ -65,6 +70,8 @@ class EventLog:
     def call(self, tool: str, channel: str, args: dict[str, Any], **fields: Any) -> Iterator[_Result]:
         """Log one tool call: ok or error, duration, and what it returned."""
         result = _Result()
+        if VIA.get() and "via" not in fields:
+            fields = {**fields, "via": VIA.get()}
         t0 = time.perf_counter()
         try:
             yield result
