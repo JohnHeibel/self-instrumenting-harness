@@ -9,14 +9,20 @@ window_title = "Factorio"
 # Where load_extension copies an extension's in_host directory (a Factorio mod folder).
 # Steam on Windows keeps user mods here.
 install_dir = "%APPDATA%/Factorio/mods"
-reload_timeout_s = 180
+reload_timeout_s = 300
 
 [extensions.reload]
 # Named commands the agent can ask for in extension.json ("reload": "<name>"), run on the host.
 # "none": copy files only. A mod's control.lua runs again whenever a save is loaded, so the
 # agent can pick up control-stage changes itself through the game's own menus.
 none = []
-# TODO(nazeem, plumbing test b): fill in once we know what works on this PC. For example, a
-# script that saves, quits and relaunches Factorio into the latest save, with RCON enabled if
-# the agent's helpers use it. Data-stage changes need a full restart.
-# restart = ["powershell", "-File", "hosts/factorio/restart.ps1"]
+# "restart": UNTESTED, written from docs (hosts/factorio/README.md); john-pc verifies. Saves over RCON,
+# stops the headless server and the GUI client, restarts the server from the latest save with RCON
+# on, and relaunches the client with --mp-connect. Needs FACTORIO_RCON_PASSWORD in the tool server's
+# environment. The path is relative, so the tool server must run from the repo root. Data-stage
+# changes need this full restart; control-stage changes may get by with a lighter one (README).
+restart = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "hosts/factorio/restart.ps1"]
+# EXPERIMENTAL, left off on purpose: game.reload_script() over RCON. It may not re-run a mod's
+# control.lua and the script exits 0 either way, so the agent could believe a reload happened.
+# Enable only after plumbing test (b) shows it works. See the README.
+# reload_script = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "hosts/factorio/rcon.ps1", "-Command", "/silent-command game.reload_script()"]

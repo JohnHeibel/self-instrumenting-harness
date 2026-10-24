@@ -1,0 +1,17 @@
+{
+  "_comment": "UNTESTED -- written from docs; verify on john-pc. Template for the harness server; restart.ps1 copies it to %LOCALAPPDATA%\\factorio-harness\\server-settings.json once. Field names are from memory of Factorio's server-settings.example.json and were not checked against the 2.0 file; the game logs unknown or wrong ones.",
+  "name": "harness",
+  "description": "Self-instrumenting harness run",
+  "tags": [],
+  "max_players": 2,
+  "visibility": { "public": false, "lan": false },
+  "game_password": "",
+  "require_user_verification": false,
+  "allow_commands": "admins-only",
+  "autosave_interval": 5,
+  "autosave_slots": 5,
+  "autosave_only_on_server": true,
+  "afk_autokick_interval": 0,
+  "auto_pause": true,
+  "only_admins_can_pause_the_game": false
+}
