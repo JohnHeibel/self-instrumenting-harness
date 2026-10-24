@@ -89,7 +89,7 @@ export function Milestones({ items }: { items: Milestone[] }) {
   return (
     <ol className={`strip ${items.length > 18 ? 'xs' : items.length > 11 ? 'sm' : ''}`} aria-label="Milestones">
       {items.map((m, i) => (
-        <li key={m.id} className={m.t !== undefined ? 'done' : i === current ? 'current' : ''} title={m.evidence ?? 'not reached yet'}>
+        <li key={m.id} className={m.t !== undefined ? 'done' : i === current ? 'current' : ''} title={`${m.name}: ${m.evidence ?? 'not reached yet'}`}>
           <span>{m.name}</span>
         </li>
       ))}
@@ -102,7 +102,7 @@ export function Goal({ run, at, opening }: { run: Run; at: number; opening: bool
   return (
     <section className="goal">
       <div className="kicker">{opening ? 'The mission' : 'Current goal'}</div>
-      <h1>{opening ? run.goal : g?.text ?? run.goal}</h1>
+      <h1>{(opening ? run.goal : g?.text ?? run.goal).replace(/^#+\s*/, '')}</h1>
       <p className="serves">
         {opening
           ? `One agent, ${span(run.t1 - run.t0)}, no human help. It builds its own tools inside the host as it goes.`
