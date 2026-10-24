@@ -39,7 +39,8 @@ Two research agents ran about 170 searches (academic, products, open source, hac
 
 ## Hosts
 
-- **Minecraft** (replaces Factorio). Interesting case is modded: modded GUIs and state have no prebuilt agent interface. Mineflayer serves as the human-built ceiling for vanilla tasks. Open: version, mod loader, modpack, hook loading (restart vs hot reload), milestones.
+- **Factorio** (first host). Mods are Lua, loaded from the mods folder; RCON and `helpers.write_file` give a channel between mod and harness (verify reload without restart). FLE is the human-built ceiling for vanilla tasks, so a modpack strengthens novelty. Runs natively on John's Windows PC. Open: vanilla vs modpack, Space Age on or off, milestones.
+- **Minecraft** (later host). Interesting case is modded: modded GUIs and state have no prebuilt agent interface. Mineflayer serves as the human-built ceiling for vanilla tasks. Open: version, mod loader, modpack, hook loading (restart vs hot reload), milestones.
 - **Odoo.** Real-world anchor. Modules are plain Python, runs in Docker, official API is an accuracy oracle. In Hyphenate's sandbox list. (Verify) Community may lack full Accounting and the bank reconciliation screen; community add-ons may fill the gap; ERPNext is the fallback.
 - **Kerbal Space Program 1.** Flashiest host. Plugins are compiled C# loaded at startup, no live console, so each hook iteration needs a restart. Real-time physics forces the agent to write its own autopilot. kRPC is the human-built ceiling. KSP 1 only (KSP 2's studio was shut down).
 - Confirm licenses for Minecraft and KSP on the demo machine.
@@ -116,10 +117,14 @@ The harness itself is the product. Each sponsor track is one demo of it.
 
 ## Decisions already made
 
-- ~~Minecraft replaces Factorio.~~ Reversed: **Factorio is the first host** (Lua mods, installed via Steam on the demo Mac). Minecraft and KSP are later hosts.
+- ~~Minecraft replaces Factorio.~~ Reversed: **Factorio is the first host** (installed via Steam). Minecraft and KSP are later hosts.
 - Claude Code and Codex are supported together from the first slice, through one shared primitive server.
 - The user-possible-actions rule is policy only: stated to the agent and logged, not enforced.
 - Extension loading starts from a small per-host config; a docs-only discovery run on a fresh host comes later.
+- The agent runs in a Docker sandbox and reaches a tool server on the host through one port. The game runs natively on the host (John's Windows PC, RTX 5070 Ti), not in Docker.
+- Each agent gets one long session. A plain runner script (no model) restarts, resumes and checkpoints.
+- Hooks are language-agnostic: in-game hooks use whatever the host's mod system requires, and helper tools outside the game use whatever language the agent picks. Each loaded hook is registered as its own named tool, with `call_hook` as a fallback.
+- Event log: one JSONL record per tool call, tagged by channel (hook, screenshot, input). Coverage is the share of observations that came through hooks, paired with the cost curve; the evaluator also reports which kinds of game state have a working hook.
 - The harness is the product. Sponsor tracks are demonstrations; Hyphenate is not the primary target.
 - Safety is not the headline. The user-possible-actions rule stays as a constraint.
 - Decompiling closed apps is future work only.
