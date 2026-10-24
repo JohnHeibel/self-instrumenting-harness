@@ -38,7 +38,7 @@ def prepare_codex_home(run_dir: Path) -> Path:
 
 def docker_cmd(run_dir: Path, run_id: str, auth_json: Path, port: int,
                image: str = DEFAULT_IMAGE, model: str | None = None,
-               reasoning_summary: str = "detailed") -> list[str]:
+               reasoning_summary: str = "detailed", compact_tokens: int | None = None) -> list[str]:
     home = prepare_codex_home(run_dir)
     cmd = ["docker", "run", "-i", "--rm", "--name", container_name(run_id),
            "-v", f"{home}:/home/agent/.codex",
@@ -46,9 +46,16 @@ def docker_cmd(run_dir: Path, run_id: str, auth_json: Path, port: int,
            "-v", f"{run_dir / 'workspace'}:/home/agent/work",
            image, "codex", "app-server",
            "-c", f'mcp_servers.harness.url="http://host.docker.internal:{port}/mcp"',
+           # Codex's default MCP tool timeout is 60 s; run_script and the agent's own waiting tools
+           # may run up to 20 min (toolserver scripts.MAX_SCRIPT_S), below the runner's stall timeout.
+           "-c", "mcp_servers.harness.tool_timeout_sec=1500",
            "-c", f'model_reasoning_summary="{reasoning_summary}"']
     if model:
         cmd += ["-c", f'model="{model}"']
+    if compact_tokens:
+        # Every step re-reads the whole context, so a long thread costs more per step as it grows.
+        # Compacting well before the model's window keeps each step cheap; notes carry the rest.
+        cmd += ["-c", f"model_auto_compact_token_limit={int(compact_tokens)}"]
     return cmd
 
 

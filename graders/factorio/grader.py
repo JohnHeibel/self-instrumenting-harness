@@ -11,10 +11,20 @@ run's mods folder by hosts/factorio/hostctl.py) for production counts over RCON 
   milestone           {id, evidence} when reached: the counts, game tick and integrity state
   integrity           {signal, active, detail, evidence} when a signal turns on or off:
                       console_command_used (a Lua/console command was used in this save),
-                      cheat_mode, editor_mode, grader_unavailable (the mod didn't answer)
+                      cheat_mode, editor_mode, grader_unavailable (the mod didn't answer), and
+                      the mod's fair-play checks (FAIRPLAY; how each works is in mod/control.lua):
+                        position_jump     the character moved farther between samples than it can
+                        conservation      items exist that nothing produced (items from nothing)
+                        instant_crafting  hand crafting finished faster than recipe times allow
+                      These stay on once found, and a new record (still active) is written each
+                      time the count of instances grows, with the recent instances as evidence.
   host_command        {command, parameters, by, custom, tick}: each console command the game
                       saw, entered by a player or sent over RCON; `custom` is a mod-registered
                       command (the agent's helpers), so the log shows which channel changed state
+  program_actions     {count, kinds, totals, tick, source} when players did more in the game: the
+                      new actions since the last record, from the mod's counts of the game's own
+                      player events (build, mine, craft, rotate; see mod/control.lua for what
+                      isn't counted)
   grader_status       {ok, detail} when the game becomes reachable or unreachable
 
 Restart-safe: it rebuilds what it has already written from grader.jsonl.
@@ -40,7 +50,9 @@ HEALTH_COMMANDS = {"players", "version"}   # read-only built-ins; not logged as 
 
 # Ordered. Each is reached when one of its counts reaches `min`:
 #   items/fluids: the force's production statistics (made by anyone: machines or hand crafting)
-#   recipe: products finished by assembling machines set to that recipe (automated, not by hand)
+#   recipe: products finished by assembling machines set to that recipe whose supply traces back
+#           to mining drills with no hand-fed chest or machine on the way (the mod's supply-chain
+#           check; excluded machines and why are in the evidence)
 MILESTONES = [
     {"id": "first_assembler", "name": "First assembling machine",
      "items": ["assembling-machine-1", "assembling-machine-2", "assembling-machine-3"], "min": 1},
@@ -73,8 +85,12 @@ def judge(m: dict, state: dict) -> dict | None:
     if "recipe" in m:
         r = _dict(state.get("recipes")).get(m["recipe"]) or {}
         if r.get("finished", 0) >= m["min"]:
-            return {"source": "assembling machines", "recipe": m["recipe"], "finished": r["finished"],
-                    "machines": r.get("machines", 0), "min": m["min"]}
+            ev = {"source": "assembling machines", "recipe": m["recipe"], "finished": r["finished"],
+                  "machines": r.get("machines", 0), "min": m["min"]}
+            if "all_machines" in r:   # mod 0.2+: only machines with an automated supply count
+                ev.update(supply_chain=True, all_machines=r["all_machines"], all_finished=r.get("all_finished", 0),
+                          excluded=r.get("excluded") or [])
+            return ev
         return None
     kind = "items" if "items" in m else "fluids"
     have = _dict(state.get(kind))
@@ -96,6 +112,46 @@ def signals(state: dict) -> dict[str, tuple[bool, str]]:
     }
 
 
+FAIRPLAY = ("position_jump", "conservation", "instant_crafting")
+
+
+def fairplay_signals(state: dict) -> dict[str, tuple[bool, str, dict, int]]:
+    """(active, detail, evidence, count) per fair-play check the mod reported. Empty for a mod
+    older than 0.2.0, which has no `fairplay` field."""
+    fp = _dict(state.get("fairplay"))
+    out = {}
+    for name in FAIRPLAY:
+        r = _dict(fp.get(name))
+        if not r:
+            continue
+        n = int(r.get("count") or 0)
+        recent = _list(r.get("items") if name == "conservation" else r.get("recent"))
+        evidence = {"count": n, "tick": state.get("tick"),
+                    ("items" if name == "conservation" else "recent"): recent}
+        for k in ("checked_tick", "baseline_tick", "tolerance", "sample_ticks", "tracked"):
+            if k in r:
+                evidence[k] = r[k]
+        out[name] = (n > 0, _fairplay_detail(name, n, recent), evidence, n)
+    return out
+
+
+def _fairplay_detail(name: str, n: int, recent: list) -> str:
+    if n == 0:
+        return {"position_jump": "no position jumps", "conservation": "no items from nothing",
+                "instant_crafting": "no crafting faster than recipe times"}[name]
+    last = recent[-1] if recent else {}
+    if name == "position_jump":
+        f, t = last.get("from") or {}, last.get("to") or {}
+        return (f"{n} position jump(s); last: {last.get('who')} moved {last.get('distance')} tiles in "
+                f"{last.get('ticks')} ticks ({last.get('mode')}, limit {last.get('limit')}) from "
+                f"({f.get('x')}, {f.get('y')}) to ({t.get('x')}, {t.get('y')}) at tick {last.get('to_tick')}")
+    if name == "conservation":
+        items = ", ".join(f"{i.get('item')} +{i.get('max_excess')}" for i in recent[:8])
+        return f"{n} item(s) exceed what was produced: {items}"
+    return (f"{n} crafting stretch(es) too fast; last: {last.get('who')} made {last.get('crafts')} craft(s) "
+            f"ending in {last.get('recipe')} in {last.get('elapsed')} ticks, needing {last.get('required')}")
+
+
 class Grader:
     def __init__(self, run_dir: Path, connect=None) -> None:
         self.run_dir = run_dir
@@ -104,7 +160,9 @@ class Grader:
         self.path = run_dir / "grader.jsonl"
         self.reached: set[str] = set()
         self.active: dict[str, bool] = {}
+        self.counts: dict[str, int] = {}
         self.last_command = 0
+        self.action_totals: dict[str, int] = {}
         self.up: bool | None = None
         self._resume()
         self.log = EventLog(self.path, run_id, writer="grader")
@@ -126,8 +184,13 @@ class Grader:
                 self.reached.add(r["id"])
             elif t == "integrity":
                 self.active[r["signal"]] = r["active"]
+                n = _dict(r.get("evidence")).get("count")
+                if isinstance(n, int):
+                    self.counts[r["signal"]] = n
             elif t == "host_command":
                 self.last_command = max(self.last_command, r.get("command_id", 0))
+            elif t == "program_actions":
+                self.action_totals = {k: int(v) for k, v in _dict(r.get("totals")).items()}
 
     def _connect(self) -> Rcon:
         info = json.loads((self.run_dir / "host" / "rcon.json").read_text())
@@ -149,15 +212,20 @@ class Grader:
                          {"reply": raw.strip()[:300]})
             return None
         self._signal("grader_unavailable", False, "the harness-grader mod answers", {})
+        fair = fairplay_signals(state)
         integrity = {k: v for k, (v, _) in signals(state).items()}
+        integrity.update({k: v[0] for k, v in fair.items()})
         for c in state.get("commands") or []:
             self.last_command = max(self.last_command, c["id"])
             if c.get("by") == "rcon" and c["command"] in HEALTH_COMMANDS:
                 continue   # hostctl's up_check polls these every few seconds; they change nothing
             self.log.write("host_command", command_id=c["id"], command=c["command"], parameters=c.get("parameters", ""),
                            by=c.get("by"), custom=bool(c.get("custom")), tick=c.get("tick"))
+        self._actions(state)
         for name, (on, detail) in signals(state).items():
             self._signal(name, on, detail, {"tick": state.get("tick"), "players": state.get("players")})
+        for name, (on, detail, evidence, n) in fair.items():
+            self._signal(name, on, detail, evidence, count=n)
         for m in MILESTONES:
             if m["id"] in self.reached:
                 continue
@@ -168,10 +236,30 @@ class Grader:
                 self.reached.add(m["id"])
         return state
 
-    def _signal(self, name: str, on: bool, detail: str, evidence: dict) -> None:
-        if self.active.get(name, False) != on:
+    def _signal(self, name: str, on: bool, detail: str, evidence: dict, count: int | None = None) -> None:
+        grew = count is not None and on and count > self.counts.get(name, 0)
+        if self.active.get(name, False) != on or grew:
             self.log.write("integrity", signal=name, active=on, detail=detail, evidence=evidence)
             self.active[name] = on
+        if count is not None:
+            self.counts[name] = count
+
+    def _actions(self, state: dict) -> None:
+        """A program_actions record with what's new since the last one. Counts that went down (a
+        save from before the mod counted, or a reloaded older save) restart from the new value."""
+        totals = {k: int(v) for k, v in _dict(state.get("actions")).items() if isinstance(v, (int, float))}
+        if not totals:
+            return   # a mod older than 0.3.0
+        kinds = {}
+        for k, n in totals.items():
+            before = self.action_totals.get(k, 0)
+            d = n - before if n >= before else n
+            if d:
+                kinds[k] = d
+        if kinds:
+            self.log.write("program_actions", count=sum(kinds.values()), kinds=kinds, totals=totals,
+                           tick=state.get("tick"), source="game player events")
+        self.action_totals = totals
 
     def _status(self, ok: bool, detail: str) -> None:
         if self.up != ok:
@@ -181,6 +269,10 @@ class Grader:
 
 def _dict(v) -> dict:
     return v if isinstance(v, dict) else {}   # Factorio writes an empty table as []
+
+
+def _list(v) -> list:
+    return v if isinstance(v, list) else []   # an empty Lua table can also come as {}
 
 
 def main() -> int:

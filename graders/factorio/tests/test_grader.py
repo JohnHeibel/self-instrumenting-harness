@@ -159,3 +159,124 @@ def test_a_longer_milestone_list_is_announced_again_on_resume(tmp_path, monkeypa
     lines = [json.loads(l) for l in (run / "grader.jsonl").read_text().splitlines()]
     defined = [r["milestones"] for r in lines if r["type"] == "milestones_defined"]
     assert [len(d) for d in defined] == [2, 3]
+
+
+def fairplay(jumps=(), items=(), crafts=(), jump_count=None, item_count=None, craft_count=None):
+    """A mod 0.2 `fairplay` field; empty lists are written as {} by Factorio, like here."""
+    return {"position_jump": {"count": len(jumps) if jump_count is None else jump_count, "recent": list(jumps) or {},
+                              "sample_ticks": 10, "tracked": 1},
+            "conservation": {"count": len(items) if item_count is None else item_count, "items": list(items) or {},
+                             "checked_tick": 50, "baseline_tick": 1, "tolerance": 2},
+            "instant_crafting": {"count": len(crafts) if craft_count is None else craft_count,
+                                 "recent": list(crafts) or {}}}
+
+
+JUMP = {"who": "player p", "mode": "on foot", "surface": 1, "from": {"x": 0, "y": 0}, "to": {"x": 50, "y": 0},
+        "from_tick": 90, "to_tick": 100, "ticks": 10, "distance": 50, "limit": 4.38}
+INSERT = {"item": "iron-plate", "first_tick": 100, "tick": 100, "stock": 108, "produced": 0, "given": 8,
+          "excess": 100, "max_excess": 100}
+CRAFT = {"who": "player p", "recipe": "iron-gear-wheel", "tick": 100, "stretch_start": 95, "crafts": 10,
+         "elapsed": 5, "required": 300, "speed": 1}
+
+
+def test_clean_fairplay_writes_nothing_and_shows_in_milestone_integrity(tmp_path):
+    fake = FakeRcon([dict(state(items={"assembling-machine-1": 1}), fairplay=fairplay())])
+    g.Grader(tmp_path, connect=fake).poll()
+    assert records(tmp_path, "integrity") == []
+    assert records(tmp_path, "milestone")[0]["evidence"]["integrity"] == {
+        "console_command_used": False, "cheat_mode": False, "editor_mode": False,
+        "position_jump": False, "conservation": False, "instant_crafting": False}
+
+
+def test_each_fairplay_check_turns_on_with_its_evidence(tmp_path):
+    fake = FakeRcon([dict(state(), fairplay=fairplay()),
+                     dict(state(tick=200), fairplay=fairplay(jumps=[JUMP], items=[INSERT], crafts=[CRAFT]))])
+    gr = g.Grader(tmp_path, connect=fake)
+    gr.poll()
+    gr.poll()
+    recs = {r["signal"]: r for r in records(tmp_path, "integrity")}
+    assert set(recs) == {"position_jump", "conservation", "instant_crafting"}
+    assert all(r["active"] for r in recs.values())
+    j = recs["position_jump"]
+    assert j["evidence"]["recent"][0]["to"] == {"x": 50, "y": 0} and j["evidence"]["count"] == 1
+    assert "moved 50 tiles in 10 ticks" in j["detail"] and "(0, 0) to (50, 0)" in j["detail"]
+    c = recs["conservation"]
+    assert c["evidence"]["items"][0]["item"] == "iron-plate" and "iron-plate +100" in c["detail"]
+    assert c["evidence"]["checked_tick"] == 50
+    k = recs["instant_crafting"]
+    assert "10 craft(s)" in k["detail"] and "needing 300" in k["detail"]
+
+
+def test_fairplay_writes_again_only_when_more_instances_appear(tmp_path):
+    two = dict(JUMP, to_tick=300)
+    fake = FakeRcon([dict(state(), fairplay=fairplay(jumps=[JUMP])),
+                     dict(state(), fairplay=fairplay(jumps=[JUMP])),
+                     dict(state(), fairplay=fairplay(jumps=[JUMP, two]))])
+    gr = g.Grader(tmp_path, connect=fake)
+    for _ in range(3):
+        gr.poll()
+    jumps = [r for r in records(tmp_path, "integrity") if r["signal"] == "position_jump"]
+    assert [r["evidence"]["count"] for r in jumps] == [1, 2] and all(r["active"] for r in jumps)
+    # A restarted grader remembers the count and doesn't repeat it.
+    fake = FakeRcon([dict(state(), fairplay=fairplay(jumps=[JUMP, two]))])
+    g.Grader(tmp_path, connect=fake).poll()
+    assert len([r for r in records(tmp_path, "integrity") if r["signal"] == "position_jump"]) == 2
+
+
+def test_an_old_mod_without_fairplay_reports_no_fairplay_signals(tmp_path):
+    fake = FakeRcon([state(), state()])
+    gr = g.Grader(tmp_path, connect=fake)
+    gr.poll()
+    gr.poll()
+    assert records(tmp_path, "integrity") == []
+    assert set(g.fairplay_signals(state())) == set()
+
+
+def test_fairplay_count_beyond_recent_list_still_counts():
+    s = dict(state(), fairplay=fairplay(jumps=[JUMP], jump_count=37))
+    on, detail, evidence, n = g.fairplay_signals(s)["position_jump"]
+    assert on and n == 37 and detail.startswith("37 position jump(s)")
+
+
+def test_recipe_milestone_counts_only_machines_with_automated_supply():
+    m = next(m for m in g.MILESTONES if m["id"] == "green_auto")
+    hand_fed = {"position": {"x": 3.5, "y": 4.5}, "finished": 40,
+                "reason": "iron-chest at (1.5, 4.5) has no inserter or drill feeding it (hand-fed)"}
+    # The mod reports machines/finished for qualifying machines only, all_* for every machine.
+    s = {"recipes": {"logistic-science-pack": {"machines": 0, "finished": 0, "all_machines": 1,
+                                               "all_finished": 40, "excluded": [hand_fed]}}}
+    assert g.judge(m, s) is None
+    s["recipes"]["logistic-science-pack"].update(machines=1, finished=12, all_machines=2, all_finished=52)
+    ev = g.judge(m, s)
+    assert ev["finished"] == 12 and ev["supply_chain"] and ev["all_finished"] == 52
+    assert "hand-fed" in ev["excluded"][0]["reason"]
+
+
+def test_recipe_evidence_from_an_old_mod_has_no_supply_chain_fields():
+    m = next(m for m in g.MILESTONES if m["id"] == "red_auto")
+    ev = g.judge(m, {"recipes": {"automation-science-pack": {"machines": 1, "finished": 10}}})
+    assert ev and "supply_chain" not in ev
+
+
+def test_program_actions_are_written_as_deltas_and_survive_a_restart(tmp_path):
+    with_actions = lambda tick, **a: {**state(tick=tick), "actions": a}
+    fake = FakeRcon([
+        state(),                                          # mod older than 0.3.0: nothing
+        with_actions(200, build=3, mine=1, craft=0, rotate=0),
+        with_actions(300, build=3, mine=1, craft=0, rotate=0),   # nothing new: no record
+        with_actions(400, build=5, mine=1, craft=2, rotate=0),
+    ])
+    gr = g.Grader(tmp_path, connect=fake)
+    for _ in range(4):
+        gr.poll()
+    recs = records(tmp_path, "program_actions")
+    assert [(r["count"], r["kinds"]) for r in recs] == [(4, {"build": 3, "mine": 1}), (4, {"build": 2, "craft": 2})]
+    assert recs[-1]["totals"] == {"build": 5, "mine": 1, "craft": 2, "rotate": 0} and recs[-1]["tick"] == 400
+
+    # A restarted grader continues from the last totals; a lower count (an older save) restarts from it.
+    fake2 = FakeRcon([with_actions(500, build=6, mine=1, craft=2, rotate=0),
+                      with_actions(600, build=2, mine=1, craft=2, rotate=0)])
+    gr2 = g.Grader(tmp_path, connect=fake2)
+    gr2.poll(); gr2.poll()
+    recs = records(tmp_path, "program_actions")[2:]
+    assert [(r["count"], r["kinds"]) for r in recs] == [(1, {"build": 1}), (2, {"build": 2})]

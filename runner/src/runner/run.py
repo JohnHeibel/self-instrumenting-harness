@@ -76,6 +76,7 @@ class Config:
     image: str = agent.DEFAULT_IMAGE
     model: str | None = None
     reasoning_summary: str = "detailed"
+    compact_tokens: int | None = 200_000      # Codex compacts the thread past this many context tokens
     port: int = 8765
     toolserver: bool = True
     host_check: hostcheck.HostCheck | None = None  # None: the host config's up_check
@@ -451,7 +452,8 @@ class Runner:
         else:
             agent.remove_container(self.state.run_id)
             cmd = agent.docker_cmd(self.run_dir, self.state.run_id, self.cfg.auth_json, self.cfg.port,
-                                   self.cfg.image, self.cfg.model, self.cfg.reasoning_summary)
+                                   self.cfg.image, self.cfg.model, self.cfg.reasoning_summary,
+                                   self.cfg.compact_tokens)
         self.srv = AppServer(cmd, raw_log=self.run_dir / "raw" / "appserver.jsonl",
                              stderr_path=self.run_dir / "raw" / "appserver.stderr.log")
         self.srv.initialize()
@@ -611,6 +613,8 @@ def main(argv: list[str] | None = None) -> int:
                     "window | always | cmd:<command> | py:<module>:<fn>")
     ap.add_argument("--model")
     ap.add_argument("--reasoning-summary", default="detailed", choices=["auto", "concise", "detailed", "none"])
+    ap.add_argument("--compact-tokens", type=int, default=200_000,
+                    help="compact the agent's thread once its context passes this many tokens (0: model default)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--image", default=agent.DEFAULT_IMAGE)
     ap.add_argument("--auth-json", type=Path, default=Path.home() / ".codex" / "auth.json")
@@ -640,7 +644,7 @@ def main(argv: list[str] | None = None) -> int:
     hc = HostConfig.load(args.host_config, run_dir)
     cfg = Config(run_dir=run_dir, host_config=args.host_config, goal=goal, model=args.model,
                  brief=args.brief_file.read_text(encoding="utf-8"),
-                 reasoning_summary=args.reasoning_summary, port=args.port, image=args.image,
+                 reasoning_summary=args.reasoning_summary, compact_tokens=args.compact_tokens or None, port=args.port, image=args.image,
                  auth_json=args.auth_json, toolserver=not args.no_toolserver,
                  agent_cmd=json.loads(args.agent_cmd) if args.agent_cmd else None,
                  host_check=hostcheck.resolve(args.host_check, hc) if args.host_check else None, stall_timeout=args.stall_timeout,
