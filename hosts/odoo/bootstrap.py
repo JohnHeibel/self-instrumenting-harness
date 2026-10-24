@@ -54,7 +54,7 @@ auditor_group = env["res.groups"].create({"name": "Sisyphus Auditor (read only)"
 audited = ["res.company", "res.partner", "res.users", "product.template", "product.product", "product.supplierinfo",
            "product.category", "uom.uom", "sale.order", "sale.order.line", "purchase.order", "purchase.order.line",
            "stock.picking", "stock.picking.type", "stock.move", "stock.move.line", "stock.quant", "stock.location",
-           "stock.warehouse", "stock.warehouse.orderpoint", "account.move", "account.move.line", "account.account",
+           "stock.warehouse", "stock.warehouse.orderpoint", "account.payment.term", "account.move", "account.move.line", "account.account",
            "account.payment", "account.journal", "mail.message", "mail.tracking.value", "res.currency"]
 for m in audited:
     if m not in env:
@@ -76,13 +76,20 @@ agent = make("sisyphus_agent", "Sisyphus Agent", groups(
 auditor = make("sisyphus_auditor", "Sisyphus Auditor", [auditor_group.id, ref("base.group_user").id])
 intake = make("sisyphus_intake", "Sisyphus Customer Intake", groups("base.group_user", "sales_team.group_sale_salesman", "base.group_partner_manager"))
 
+# The simulated outside world (graders/odoo/livesim.py): vendors deliver and bill, customers pay, new catalogue
+# items appear. Never the agent's user; not used by the agent.
+world = make("sisyphus_world", "Sisyphus World Simulator", groups(
+    "base.group_user", "sales_team.group_sale_salesman_all_leads", "purchase.group_purchase_manager",
+    "stock.group_stock_manager", "account.group_account_invoice", "base.group_partner_manager",
+    "product.group_product_manager"))
+
 keys = {}
-for u in (agent, auditor, intake):
+for u in (agent, auditor, intake, world):
     # sudo: a key that does not expire (a run can last days); the user's own rights cap keys at 90 days
     keys[u.login] = env["res.users.apikeys"].with_user(u).sudo()._generate(None, "sisyphus", None)
 env.cr.commit()
 print(%(mark)r + json.dumps({"admin_password": admin_pw, "keys": keys,
-                             "uids": {u.login: u.id for u in (agent, auditor, intake)}}))
+                             "uids": {u.login: u.id for u in (agent, auditor, intake, world)}}))
 '''
 
 
@@ -111,7 +118,8 @@ def main() -> int:
         return 1
     out = json.loads(line[len(MARK):])
     keys = {"db": h.DB, "url": "http://127.0.0.1:8069", "admin": {"login": "admin", "password": out["admin_password"]}}
-    for who, login in (("agent", "sisyphus_agent"), ("auditor", "sisyphus_auditor"), ("intake", "sisyphus_intake")):
+    for who, login in (("agent", "sisyphus_agent"), ("auditor", "sisyphus_auditor"), ("intake", "sisyphus_intake"),
+                     ("world", "sisyphus_world")):
         keys[who] = {"login": login, "key": out["keys"][login], "uid": out["uids"][login]}
     h.KEYS.write_text(json.dumps(keys, indent=2))
     os.chmod(h.KEYS, 0o600)

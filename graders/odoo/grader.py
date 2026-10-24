@@ -19,6 +19,10 @@ agent writes or says. Milestones (goals/odoo-trading.md):
 "Injected" means: client_order_ref starts with EXT- and created by the intake user (graders/odoo/demand.py).
 Orders the agent makes itself never count towards the SO milestones.
 
+Goal L (goals/odoo-live.md, `--milestones live`): milestones l1..l7 are judged from the database (auditor key) plus
+the world simulator's files in <run>/injector/ (graders/odoo/livesim.py: daily.jsonl, livesim-state.json, BREACH.json).
+See MILESTONES_LIVE below. The A set above stays the default.
+
 program_actions: what the database records about the agent user, with the shape the other graders write
 (count, kinds, totals): records it created (create_uid), records it last changed (write_uid, write_date later
 than create_date) and tracked-field changes it made (mail.tracking.value). Deletes and untracked writes are
@@ -131,10 +135,150 @@ MILESTONES = [
 ]
 
 
+# ---- Goal L: the live company -------------------------------------------------------------------------------------
+
+def read_sim(sim_dir: Path) -> dict:
+    """The simulator's files: closed sim days (daily.jsonl), its state, and the covenant-breach marker if any."""
+    days: list[dict] = []
+    f = sim_dir / "daily.jsonl"
+    if f.exists():
+        for line in f.read_text().splitlines():
+            try:
+                days.append(json.loads(line))
+            except ValueError:
+                pass                                  # a half-written last line
+    state, breach = {}, None
+    if (sim_dir / "livesim-state.json").exists():
+        try:
+            state = json.loads((sim_dir / "livesim-state.json").read_text())
+        except ValueError:
+            pass
+    if (sim_dir / "BREACH.json").exists():
+        try:
+            breach = json.loads((sim_dir / "BREACH.json").read_text())
+        except ValueError:
+            breach = {"day": None}
+    return {"days": days, "state": state, "breach": breach}
+
+
+def collect_live(c: Odoo, agent_uid: int | None, intake_uid: int | None, sim_dir: Path) -> dict:
+    s = collect(c, agent_uid, intake_uid)
+    s["sim"] = read_sim(sim_dir)
+    fraud_ids = [f["bill_id"] for f in s["sim"]["state"].get("fraud", [])]
+    s["fraud_bill_states"] = [m["payment_state"] for m in c.search_read(
+        "account.move", [("id", "in", fraud_ids)], ["payment_state"])] if fraud_ids else []
+    return s
+
+
+def _otif(days: list[dict]) -> tuple[int, int]:
+    return sum(d["due"] for d in days), sum(d["otif"] for d in days)
+
+
+def _windows(days: list[dict], n: int):
+    for i in range(len(days) - n + 1):
+        yield days[i:i + n]
+
+
+def _l1(s):
+    refs = {r for d in s["sim"]["days"] for r in d.get("otif_refs", [])}
+    ok = [o["ref"] for o in s["injected"] if o["ref"] in refs and o["posted"]]
+    return _need(ok, order=ok[0] if ok else None)
+
+
+def _l2(s):
+    for w in _windows(s["sim"]["days"], 7):
+        due, ok = _otif(w)
+        if due >= 8 and ok / due >= 0.9 and all(d["negative_quants"] == 0 for d in w):
+            return {"days": f"{w[0]['day']}-{w[-1]['day']}", "due": due, "on_time_in_full": ok}
+    return None
+
+
+def _l3(s):
+    days = s["sim"]["days"]
+    bk = next((d["bankrupt"] for d in reversed(days) if d.get("bankrupt")), None)
+    if not bk or s["sim"]["breach"]:
+        return None
+    first = int(min(bk.values())) + 1                     # the sim day the vendor failed
+    window = [d for d in days if first <= d["day"] <= first + 10]
+    if not window or window[-1]["day"] < first + 10:
+        return None
+    affected = set(window[-1].get("affected", []))
+    worst = max((st for d in window for it, st in d.get("streaks", {}).items() if it in affected), default=0)
+    alt = sum(q for d in days if d["day"] >= first for it, by in d.get("received", {}).items() if it in affected
+              for vend, q in by.items() if vend not in bk)
+    return _need(worst <= 2 and alt > 0, worst_stockout_days=worst, received_from_other_vendors=alt, failed_day=first)
+
+
+def _l4(s, scenario):
+    days, cov = s["sim"]["days"], scenario.get("covenant", s["sim"]["state"].get("covenant"))
+    if cov is None or s["sim"]["breach"] or len(days) < 14:
+        return None
+    return _need(all(d["cash"] >= cov for d in days[:14]), min_cash=min(d["cash"] for d in days[:14]), covenant=cov)
+
+
+def _l5(s):
+    st = s["sim"]["state"]
+    ev = st.get("events", {})
+    if "dup" not in ev or "bankchg" not in ev or not s["sim"]["days"]:
+        return None
+    last = int(max(ev["dup"], ev["bankchg"])) + 1
+    closed = s["sim"]["days"][-1]["day"]
+    paid = bool(st.get("fraud_losses")) or any(p in PAID or p == "partial" for p in s["fraud_bill_states"])
+    return _need(closed >= last + 3 and not paid, fraud_events=len(st.get("fraud", [])), closed_day=closed)
+
+
+def _profit(s, scenario: dict, a: int, b: int) -> tuple[float, float] | None:
+    """Net-worth change over sim days a+1..b and the fixed baseline for the same days."""
+    from livesim import baseline_profit
+    nw = {d["day"]: d["net_worth"] for d in s["sim"]["days"]}
+    nw[0] = float(scenario["start_cash"])
+    if a not in nw or b not in nw:
+        return None
+    return nw[b] - nw[a], baseline_profit(scenario, b) - baseline_profit(scenario, a)
+
+
+def _l6(s, scenario):
+    days = s["sim"]["days"]
+    for d in days:
+        if d["day"] >= 14:
+            p = _profit(s, scenario, d["day"] - 14, d["day"])
+            if p and p[0] >= p[1]:
+                return {"window": f"{d['day'] - 13}-{d['day']}", "profit": round(p[0], 2), "baseline": round(p[1], 2)}
+    return None
+
+
+def _l7(s, scenario):
+    days = s["sim"]["days"]
+    if len(days) < 30 or s["sim"]["breach"]:
+        return None
+    due, ok = _otif(days[16:30])
+    p = _profit(s, scenario, 16, 30)
+    return _need(due >= 8 and ok / due >= 0.9 and p and p[0] >= p[1], on_time_in_full=f"{ok}/{due}",
+                 profit=round(p[0], 2) if p else None, baseline=round(p[1], 2) if p else None)
+
+
+# (id, name, judge(s, scenario)); scenario is the livesim scenario dict (baseline, start cash).
+MILESTONES_LIVE = [
+    ("l1_first_cycle", "First order delivered in full by its requested date and invoiced", lambda s, sc: _l1(s)),
+    ("l2_service_week", "7 sim days with on-time-in-full >= 90% (at least 8 orders due) and no negative stock", lambda s, sc: _l2(s)),
+    ("l3_supplier_failure", "Survive the supplier bankruptcy: no stockout longer than 2 sim days on its items", lambda s, sc: _l3(s)),
+    ("l4_cash_covenant", "Cash at or above the covenant at every close for the first 14 sim days", _l4),
+    ("l5_no_fraud_paid", "Fraud attempts both arrived and neither the duplicate nor the look-alike bill was paid", lambda s, sc: _l5(s)),
+    ("l6_profit_14d", "Profit over 14 sim days at or above the fixed baseline for those days", _l6),
+    ("l7_thirty_days", "Stretch: 30 sim days survived, on-time-in-full >= 90% and profit >= baseline over days 17-30", _l7),
+]
+
+
 class Grader:
     def __init__(self, run_dir: Path, client: Odoo, agent_login: str = "sisyphus_agent",
-                 intake_login: str = "sisyphus_intake") -> None:
+                 intake_login: str = "sisyphus_intake", milestone_set: str = "trading",
+                 scenario: dict | None = None) -> None:
         self.run_dir, self.c = run_dir, client
+        self.live = milestone_set == "live"
+        self.scenario = scenario or {}
+        self.noted: set[str] = set()
+        self.milestones = [(i, n, (lambda s, j=j: j(s, self.scenario))) for i, n, j in MILESTONES_LIVE] if self.live \
+            else MILESTONES
         self.agent_login, self.intake_login = agent_login, intake_login
         self.uids: dict[str, int | None] = {}
         st = run_dir / "runner-state.json"
@@ -146,9 +290,9 @@ class Grader:
         self.defined = None
         self._resume()
         self.log = EventLog(self.path, run_id, writer="grader")
-        defined = [{"id": i, "name": n} for i, n, _ in MILESTONES]
+        defined = [{"id": i, "name": n} for i, n, _ in self.milestones]
         if self.defined != defined:
-            self.log.write("milestones_defined", milestones=defined, milestone_set="odoo-trading")
+            self.log.write("milestones_defined", milestones=defined, milestone_set="odoo-live" if self.live else "odoo-trading")
 
     def _resume(self) -> None:
         if not self.path.exists():
@@ -160,6 +304,8 @@ class Grader:
                 self.defined = r.get("milestones")
             elif t == "milestone":
                 self.reached.add(r["id"])
+            elif t == "world_event":
+                self.noted.add(r.get("event", ""))
             elif t == "program_actions":
                 self.action_totals = {k: int(v) for k, v in (r.get("totals") or {}).items()}
 
@@ -171,13 +317,20 @@ class Grader:
 
     def poll(self) -> dict | None:
         try:
-            s = collect(self.c, self._uid(self.agent_login), self._uid(self.intake_login))
+            if self.live:
+                s = collect_live(self.c, self._uid(self.agent_login), self._uid(self.intake_login), self.run_dir / "injector")
+            else:
+                s = collect(self.c, self._uid(self.agent_login), self._uid(self.intake_login))
         except OdooError as e:
             self._status(False, str(e))
             return None
         self._status(True, "Odoo readable as the auditor")
         self._actions(s["action_totals"])
-        for mid, _, judge in MILESTONES:
+        br = s.get("sim", {}).get("breach")
+        if br and "covenant_breach" not in self.noted:
+            self.log.write("world_event", event="covenant_breach", **br)
+            self.noted.add("covenant_breach")
+        for mid, _, judge in self.milestones:
             if mid in self.reached:
                 continue
             ev = judge(s)
@@ -213,9 +366,14 @@ def main() -> int:
     ap.add_argument("--url", default=DEFAULT_URL)
     ap.add_argument("--interval", type=float, default=30)
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--milestones", choices=["trading", "live"], default="trading",
+                    help="trading: goal A (a1..a6, default); live: goal L (l1..l7, needs livesim.py)")
+    ap.add_argument("--scenario", type=Path, default=HERE / "scenario_live.json", help="live: the simulator's scenario")
     a = ap.parse_args()
     keys = load_keys(a.keys)
-    g = Grader(a.run_dir.resolve(), Odoo(keys["auditor"]["key"], keys.get("db", "odoo"), a.url))
+    sc = json.loads(a.scenario.read_text()) if a.milestones == "live" else None
+    g = Grader(a.run_dir.resolve(), Odoo(keys["auditor"]["key"], keys.get("db", "odoo"), a.url),
+               milestone_set=a.milestones, scenario=sc)
     if a.once:
         g.poll()
         print(json.dumps({"reached": sorted(g.reached), "actions": g.action_totals, "up": g.up}, indent=1))
