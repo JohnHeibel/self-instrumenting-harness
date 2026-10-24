@@ -8,7 +8,7 @@ Each run is a directory, `runs/<run>/`, holding one append-only JSONL file per w
 | `runner.jsonl` | Runner |
 | `grader.jsonl` | Grader |
 
-Readers merge all `*.jsonl` files in the run directory, ordered by `ts` and then by `writer` and `seq`. Saved files such as screenshot thumbnails sit beside them (see `artifact`). The grader, the UI and the coverage and cost curves read only these files, so changes here need agreement (AGENTS.md: shared interfaces).
+Readers merge the `*.jsonl` files at the **top level** of the run directory only (subdirectories such as `raw/` and `codex-home/` hold raw logs and are not part of the event log), ordered by `ts` and then by `writer` and `seq`. Saved files such as screenshot thumbnails sit beside them (see `artifact`). The grader, the UI and the coverage and cost curves read only these files, so changes here need agreement (AGENTS.md: shared interfaces).
 
 ## Every record
 
@@ -66,15 +66,15 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 | Type | Fields |
 |---|---|
 | `run_started` | `agent` (`codex`, `claude-code`), `model`, `host` (`factorio`, …), `goal` (the run's overall objective) |
-| `agent_state` | `state`: `thinking`, `acting`, `waiting`, `compacting`, `host_down`, `backing_off`, `paused` or `ended`; plus `text` |
+| `agent_state` | `state`: `thinking`, `acting`, `waiting`, `compacting`, `host_down`, `backing_off` (with `delay_s`, `failures`), `paused` or `ended`; plus `text` |
 | `reasoning` | `title`, `text`: the model's reasoning summary when one is available |
-| `agent_message` | `text`: what the agent said |
+| `agent_message` | `text`, `phase` (`commentary` or `final_answer`): what the agent said |
 | `goal` | `text`, `serves`: the agent's current subgoal and what it is for (from a `set_goal` tool, planned) |
-| `usage` | Per turn: `input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`, and `total_tokens` so far |
-| `turn_started`, `turn_completed` | `turn` |
+| `usage` | After **every model request**: `total_tokens` (the thread total so far, including cached input), `context_window`, plus the deltas since the previous `usage`: `input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`. Turns can last hours, so per-request records keep the cost curve live |
+| `turn_started`, `turn_completed` | `turn`, `turn_id`. `turn_completed` adds `status` (`completed`, `interrupted`, `failed`, or `cut_off` when the runner died mid-turn and closed it on restart), `duration_ms`, `error`, and `turn_total_tokens` |
 | `checkpoint` | `label`, `ref` |
-| `marker` | `label`, `kind` (e.g. `planted_break`): a moment worth a timeline marker that no other record implies |
-| `run_ended` | `reason` |
+| `marker` | `label`, `kind`: a moment worth a timeline marker that no other record implies. Kinds so far: `planted_break`, `runner_restart`, `interrupt` (with `reason`), `prompt_goal`, `prompt_continue`, `toolserver_restart` |
+| `run_ended` | `reason`, `turns`, `total_tokens` |
 
 ### Written by the grader
 
