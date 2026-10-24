@@ -56,6 +56,6 @@ pkill -f "graders/minecraft/grader.py"
     --milestones nether --expected-difficulty 0 --interval 20 > "$R/grader.out" 2>&1 &)
 sleep 2
 ARGS=(--host-config hosts/minecraft.toml --run-dir "$R" --goal-file goals/minecraft-nether.md
-      --reset-context-tokens 150000 --idle-minutes 5)
+      --reset-context-tokens 150000 --idle-minutes 5 --model claude-opus-5-5)
 [ -n "$UNTIL" ] && ARGS+=(--until "$UNTIL")
 exec uv run --project runner python runner/claude_runner.py "${ARGS[@]}" > "$R/runner.out" 2>&1
