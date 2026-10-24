@@ -1,0 +1,41 @@
+# Odoo Community 19.0 (pinned dated image) + PostgreSQL, for the Sisyphus harness.
+# Driven by hostctl.py (it writes the config file and passes ODOO_CONF); not meant to be run by hand.
+name: sisyphus-odoo
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes:
+      - odoo-db:/var/lib/postgresql/data
+    mem_limit: 768m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 3s
+      retries: 30
+
+  odoo:
+    image: odoo:19.0-20261015
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Loopback only; Docker Desktop/Colima forward it to containers as host.docker.internal.
+      - "127.0.0.1:8069:8069"
+    environment:
+      HOST: db
+      USER: odoo
+      PASSWORD: odoo
+    volumes:
+      - odoo-data:/var/lib/odoo
+      - ${ODOO_CONF:?run through hostctl.py}:/etc/odoo/odoo.conf:ro
+    mem_limit: 1536m
+    restart: unless-stopped
+
+volumes:
+  odoo-db:
+  odoo-data:
