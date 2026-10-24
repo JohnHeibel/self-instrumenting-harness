@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mcp import types
-from mcp.server.fastmcp import Context, FastMCP, Image
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import capture
+from . import io_tools
 from .events import EventLog
 from .extensions import ContainerExecutor, Executor, Extensions, HostConfig, LocalExecutor
 
@@ -49,7 +49,8 @@ LOAD_EXTENSION_DOC = """Load or update one of your extensions, and register its 
 def build_server(log: EventLog, host: str, port: int, window_title: str = "Factorio",
                  max_screenshot_width: int = 1280, *, host_config: HostConfig | None = None,
                  workspace: Path | None = None, executor: Executor | None = None,
-                 archive_dir: Path | None = None) -> FastMCP:
+                 archive_dir: Path | None = None, io: dict | None = None) -> FastMCP:
+    """`io`: overrides for io_tools.register (tests pass a fake input controller and capture)."""
     # Bound to localhost, the SDK only accepts Host: localhost. The agent container
     # reaches us as host.docker.internal, so allow that too; rebinding protection stays on.
     local = ["127.0.0.1:*", "localhost:*", "[::1]:*", "host.docker.internal:*"]
@@ -64,14 +65,8 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "Facto
     ext = Extensions(mcp, log, host_config or HostConfig(), workspace or Path("workspace"),
                      executor or LocalExecutor(workspace or Path("workspace")),
                      archive_dir or Path("extensions"), BUILTIN)
-
-    @mcp.tool(annotations=READ_ONLY)
-    def screenshot() -> Image:
-        """Capture the game window as an image."""
-        with log.call("screenshot", "screenshot", {}) as res:
-            png, meta = capture.screenshot_png(window_title, max_screenshot_width)
-            res.set("image", len(png), **meta)
-            return Image(data=png, format="png")
+    # screenshot, the input tools and set_goal: io_tools.py
+    io_tools.register(mcp, log, window_title, max_screenshot_width, **(io or {}))
 
     @mcp.tool(annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                                 idempotentHint=False, openWorldHint=False),
