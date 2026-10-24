@@ -18,6 +18,7 @@ MAX_WALK = 5000           # files looked at, at most
 MAX_READ = 256 * 1024     # bytes read from the end of each file
 PER_FILE = 1500           # characters kept per file
 TOTAL = 4000
+GAP, BURST = 10, 60     # error lines this close belong to one burst; a burst spans at most BURST lines
 ERROR = re.compile(r"error|exception|traceback|fatal|failed|panic|crash|abort", re.I)
 
 
@@ -56,16 +57,18 @@ def _read_tail(p: Path) -> str | None:
 
 
 def excerpt(text: str) -> str:
-    """The last error-looking stretch (a few lines before, more after) and the last lines."""
+    """The last burst of error-looking lines, from where it starts (a burst: hits no more than GAP lines
+    apart, so a stack trace between them stays in), with context, plus the file's last lines."""
     lines = text.splitlines()
     hits = [i for i, l in enumerate(lines) if ERROR.search(l)]
     keep: list[int] = []
     if hits:
-        last = hits[-1]
-        first = last
-        while first > 0 and first - 1 in hits and last - first < 20:   # the start of that stretch
-            first -= 1
-        keep = list(range(max(0, first - 5), min(len(lines), last + 15)))
+        first = last = hits[-1]
+        for h in reversed(hits[:-1]):
+            if first - h > GAP or last - h > BURST:
+                break
+            first = h
+        keep = list(range(max(0, first - 3), min(len(lines), last + 6)))
     tail = list(range(max(0, len(lines) - 8), len(lines)))
     out, prev = [], None
     for i in sorted(set(keep + tail)):
@@ -74,22 +77,32 @@ def excerpt(text: str) -> str:
         out.append(lines[i])
         prev = i
     text = "\n".join(out)
-    return text if len(text) <= PER_FILE else "…" + text[-PER_FILE:]
+    if len(text) <= PER_FILE:
+        return text
+    head = "\n".join(lines[i] for i in sorted(set(keep)))     # too long: keep the start of the burst
+    return head[:PER_FILE - 1] + "…"
 
 
 def evidence(dirs: list[Path], since: float) -> tuple[str, list[str]]:
-    """Excerpts of the most recently changed text files under `dirs`, as one block, and their names."""
-    files = sorted(_text_files(dirs, since), key=lambda t: -t[0])
-    parts, names, total = [], [], 0
-    for _, p, root in files:
+    """Excerpts of the most recently changed text files under `dirs`, as one block, and their names.
+    Files with error-looking lines come first; a file whose excerpt repeats another's is left out."""
+    found = []
+    for mtime, p, root in _text_files(dirs, since):
+        text = _read_tail(p)
+        if text and text.strip():
+            found.append((bool(ERROR.search(text[-20000:])), mtime, p, root, text))
+    found.sort(key=lambda f: (not f[0], -f[1]))
+    parts, names, seen, total = [], [], set(), 0
+    for _, _, p, root, text in found:
         if len(names) >= MAX_FILES or total >= TOTAL:
             break
-        text = _read_tail(p)
-        if not text or not text.strip():
+        ex = excerpt(text)
+        sig = ex[-400:]
+        if sig in seen:
             continue
+        seen.add(sig)
         name = p.relative_to(root).as_posix()
-        block = f"--- {name}\n{excerpt(text)}"
-        parts.append(block[: TOTAL - total])
+        parts.append(f"--- {name}\n{ex}"[: TOTAL - total])
         names.append(name)
         total += len(parts[-1])
     return "\n".join(parts), names
