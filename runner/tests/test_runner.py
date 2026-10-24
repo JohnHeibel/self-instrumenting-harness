@@ -220,3 +220,15 @@ def test_second_runner_on_same_run_dir_is_refused(h):
     (h.run_dir / "runner.lock").write_text(str(os.getppid()))  # a live process that isn't us
     with pytest.raises(SystemExit):
         RunLock(h.run_dir / "runner.lock").acquire()
+
+
+def test_wake_file_interrupts_thinking_and_prompts_with_the_notices(h):
+    script = {"processes": [{"turns": [[{"hang": True}], [{"usage": 100}]]}]}
+    wake = '[{"source": "rule:low_iron", "text": "iron below 50"}]'
+    threading.Timer(0.3, lambda: (h.run_dir / "WAKE").write_text(wake)).start()
+    assert h.runner(script, budget_tokens=50).run() == "budget_tokens"
+    assert any(m["kind"] == "interrupt" and "wake" in m["label"] for m in h.records("marker"))
+    assert not [s for s in h.records("agent_state") if s["state"] == "backing_off"]
+    second = h.requests("turn/start")[1]["params"]["input"][0]["text"]
+    assert "rule:low_iron: iron below 50" in second and "context is intact" in second
+    assert not (h.run_dir / "WAKE").exists()
