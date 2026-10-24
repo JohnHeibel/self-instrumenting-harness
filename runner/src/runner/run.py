@@ -95,6 +95,7 @@ class Config:
     until: float | None = None                # wall-clock deadline (epoch seconds): end then
     update_note: str | None = None            # told to the agent with the next prompt (why things changed)
     update_instructions: bool = False         # on resume, replace the run's brief/goal with these
+    reopen: bool = False                      # continue a run that already ended (same thread)
     checkpoint_every: float = 1800
     backoff_base: float = 30
     backoff_cap: float = 3600
@@ -165,8 +166,12 @@ class Runner:
         self.mapper.on_usage = self._save_usage
         if existing:
             self.state = existing
-            if self.state.status == "ended":
-                print(f"run already ended: {self.state.ended_reason}")
+            if self.state.status == "ended" and self.cfg.reopen:
+                self.log.write("marker", label=f"reopened the run (it had ended: {self.state.ended_reason})",
+                               kind="reopen")
+                self.state.status, self.state.ended_reason = "running", None
+            elif self.state.status == "ended":
+                print(f"run already ended: {self.state.ended_reason} (--reopen continues it)")
                 return self.state.ended_reason or "ended"
             self.mapper.total = dict(self.state.extra.get("usage_total") or {})
             lost = f"; turn {self.state.turns} was cut off" if self.state.active_turn_id else ""
@@ -668,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="on resume: replace the run's brief and goal with --brief-file/--goal-file and tell the agent")
     ap.add_argument("--update-note", help="on resume: a note told to the agent with the next prompt, e.g. why "
                     "the brief changed")
+    ap.add_argument("--reopen", action="store_true", help="continue a run that already ended, on the same thread")
     ap.add_argument("--no-toolserver", action="store_true")
     ap.add_argument("--agent-cmd", help="JSON list; replaces the agent container (tests, fakes)")
     ap.add_argument("--stall-timeout", type=float, default=1800)
@@ -693,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
                  host_check=hostcheck.resolve(args.host_check, hc) if args.host_check else None, stall_timeout=args.stall_timeout,
                  budget_seconds=args.budget_hours * 3600 if args.budget_hours else None,
                  budget_tokens=args.budget_tokens, update_note=args.update_note,
-                 update_instructions=args.update_instructions,
+                 update_instructions=args.update_instructions, reopen=args.reopen,
                  until=datetime.fromisoformat(args.until.replace("Z", "+00:00")).timestamp() if args.until else None)
     print(f"run dir: {run_dir}")
     reason = Runner(cfg).run()
