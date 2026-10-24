@@ -17,12 +17,17 @@ const PORT = process.env.E2E_PORT ?? '3917';
 const BASE = `http://127.0.0.1:${PORT}`;
 const DB = 'harness-events-e2e';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stdb-e2e-'));
-process.env.PATH = `${os.homedir()}/.local/bin:${process.env.PATH}`;
+process.env.PATH = [path.join(os.homedir(), '.local', 'bin'), process.env.PATH].join(path.delimiter);
+const WIN = process.platform === 'win32';
 
 const runDirs = process.argv.slice(2);
 if (runDirs.length === 0) {
-  const main = process.env.HARNESS_MAIN ?? '/Users/nazeemkamel/Projects/self-instrumenting-harness';
-  runDirs.push(path.join(main, 'runs/fake-factorio'), path.join(main, 'runs/fake-spreadsheet'));
+  // Fake runs: $HARNESS_RUNS, else <repo>/runs, else the main checkout's runs/ (this may be a git worktree).
+  const common = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: here, encoding: 'utf8' }).stdout?.trim();
+  const candidates = [process.env.HARNESS_RUNS, path.resolve(stdb, '..', 'runs'), common && path.resolve(common, '..', 'runs')].filter(Boolean);
+  const runsRoot = candidates.find((d) => fs.existsSync(path.join(d, 'fake-factorio')));
+  if (!runsRoot) throw new Error(`fake runs not found; set HARNESS_RUNS to the runs/ directory (looked in ${candidates.join(', ')})`);
+  runDirs.push(path.join(runsRoot, 'fake-factorio'), path.join(runsRoot, 'fake-spreadsheet'));
 }
 
 let server;
@@ -55,7 +60,7 @@ async function mint() {
 
 function publisher(runDir, stateDir, extra = [], opts = {}) {
   const args = ['--import', 'tsx', path.join(stdb, 'publisher/src/cli.ts'), '--run-dir', runDir, '--server', BASE, '--module', DB, '--state-dir', stateDir, ...extra];
-  return spawn('node', args, { cwd: path.join(stdb, 'publisher'), stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+  return spawn(process.execPath, args, { cwd: path.join(stdb, 'publisher'), stdio: ['ignore', 'pipe', 'pipe'], ...opts });
 }
 function runPublisher(runDir, stateDir, extra) {
   return new Promise((resolve, reject) => {
@@ -74,6 +79,9 @@ function readJsonl(dir) {
   }
   return recs;
 }
+
+// has_thumb means an image under shots/ (checkpoint records carry a tarball artifact)
+const isShot = (rec) => typeof rec.artifact === 'string' && /^shots\/[^/]+\.(jpe?g|png|webp|gif)$/i.test(rec.artifact);
 
 function tally(items, key) {
   const m = {};
@@ -94,12 +102,12 @@ async function verifyRun(token, dir, label) {
     assert.ok(row, `${label}: missing ${rec.writer}#${rec.seq}`);
     assert.deepEqual(JSON.parse(row.payload), rec, `${label}: payload ${rec.writer}#${rec.seq}`);
     assert.equal(row.ts_us, Date.parse(rec.ts) * 1000);
-    assert.equal(row.has_thumb, typeof rec.artifact === 'string');
+    assert.equal(row.has_thumb, isShot(rec), `${label}: has_thumb ${rec.writer}#${rec.seq}`);
   }
   const runRow = (await sql(token, `SELECT * FROM run WHERE run_id = '${runId}'`))[0];
   assert.equal(Number(runRow.record_count), src.length, `${label}: run.record_count`);
-  const withArt = src.filter((s) => typeof s.rec.artifact === 'string');
-  const thumbs = await sql(token, `SELECT rkey, run_id, mime FROM thumb WHERE run_id = '${runId}'`);
+  const withArt = src.filter((s) => isShot(s.rec));
+  const thumbs = (await sql(token, `SELECT rkey, run_id, mime FROM thumb WHERE run_id = '${runId}'`)).filter((t) => !t.rkey.endsWith('|live|latest'));
   assert.equal(thumbs.length, withArt.length, `${label}: thumbnail count`);
   // byte-exact check of one thumbnail fetched lazily by key
   const sample = withArt[Math.floor(withArt.length / 2)].rec;
@@ -119,7 +127,7 @@ async function main() {
   console.log(`tmp: ${tmp}`);
   const busy = await fetch(`${BASE}/v1/ping`).then(() => true, () => false);
   if (busy) throw new Error(`port ${PORT} is already serving something; stop it or set E2E_PORT`);
-  server = spawn('spacetime', ['start', '--data-dir', path.join(tmp, 'data'), '--listen-addr', `127.0.0.1:${PORT}`], { stdio: 'ignore', detached: true });
+  server = spawn('spacetime', ['start', '--data-dir', path.join(tmp, 'data'), '--listen-addr', `127.0.0.1:${PORT}`], { stdio: 'ignore', detached: !WIN, windowsHide: true });
   for (let i = 0; i < 60; i++) { try { if ((await fetch(`${BASE}/v1/ping`)).ok) break; } catch {} await sleep(500); }
   sh('spacetime', ['publish', DB, '--module-path', path.join(stdb, 'module'), '--server', BASE, '--yes']);
   ok(`module built and published to a fresh local instance (${BASE})`);
@@ -157,6 +165,16 @@ async function main() {
     ok(`${name}: restart from checkpoint changes nothing`);
   }
 
+  // a fresh publisher with no flags and no checkpoint publishes the full history
+  {
+    const st = path.join(tmp, 'state-default'); fs.mkdirSync(st, { recursive: true }); fs.writeFileSync(path.join(st, 'token'), pub.token);
+    const dir = runDirs[0];
+    await runPublisher(dir, st, ['--once']);
+    const before = (await sql(pub.token, `SELECT * FROM record WHERE run_id = '${readJsonl(dir)[0].rec.run_id}'`)).length;
+    assert.equal(before, readJsonl(dir).length);
+    ok('no checkpoint and no flags: the full history was published');
+  }
+
   // live tail with partial lines and a restart, on a copy of the last run
   const srcDir = runDirs[runDirs.length - 1];
   const liveDir = path.join(tmp, 'live-' + path.basename(srcDir));
@@ -166,6 +184,11 @@ async function main() {
   for (const n of fs.readdirSync(path.join(srcDir, 'shots'))) fs.copyFileSync(path.join(srcDir, 'shots', n), path.join(liveDir, 'shots', n));
   const cut = Object.fromEntries(files.map((f) => [f, Math.floor(full[f].length / 3)])); // mid-line on purpose
   for (const f of files) fs.writeFileSync(path.join(liveDir, f), full[f].slice(0, cut[f]));
+  // spectator frame: exactly live/latest.jpg is published; other files under live/ are not
+  const liveFrame = fs.readFileSync(path.join(srcDir, 'shots', fs.readdirSync(path.join(srcDir, 'shots'))[0]));
+  fs.mkdirSync(path.join(liveDir, 'live'), { recursive: true });
+  fs.writeFileSync(path.join(liveDir, 'live/latest.jpg'), liveFrame);
+  fs.writeFileSync(path.join(liveDir, 'live/other.jpg'), Buffer.concat([liveFrame, Buffer.from('CANARY-LIVE-OTHER')]));
   // canaries: credentials that must never be read or published
   fs.mkdirSync(path.join(liveDir, 'codex-home'), { recursive: true });
   fs.mkdirSync(path.join(liveDir, 'host'), { recursive: true });
@@ -188,6 +211,10 @@ async function main() {
   await sleep(3000);
   p.kill('SIGINT'); await new Promise((r) => p.on('exit', r));
   const live = await verifyRun(pub.token, liveDir, 'live tail');
+  const lf = await sql(pub.token, `SELECT * FROM thumb WHERE rkey = '${live.runId}|live|latest'`);
+  assert.equal(lf.length, 1, 'spectator frame published under its stable key');
+  assert.ok(Buffer.from(lf[0].bytes, 'hex').equals(liveFrame), 'spectator frame bytes');
+  ok('live/latest.jpg published under <run_id>|live|latest (live/other.jpg ignored)');
   ok(`live tail: appended in pieces (mid-line splits, one restart), ${live.records} records and ${live.thumbs} thumbnails match`);
   const all = JSON.stringify(await sql(pub.token, `SELECT * FROM record WHERE run_id = '${live.runId}'`)).concat(JSON.stringify(await sql(pub.token, 'SELECT run_id, mime FROM thumb')));
   assert.ok(!all.includes('CANARY'), 'canary credentials must not reach the database');
@@ -211,6 +238,7 @@ async function main() {
   assert.deepEqual(pending.map((x) => x.action).sort(), ['pause', 'steer']);
   assert.notEqual((await call(ops.token, 'ack_control', [pending[0].id, 'done', ''])).status, 200);
   assert.equal((await call(runner.token, 'ack_control', [pending[0].id, 'done', 'paused'])).status, 200);
+  assert.notEqual((await call(runner.token, 'ack_control', [pending[0].id, 'rejected', 'again'])).status, 200); // already handled
   pending = await sql(runner.token, `SELECT * FROM control_request WHERE run_id = 'r' AND status = 'pending'`);
   assert.equal(pending.length, 1);
   assert.notEqual((await call(pub.token, 'grant_role', [`0x${rando.identity}`, 'ops'])).status, 200);
@@ -221,6 +249,9 @@ async function main() {
 }
 
 try { await main(); } catch (e) { console.error('\nFAILED:', e); process.exitCode = 1; } finally {
-  if (server) { try { process.kill(-server.pid, 'SIGTERM'); } catch {} spawnSync('pkill', ['-f', tmp]); }
+  if (server) {
+    if (WIN) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F']);
+    else { try { process.kill(-server.pid, 'SIGTERM'); } catch {} try { server.kill('SIGTERM'); } catch {} }
+  }
   if (!process.env.E2E_KEEP) fs.rmSync(tmp, { recursive: true, force: true });
 }

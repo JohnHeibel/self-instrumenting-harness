@@ -31,6 +31,36 @@ export function artifactOf(rec: Record<string, unknown>): string | null {
   return typeof a === 'string' && ARTIFACT_RE.test(a) ? a : null;
 }
 
+/** Total `files[].content` bytes of a `hook_loaded` record above which contents are cut. */
+export const HOOK_CONTENT_BUDGET = 1024 * 1024;
+
+/** Key of the spectator frame in the thumb table; overwritten each time. */
+export const liveThumbKey = (runId: string) => `${runId}|live|latest`;
+
+/**
+ * `hook_loaded` carries source files inline (up to 40 x 64 KB, once per tool). Above the budget, cut each
+ * file's content to its share and mark it `truncated`; the full source stays in `source_ref`.
+ */
+export function truncateHookLoaded(rec: Record<string, any>, budget = HOOK_CONTENT_BUDGET): Record<string, any> | null {
+  if (rec.type !== 'hook_loaded' || !Array.isArray(rec.files)) return null;
+  const sizes = rec.files.map((f: any) => (typeof f?.content === 'string' ? Buffer.byteLength(f.content) : 0));
+  if (sizes.reduce((a: number, b: number) => a + b, 0) <= budget) return null;
+  const share = Math.floor(budget / rec.files.length);
+  const files = rec.files.map((f: any, i: number) =>
+    sizes[i] > share ? { ...f, content: Buffer.from(f.content).subarray(0, share).toString('utf8'), truncated: true } : f);
+  return { ...rec, files, truncated: true };
+}
+
+export interface Prepared { wire: WireRecord; size: number }
+
+/** Wire record plus its size in bytes after JSON encoding (what the request body will actually cost). */
+export function prepare(item: TailItem): Prepared {
+  const wire = toWire(item);
+  const cut = truncateHookLoaded(item.record as Record<string, any>);
+  if (cut) wire.payload = JSON.stringify(cut);
+  return { wire, size: Buffer.byteLength(JSON.stringify(wire)) + 1 };
+}
+
 export function toWire(item: TailItem): WireRecord {
   const r = item.record as Record<string, any>;
   return {

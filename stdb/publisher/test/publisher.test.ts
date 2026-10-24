@@ -6,7 +6,7 @@ import { CheckpointStore } from '../src/checkpoint.ts';
 import { Publisher, splitBatches } from '../src/publisher.ts';
 import { FatalSinkError, MemorySink, SpacetimeSink, type Sink } from '../src/sink.ts';
 import { Tailer } from '../src/tailer.ts';
-import { copyFixture, line, lineCount, rec, tmp } from './helpers.ts';
+import { JPEG, copyFixture, line, lineCount, rec, tmp } from './helpers.ts';
 
 const mk = (run: string, sink: Sink, caps = {}, extra: any = {}) => {
   const state = extra.state ?? tmp('state-');
@@ -126,7 +126,7 @@ test('thumbnails upload once per record, only after the record, and only from sh
 
 test('thumbnail dedup within a run and sampling (thumbEvery)', async () => {
   const run = tmp(); fs.mkdirSync(path.join(run, 'shots'));
-  fs.writeFileSync(path.join(run, 'shots', 'a.jpg'), 'AAA');
+  fs.writeFileSync(path.join(run, 'shots', 'a.jpg'), JPEG('a'));
   fs.writeFileSync(path.join(run, 'events.jsonl'), [1, 2, 3, 4].map(s => line(rec('toolserver', s, { artifact: 'shots/a.jpg' }))).join(''));
   const m1 = new MemorySink();
   await mk(run, m1, { thumbEvery: 2 }).drain();
@@ -134,7 +134,7 @@ test('thumbnail dedup within a run and sampling (thumbEvery)', async () => {
   assert.deepEqual([...m1.thumbs.keys()].sort(), ['r1|toolserver|1', 'r1|toolserver|3']);
   // oversized thumbnails are skipped
   const m2 = new MemorySink();
-  await mk(run, m2, { maxThumbBytes: 2 }).drain();
+  await mk(run, m2, { maxThumbBytes: 10 }).drain();
   assert.equal(m2.thumbs.size, 0);
 });
 
@@ -145,7 +145,7 @@ test('a screenshot that lands after its record is uploaded on a later poll', asy
   const pub = mk(run, sink);
   await pub.drain();
   assert.equal(sink.thumbs.size, 0);
-  fs.writeFileSync(path.join(run, 'shots', 'late.jpg'), 'LATE');
+  fs.writeFileSync(path.join(run, 'shots', 'late.jpg'), JPEG('late'));
   await pub.pumpThumbs();
   assert.equal(sink.thumbs.size, 1);
 });

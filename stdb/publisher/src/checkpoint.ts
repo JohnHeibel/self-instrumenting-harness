@@ -21,6 +21,8 @@ export function defaultStateDir(): string {
 
 export class CheckpointStore {
   readonly file: string;
+  /** Called with a message when a save fails; a failed save never stops publishing. */
+  onWarn: (msg: string) => void = () => {};
   constructor(stateDir: string, readonly runId: string) {
     this.file = path.join(stateDir, `${runId.replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
   }
@@ -34,11 +36,30 @@ export class CheckpointStore {
     }
   }
 
-  save(files: Record<string, FileCheckpoint>): void {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+  /** Atomic write (tmp + rename). Windows can refuse the rename (EPERM/EBUSY: antivirus, indexer), so retry,
+   *  then fall back to writing in place. Returns false (after warning) if nothing worked. */
+  save(files: Record<string, FileCheckpoint>): boolean {
     const data: CheckpointData = { run_id: this.runId, files, updated: new Date().toISOString() };
+    const json = JSON.stringify(data, null, 1);
     const tmp = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 1));
-    fs.renameSync(tmp, this.file);
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      fs.writeFileSync(tmp, json);
+      let lastErr: unknown;
+      for (let i = 0; i < 6; i++) {
+        try { fs.renameSync(tmp, this.file); return true; } catch (e) {
+          lastErr = e;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * (i + 1));
+        }
+      }
+      fs.writeFileSync(this.file, json); // in place: not atomic, but better than losing progress
+      try { fs.rmSync(tmp, { force: true }); } catch {}
+      this.onWarn(`checkpoint rename failed (${(lastErr as Error).message}); wrote it in place`);
+      return true;
+    } catch (e) {
+      this.onWarn(`checkpoint not saved (${(e as Error).message}); a restart may re-publish recent records, which is harmless`);
+      try { fs.rmSync(tmp, { force: true }); } catch {}
+      return false;
+    }
   }
 }

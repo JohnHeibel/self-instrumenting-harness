@@ -12,6 +12,7 @@ export interface TailItem {
 
 export interface TailerOptions {
   fromStart?: boolean; // ignore any checkpoint and replay every file from byte 0
+  liveOnly?: boolean; // with no checkpoint, skip what is already in the files and publish only new lines
   chunkBytes?: number;
   log?: (msg: string) => void;
 }
@@ -42,6 +43,7 @@ export class Tailer {
     private opts: TailerOptions = {}
   ) {
     this.log = opts.log ?? (() => {});
+    if (store) store.onWarn = m => this.log(m);
     this.chunk = opts.chunkBytes ?? 4 * 1024 * 1024;
     const cp = opts.fromStart ? null : store?.load() ?? null;
     this.hadCheckpoint = !!cp;
@@ -77,9 +79,10 @@ export class Tailer {
       const ino = String(st.ino);
       let s = this.states.get(name);
       if (!s) {
-        // Without any checkpoint and not replaying, files that already exist at startup are skipped
-        // (live follow). Files that appear later, or that a checkpoint doesn't know, start at 0.
-        const live = !this.initialized && !this.opts.fromStart && !this.hadCheckpoint;
+        // Default: no checkpoint means the whole history from byte 0. Only with the explicit liveOnly
+        // option are files that already exist at startup skipped. Files that appear later, or that a
+        // checkpoint doesn't know, always start at 0.
+        const live = !!this.opts.liveOnly && !this.initialized && !this.opts.fromStart && !this.hadCheckpoint;
         const start = live ? st.size : 0;
         s = { committed: start, read: start, ino, headLen: 0, head: '', epoch: 0 };
         this.states.set(name, s);
@@ -150,6 +153,35 @@ export class Tailer {
     if (bytesRead === n) { s.headLen = n; s.head = sha(b); }
   }
 
+  /**
+   * Records from the last `maxBytes` before each file's committed offset (already published). Used on
+   * resume to re-queue recent thumbnails, which may not have been uploaded before the last stop.
+   */
+  async recentItems(maxBytes = 512 * 1024): Promise<TailItem[]> {
+    const out: TailItem[] = [];
+    for (const [name, s] of this.states) {
+      if (s.committed <= 0) continue;
+      const fh = await openAllowed(this.runDir, name, 'jsonl');
+      if (!fh) continue;
+      try {
+        const start = Math.max(0, s.committed - maxBytes);
+        const buf = Buffer.alloc(s.committed - start);
+        const { bytesRead } = await fh.read(buf, 0, buf.length, start);
+        let text = buf.subarray(0, bytesRead);
+        if (start > 0) { const nl = text.indexOf(0x0a); text = nl < 0 ? Buffer.alloc(0) : text.subarray(nl + 1); }
+        for (const l of text.toString('utf8').split('\n')) {
+          const line = l.endsWith('\r') ? l.slice(0, -1) : l;
+          if (!line.trim()) continue;
+          try {
+            const rec = JSON.parse(line);
+            if (rec && typeof rec === 'object' && validEnvelope(rec)) out.push({ file: name, epoch: s.epoch, endOffset: 0, raw: line, record: rec });
+          } catch {}
+        }
+      } finally { await fh.close(); }
+    }
+    return out;
+  }
+
   /** Mark everything up to `endOffset` of `file` as safely published, and persist the checkpoint. */
   commit(items: TailItem[]): void {
     for (const it of items) {
@@ -178,7 +210,7 @@ export class Tailer {
 function validEnvelope(r: Record<string, unknown>): boolean {
   return (
     typeof r.run_id === 'string' && typeof r.writer === 'string' && typeof r.type === 'string' &&
-    typeof r.ts === 'string' && Number.isInteger(r.seq) && (r.seq as number) >= 0 &&
+    typeof r.ts === 'string' && /Z$/.test(r.ts) && Number.isInteger(r.seq) && (r.seq as number) >= 0 &&
     !Number.isNaN(Date.parse(r.ts))
   );
 }

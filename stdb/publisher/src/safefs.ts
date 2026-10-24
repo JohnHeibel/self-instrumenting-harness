@@ -1,7 +1,9 @@
 // The only module that opens files from a run directory. Run dirs also hold secrets
 // (codex-home/auth.json, host/rcon.json), so everything goes through an explicit allowlist:
 //   - a regular file named *.jsonl directly in the run dir (the event log), or
-//   - an image directly under shots/ (a thumbnail).
+//   - an image directly under shots/ (a thumbnail), or
+//   - exactly live/latest.jpg (the spectator frame; nothing else under live/).
+// Images must also start with a known image signature, and files with extra hard links are refused.
 // A symlink is followed only if its real target is itself allowed and inside the real run dir.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +17,7 @@ export type FileKind = 'jsonl' | 'image';
 export function classify(rel: string): FileKind | null {
   const parts = rel.split(/[\\/]/);
   if (parts.length === 1 && JSONL_RE.test(parts[0]) && parts[0] !== '.jsonl') return 'jsonl';
+  if (parts.length === 2 && parts[0] === 'live' && parts[1] === 'latest.jpg') return 'image';
   if (parts.length === 2 && parts[0] === 'shots' && IMAGE_RE.test(parts[1]) && !parts[1].startsWith('..')) {
     return 'image';
   }
@@ -32,7 +35,7 @@ export async function resolveAllowed(runDir: string, rel: string, want?: FileKin
     if (back.startsWith('..') || path.isAbsolute(back)) return null;
     if (classify(back) !== kind) return null; // symlink to a file that is not itself allowed
     const st = await fs.promises.stat(real);
-    return st.isFile() ? real : null;
+    return st.isFile() && st.nlink === 1 ? real : null;
   } catch {
     return null;
   }
@@ -67,8 +70,19 @@ export async function readImage(runDir: string, rel: string, maxBytes: number): 
     if (st.size > maxBytes) return null;
     const buf = Buffer.alloc(st.size);
     const { bytesRead } = await fh.read(buf, 0, st.size, 0);
-    return buf.subarray(0, bytesRead);
+    const img = buf.subarray(0, bytesRead);
+    return looksLikeImage(img) ? img : null;
   } finally {
     await fh.close();
   }
+}
+
+/** JPEG, PNG, GIF or WebP signature. */
+export function looksLikeImage(b: Buffer): boolean {
+  if (b.length < 12) return false;
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true;
+  if (b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return true;
+  const head = b.subarray(0, 6).toString('latin1');
+  if (head === 'GIF87a' || head === 'GIF89a') return true;
+  return b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP';
 }

@@ -37,7 +37,7 @@ Upserts records keyed by `(run_id, writer, seq)`, so repeating a batch changes n
 | `ts_us` | i64 | `ts` as microseconds since the Unix epoch (`Date.parse(ts) * 1000`; ts has millisecond precision) |
 | `kind` | string | `type` |
 | `channel` | string | `channel`, or `""` when the record has none |
-| `has_thumb` | bool | `true` when the record has an `artifact` |
+| `has_thumb` | bool | `true` when the record's `artifact` is an image under `shots/` (other artifacts, e.g. `checkpoints/*.tar.gz`, are not uploaded) |
 | `payload` | string | the complete record as JSON text, exactly as read (all fields, unknown ones too) |
 
 Example call body: `[[{"run_id":"r","writer":"toolserver","seq":1,"ts":"2026-10-25T06:00:00.000Z","ts_us":1792908000000000,"kind":"tool_call","channel":"hook","has_thumb":false,"payload":"{...}"}]]`
@@ -45,6 +45,8 @@ Example call body: `[[{"run_id":"r","writer":"toolserver","seq":1,"ts":"2026-10-
 ### `publish_thumbs(thumbs: ThumbIn[])`
 
 Upserts thumbnails. Keep a call to at most about 512 KB of JSON (about 100 KB of image bytes becomes 300 KB or more as a JSON number array, so send a few per call).
+
+The publisher also writes the spectator frame `live/latest.jpg` (the host window, about every 5 s) to the same table under the stable key `"<run_id>|live|latest"`, overwritten whenever the file changes. The UI reads it with `SELECT * FROM thumb WHERE rkey = 'R|live|latest'`.
 
 `ThumbIn`: `rkey` (string, the record key `"<run_id>|<writer>|<seq>"` of the record whose `artifact` this is), `run_id` (string), `mime` (string, `image/jpeg` or `image/png`), `bytes` (u8[]).
 

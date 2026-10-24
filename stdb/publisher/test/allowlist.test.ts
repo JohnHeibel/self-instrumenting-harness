@@ -7,7 +7,7 @@ import { Publisher } from '../src/publisher.ts';
 import { classify, resolveAllowed } from '../src/safefs.ts';
 import { MemorySink } from '../src/sink.ts';
 import { Tailer } from '../src/tailer.ts';
-import { line, rec, tmp } from './helpers.ts';
+import { JPEG, line, rec, tmp } from './helpers.ts';
 
 function dangerousRun(): string {
   const run = tmp('danger-');
@@ -20,16 +20,21 @@ function dangerousRun(): string {
   fs.writeFileSync(path.join(run, 'raw', 'dump.jsonl'), line(rec('toolserver', 1)));
   fs.writeFileSync(path.join(run, 'codex-home', 'sessions.jsonl'), line(rec('toolserver', 1)));
   fs.writeFileSync(path.join(run, 'events.jsonl'), line(rec('toolserver', 1, { artifact: 'shots/a.jpg' })));
-  fs.writeFileSync(path.join(run, 'shots', 'a.jpg'), 'JPEG');
+  fs.writeFileSync(path.join(run, 'shots', 'a.jpg'), JPEG());
   fs.writeFileSync(path.join(run, 'shots', 'notes.txt'), 'nope');
+  fs.mkdirSync(path.join(run, 'live'));
+  fs.writeFileSync(path.join(run, 'live', 'latest.jpg'), JPEG('live'));
+  fs.writeFileSync(path.join(run, 'live', 'secret.jpg'), JPEG('secret'));
+  fs.writeFileSync(path.join(run, 'live', 'notes.json'), '{}');
   return run;
 }
 
 test('classify: only top-level *.jsonl and shots/<image>', () => {
   assert.equal(classify('events.jsonl'), 'jsonl');
+  assert.equal(classify('live/latest.jpg'), 'image');
   assert.equal(classify('shots/000001.jpg'), 'image');
   for (const bad of ['codex-home/auth.json', 'host/rcon.json', 'raw/x.jsonl', 'auth.json', 'shots/x.json',
-    'shots/sub/x.jpg', '../events.jsonl', 'shots/../host/rcon.json', 'events.jsonl.bak', '.jsonl', 'shots/..jpg']) {
+    'shots/sub/x.jpg', '../events.jsonl', 'shots/../host/rcon.json', 'events.jsonl.bak', '.jsonl', 'shots/..jpg', 'live/latest.png', 'live/other.jpg', 'live/latest.jpg.bak', 'live/sub/latest.jpg', 'live/latest.jsonl', 'live', 'Live/../host/rcon.json']) {
     assert.equal(classify(bad), null, bad);
   }
 });
@@ -56,7 +61,7 @@ test('secrets in a real-looking run dir are never opened, even with a hostile re
     const pub = new Publisher({ runDir: run, sink, tailer: new Tailer(run, new CheckpointStore(state, 'r1'), { fromStart: true }) });
     await pub.drain();
     assert.equal(sink.records.size, 4);
-    assert.equal(sink.thumbs.size, 1); // only shots/a.jpg
+    assert.equal(sink.thumbs.size, 2); // shots/a.jpg and the live frame
   } finally {
     (fs.promises as any).open = orig; (fs as any).openSync = origOpenSync;
     (fs.promises as any).readFile = origRead; (fs as any).readFileSync = origReadSync;
@@ -65,8 +70,8 @@ test('secrets in a real-looking run dir are never opened, even with a hostile re
   const ours = opened.filter(p => p.startsWith(run) || p.startsWith(real));
   assert.ok(ours.length > 0, 'the spy saw the opens');
   for (const p of ours) {
-    assert.match(path.relative(real, fs.realpathSync(p)).replace(/\\/g, '/'), /^(?:[^/]+\.jsonl|shots\/[^/]+\.jpg)$/, p);
-    assert.doesNotMatch(p, /auth\.json|rcon\.json|codex-home|[\\/]host[\\/]|[\\/]raw[\\/]|sessions\.jsonl|notes\.txt/);
+    assert.match(path.relative(real, fs.realpathSync(p)).replace(/\\/g, '/'), /^(?:[^/]+\.jsonl|shots\/[^/]+\.jpg|live\/latest\.jpg)$/, p);
+    assert.doesNotMatch(p, /secret\.jpg|notes\.json|auth\.json|rcon\.json|codex-home|[\\/]host[\\/]|[\\/]raw[\\/]|sessions\.jsonl|notes\.txt/);
   }
 });
 
@@ -87,4 +92,15 @@ test('symlinks that escape the run dir or point at non-allowlisted files are rej
   assert.ok(await resolveAllowed(run, 'events.jsonl'));
   assert.equal(await resolveAllowed(run, 'codex-home/auth.json'), null);
   assert.equal(await resolveAllowed(run, 'host/rcon.json'), null);
+});
+
+test('a directory link (junction on Windows) at shots/ or live/ pointing outside is rejected', async (t) => {
+  const run = tmp('junc-'); const outside = tmp('outside-');
+  fs.writeFileSync(path.join(outside, 'a.jpg'), JPEG('o')); fs.writeFileSync(path.join(outside, 'latest.jpg'), JPEG('o'));
+  try {
+    fs.symlinkSync(outside, path.join(run, 'shots'), 'junction');
+    fs.symlinkSync(outside, path.join(run, 'live'), 'junction');
+  } catch { t.skip('links unavailable'); return; }
+  assert.equal(await resolveAllowed(run, 'shots/a.jpg'), null);
+  assert.equal(await resolveAllowed(run, 'live/latest.jpg'), null);
 });

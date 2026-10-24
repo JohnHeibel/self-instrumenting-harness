@@ -62,8 +62,8 @@ test('checkpoint resume: no duplicates, picks up appended lines, survives restar
   const run = tmp(); const f = path.join(run, 'events.jsonl');
   const state = tmp('state-');
   fs.writeFileSync(f, [1, 2, 3].map(s => line(rec('toolserver', s))).join(''));
-  const t1 = new Tailer(run, new CheckpointStore(state, 'r1'));
-  // first start without a checkpoint is live: existing lines are skipped
+  const t1 = new Tailer(run, new CheckpointStore(state, 'r1'), { liveOnly: true });
+  // --live-only without a checkpoint skips existing lines
   assert.deepEqual(seqs(await t1.poll()), []);
   fs.appendFileSync(f, line(rec('toolserver', 4)) + line(rec('toolserver', 5)));
   const got = await t1.poll();

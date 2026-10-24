@@ -2,7 +2,13 @@ import fs from 'node:fs';
 import { rkeyOf, type WireRecord, type WireThumb } from './wire.ts';
 
 /** Thrown for errors that retrying cannot fix (bad token, permission denied, bad request). */
-export class FatalSinkError extends Error {}
+export class FatalSinkError extends Error {
+  /** True for "not permitted": the identity lacks the publisher role. Skipping records would not help. */
+  permission = false;
+}
+
+/** HTTP 413: this request body is too big. Splitting it or skipping the record fixes it; retrying does not. */
+export class PayloadTooLargeError extends Error {}
 
 export interface Sink {
   publishBatch(records: WireRecord[]): Promise<void>;
@@ -68,8 +74,11 @@ export class SpacetimeSink implements Sink {
     const msg = `${reducer}: HTTP ${res.status} ${text}`;
     // SCHEMA.md: a reducer that fails (e.g. "not permitted") is HTTP 530; other 4xx are malformed
     // requests. Neither heals by retrying. Other 5xx, 408, 429 and network errors are retried.
+    if (res.status === 413) throw new PayloadTooLargeError(msg);
     if (res.status === 530 || (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429)) {
-      throw new FatalSinkError(msg);
+      const err = new FatalSinkError(msg);
+      err.permission = /not permitted/i.test(text) || res.status === 401 || res.status === 403;
+      throw err;
     }
     throw new Error(msg);
   }

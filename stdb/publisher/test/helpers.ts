@@ -22,6 +22,8 @@ export function rec(writer: string, seq: number, extra: Record<string, unknown> 
   };
 }
 
+export const JPEG = (tag = 'x') => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from(`JFIF-${tag}-padding`)]);
+
 export const line = (o: unknown) => JSON.stringify(o) + '\n';
 
 export function lineCount(dir: string): number {

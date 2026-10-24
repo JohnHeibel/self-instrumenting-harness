@@ -280,6 +280,7 @@ export const ackControl = spacetimedb.reducer(
     if (status !== 'done' && status !== 'rejected') throw new SenderError('status must be done or rejected');
     const req = ctx.db.controlRequest.id.find(id);
     if (!req) throw new SenderError('no such request');
+    if (req.status !== 'pending') throw new SenderError('request already handled');
     ctx.db.controlRequest.id.update({ ...req, status, note, handled_at: ctx.timestamp });
   }
 );

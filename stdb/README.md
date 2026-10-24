@@ -15,29 +15,53 @@ The module stores records generically, keyed by `(run_id, writer, seq)`, with th
 
 Requirements: the `spacetime` CLI 2.13.x (official installer from spacetimedb.com/docs: macOS and Linux `curl -sSf https://install.spacetimedb.com | sh`, Windows `iwr https://windows.spacetimedb.com -useb | iex`), and Node 22 or newer.
 
-    spacetime start --listen-addr 0.0.0.0:3000          # 127.0.0.1:3000 if only this machine reads it
+    spacetime start --listen-addr 127.0.0.1:3000
     cd stdb/module && npm install
     spacetime publish harness-events --module-path . --server local --yes
 
-The identity that publishes becomes the **owner**. Now the publisher:
+**The owner identity.** `spacetime login` is only for Maincloud; a local server needs no account. `--server local` publishes as the CLI's saved identity for that server (the CLI creates one on first use; `spacetime login show` prints it). That identity becomes the **owner**, and only the owner can run `grant_role`, so run `grant_role` from the same machine and the same CLI profile that ran `publish`. Do not use `--anonymous` for the real database: every call is a new identity and nobody would be the owner.
+
+### Exposing the server to the Mac (john-pc)
+
+The tables are public to anyone who can reach the port (agent reasoning included). Do not listen on `0.0.0.0` on a shared network. Bind to the PC's Tailscale address and scope the firewall to Tailscale:
+
+    # Windows (PowerShell, as Administrator): find the Tailscale IP, bind to it, allow only Tailscale peers
+    $ts = (tailscale ip -4)
+    spacetime start --listen-addr "${ts}:3000"
+    New-NetFirewallRule -DisplayName "SpacetimeDB (Tailscale only)" -Direction Inbound -Protocol TCP -LocalPort 3000 -RemoteAddress 100.64.0.0/10 -Action Allow
+
+A server bound to the Tailscale address does not answer on 127.0.0.1, so the publisher on the PC also uses `--server http://<tailscale-ip>:3000`. The Mac reads `ws://<tailscale-ip>:3000`. (Untested on the real machines.)
+
+### The publisher
 
     cd stdb/publisher && npm install
-    npm run publisher -- --run-dir C:\path\to\runs\<run> --from-start
+    npm run publisher -- --run-dir C:\path\to\runs\<run>
 
-First start prints `minted a new identity <hex>` and stores its token in the state dir (`~/.sisyphus-publisher/token`). The publisher cannot write until the owner grants it the role (one time per identity):
+First start prints `minted a new identity <hex>`, stores its token in the state dir (`%USERPROFILE%\.sisyphus-publisher\token`) and then fails with 530 "not permitted" (in follow mode it keeps retrying every few seconds). Grant the role once, from the owner's CLI profile:
 
     spacetime call harness-events grant_role 0x<hex> publisher --server local
 
-Then start the publisher again. It resumes from its checkpoint, one per run in the state dir.
+In follow mode the publisher picks the grant up on its own; with `--once` start it again.
 
 Behaviour worth knowing:
 
-- **First run on a run that is already in progress: pass `--from-start`.** With no checkpoint and no flag the publisher follows only new lines (live tail) and skips what already exists.
-- `--from-start` ignores the checkpoint and republishes everything. That is safe: records are upserted by key, so counts do not change.
-- `--once` publishes what exists and exits (use it for replays and tests). Without it the publisher keeps following until Ctrl-C.
-- It reads only the top-level `*.jsonl` files and the thumbnails named by records' `artifact` under `shots/`. Nothing else in a run directory is opened (`codex-home/`, `host/` and other subdirectories hold credentials). This is an allowlist with tests, and the e2e run plants credential files next to the run and checks they never reach the database.
-- Partial last lines wait for their newline; the checkpoint only advances after the module accepted the batch.
-- Options: `--server`, `--module`, `--token`, `--state-dir`, `--max-records` (default 200 per call), `--max-bytes`, `--flush-ms` (default 1000), `--thumb-every N`. Run `npm run publisher -- --help`.
+- **With no checkpoint the publisher starts at byte 0 and publishes the whole history**, then follows. `--live-only` is the opt-in to skip what is already in the files. `--from-start` ignores an existing checkpoint and replays everything (safe: upserts by key).
+- `--once` publishes what exists and exits (replays, tests). Without it the publisher follows until Ctrl-C.
+- **It reads only** top-level `*.jsonl`, images under `shots/`, and exactly `live/latest.jpg`. Nothing else in a run directory is opened (`codex-home/`, `host/` hold credentials). Allowlist with tests; the e2e plants credential files next to the run.
+- `live/latest.jpg` (the spectator frame) is uploaded to the `thumb` table under the stable key `<run_id>|live|latest` and overwritten whenever it changes.
+- The checkpoint only advances after the module accepted the batch. On restart the last 20 screenshot records are re-queued, so thumbnails lost in a crash are re-uploaded.
+- **Never gives up:** 530 "not permitted", network errors and 5xx are backed off and retried; a failed checkpoint write is a warning (the rename is retried for Windows EPERM). A record whose JSON-encoded size is over 1.5 MB, or that the server rejects (HTTP 413 or a reducer error), is logged and skipped, and the checkpoint moves past it. `hook_loaded` records whose `files[].content` total over 1 MB are truncated (`truncated: true` on the record and the files; `source_ref` keeps the full source).
+- Options: `--server`, `--db` (alias `--module`), `--token`, `--state-dir`, `--max-records` (default 200 per call), `--max-bytes`, `--flush-ms` (default 1000), `--thumb-every N`, `--forever`. Run `npm run publisher -- --help`.
+
+### Keeping it running unattended on Windows
+
+`--forever` restarts the whole pipeline in-process after any error (backoff 5 s to 60 s). `stdb\publisher\run-forever.cmd <run-dir>` also restarts the process if Node itself exits. To start it at logon and survive reboots, use Task Scheduler (PowerShell, as the user that runs the harness):
+
+    $a = New-ScheduledTaskAction -Execute "cmd.exe" -Argument '/c C:\path\to\harness\stdb\publisher\run-forever.cmd C:\path\to\runs\<run>' -WorkingDirectory C:\path\to\harness\stdb\publisher
+    $t = New-ScheduledTaskTrigger -AtLogOn
+    Register-ScheduledTask -TaskName "harness-publisher" -Action $a -Trigger $t
+
+Do the same for `spacetime start --listen-addr <tailscale-ip>:3000` (its own task, started first; set `--data-dir` so data survives). Set `STDB_SERVER` and `STDB_MODULE` as user environment variables, or pass the options after the run dir. Each new run directory needs its own publisher (checkpoints are per run).
 
 ## Environment variables
 
@@ -47,9 +71,8 @@ Behaviour worth knowing:
 | `STDB_MODULE` | publisher | database name, default `harness-events` |
 | `STDB_TOKEN` | publisher | bearer token, otherwise read from or minted into the state dir |
 | `PUBLISHER_RUN_DIR`, `PUBLISHER_STATE_DIR` | publisher | defaults for `--run-dir` and `--state-dir` |
-| `VITE_SPACETIMEDB_HOST`, `VITE_SPACETIMEDB_DB_NAME` | UI | the usual SpacetimeDB client names (a proposal; the UI is not on main yet, so confirm what it reads). For the Mac to read john-pc: `ws://<john-pc-ip>:3000` and `harness-events` |
-
-Ports: SpacetimeDB listens on 3000 (HTTP and WebSocket). Reaching it from the Mac needs `--listen-addr 0.0.0.0:3000` and an inbound Windows firewall rule for TCP 3000 (untested).
+| `HARNESS_RUNS`, `E2E_PORT`, `E2E_KEEP` | e2e | where the fake runs are, the port (default 3917), keep the temp dir |
+| `VITE_SPACETIMEDB_HOST`, `VITE_SPACETIMEDB_DB_NAME` | UI | the usual SpacetimeDB client names (a proposal; the UI is not on main yet, so confirm what it reads). For the Mac to read john-pc: `ws://<tailscale-ip>:3000` and `harness-events` |
 
 ## Local versus Maincloud
 
@@ -61,8 +84,8 @@ Ports: SpacetimeDB listens on 3000 (HTTP and WebSocket). Reaching it from the Ma
 - Subscription SQL has no ORDER BY, LIMIT or COUNT: sort and count in the client.
 - Calls: the publisher sends one `publish_batch` per second at most, whatever the record rate (default 200 records per call), plus thumbnail calls. A live run of any speed stays near 1 to 2 calls a second, about 2.6 to 5M calls a month if it ran non-stop; for a long unattended run raise `--flush-ms`.
 - Measured on the fake runs: 4,134 records and 111 thumbnails in 0.6 s; 7,047 records and 251 thumbnails in 1.8 s.
-- Thumbnails live in their own table and are fetched by key. The toolserver already attaches `artifact` to only some screenshots; `--thumb-every N` thins them further. A thumbnail the publisher skipped has a record with `has_thumb = true` and no `thumb` row; the UI must show a placeholder.
-- A record line larger than the reducer or HTTP body limit would be refused (the limit is unverified, probably 2 MB). `hook_loaded` files are capped at 64 KB each by the event log.
+- Thumbnails live in their own table and are fetched by key. Every screenshot call carries an `artifact`; `--thumb-every N` thins the uploads. `checkpoint` records also carry an `artifact` (a tarball): it is not an image under `shots/`, so `has_thumb` is false for them. A thumbnail the publisher skipped has a record with `has_thumb = true` and no `thumb` row; the UI must show a placeholder.
+- The HTTP body limit is unverified (probably 2 MB). The publisher measures the JSON-encoded size, truncates oversized `hook_loaded` file contents and skips (and logs) anything still over 1.5 MB or answered with 413.
 - Republishing the module keeps data if you only add tables, indexes and reducers; changing columns needs `--delete-data` (fine in development).
 
 ## Ops controls
@@ -72,6 +95,6 @@ Ports: SpacetimeDB listens on 3000 (HTTP and WebSocket). Reaching it from the Ma
 ## Tests
 
     cd stdb/publisher && npm test        # unit tests: tailing, partial lines, rotation, checkpoints, batching, allowlist; no server
-    node stdb/e2e/run.mjs                # needs the spacetime CLI; uses port 3917 and a temp data dir
+    node stdb/e2e/run.mjs                # needs the spacetime CLI; port 3917, temp data dir; works on Windows and macOS
 
 The e2e run covers: module publish, a publisher without the role is refused, both fake runs replayed and compared record by record (counts per writer and type, payload equality, `ts_us`, thumbnail bytes, a time-range query), republish and checkpoint restart change nothing, a live tail on a growing copy (mid-line splits and a restart), credential files not published, role table private, Ops controls and role enforcement.
