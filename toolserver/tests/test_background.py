@@ -409,3 +409,12 @@ def test_notices_the_runner_delivered_in_a_wake_prompt_count_as_seen(tmp_path):
     assert "stuck" not in board.footer()
     board.post("t3", "new trouble", urgent=True)
     assert [i["text"] for i in json.loads((tmp_path / "WAKE").read_text())] == ["new trouble"]
+
+
+def test_a_long_failure_keeps_its_start_and_end():
+    from toolserver import tasks as tm
+    long = "RuntimeError: {'state': " + "x" * 2000 + "}, 'error': 'blocked at 3,4 by tree'"
+    s = tm._ends(long, "t7")
+    assert s.startswith("RuntimeError: {'state':") and "blocked at 3,4 by tree" in s
+    assert 'task("t7") shows all' in s and len(s) < 400
+    assert tm._ends("short error", "t7") == "short error"

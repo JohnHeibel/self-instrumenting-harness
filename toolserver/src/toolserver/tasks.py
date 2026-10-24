@@ -112,7 +112,7 @@ class Board:
         self._changed = asyncio.Event()
 
     def post(self, source: str, text: str, urgent: bool = False) -> Notice:
-        n = Notice(len(self.items) + 1, time.time(), source, text.strip()[:500], urgent)
+        n = Notice(len(self.items) + 1, time.time(), source, text.strip()[:800], urgent)
         self.items.append(n)
         self.log.write("notice", notice=n.id, source=source, text=n.text, urgent=urgent)
         if urgent:
@@ -198,6 +198,14 @@ class Board:
             tmp.replace(p)
         else:
             p.unlink(missing_ok=True)
+
+
+def _ends(text: str, tid: str, head: int = 170, tail: int = 130) -> str:
+    """A long failure cut to its start and end, where the error and the reason usually are."""
+    text = " ".join(text.split())
+    if len(text) <= head + tail + 40:
+        return text
+    return f"{text[:head]} … {text[-tail:]} (cut; task(\"{tid}\") shows all)"
 
 
 def _key(n: Notice) -> str:
@@ -436,7 +444,7 @@ class Work:
             self.hands.release(t.id)
         t.result = r
         t.status = "ok" if r.ok else ("stopped" if r.stopped else "failed")
-        summary = (r.out.strip().splitlines() or [""])[-1][:200] if r.ok else r.detail[:200]
+        summary = (r.out.strip().splitlines() or [""])[-1][:200] if r.ok else _ends(r.detail, t.id)
         self.log.write("task_ended", task=t.id, name=t.name, status=t.status, duration_ms=round(r.seconds * 1000),
                        calls=len(r.calls), summary=summary)
         again = ""
