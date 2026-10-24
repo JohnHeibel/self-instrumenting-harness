@@ -1,0 +1,412 @@
+"""The runner: drives one long Codex session on ONE thread, through `codex app-server`.
+
+It owns the run directory and the tool server's lifecycle, writes runner.jsonl
+(docs/interfaces/event-log.md), and keeps the run alive:
+
+- The thread id goes to runner-state.json the moment Codex reports it, so a crash at any
+  point (even in the first turn) resumes the same thread instead of starting over.
+- Time and token budgets are checked mid-turn; hitting one interrupts the turn.
+- A STOP file in the run dir ends the run cleanly. A PAUSE file holds it (interrupting
+  the current turn) until removed.
+- Failures back off 30 s, 60 s, ... up to 1 h, and the run gives up after 12 in a row.
+  A completed turn, or any turn longer than 10 minutes, resets the count.
+- No turn starts while the host is down; a host that goes down mid-turn interrupts it.
+- Every turn after the first gets the same fixed CONTINUE_PROMPT.
+
+Run commands: runner/README.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable
+
+from toolserver.events import EventLog
+
+from . import agent, hostcheck
+from .appserver import AppServer, AppServerError
+from .mapping import Mapper
+from .state import RunLock, RunState, kill_tree, pid_alive
+from .toolserver_proc import ToolServer, ToolServerError
+
+NOTES_HINT = ("\n\nKeep notes on your progress in /home/agent/work (it survives restarts). "
+              "Your session may be interrupted and resumed at any time.")
+
+CONTINUE_PROMPT = (
+    "Your previous turn has ended: it finished, was interrupted, or the harness restarted. "
+    "Keep working toward the run goal. Your context may have been compacted or reset, so first "
+    "rebuild your picture of where things stand: re-read your notes in /home/agent/work, check "
+    "which hooks and tools you have (list_hooks), and take a fresh observation of the host before "
+    "you act. Then continue from where your notes say you are, and keep the notes current.")
+
+
+class Stalled(Exception):
+    pass
+
+
+@dataclass
+class Config:
+    run_dir: Path
+    goal: str | None = None
+    run_id: str | None = None
+    host: str = "factorio"
+    agent_cmd: list[str] | None = None        # None: the agent container (docker)
+    auth_json: Path = field(default_factory=lambda: Path.home() / ".codex" / "auth.json")
+    image: str = agent.DEFAULT_IMAGE
+    model: str | None = None
+    reasoning_summary: str = "detailed"
+    port: int = 8765
+    toolserver: bool = True
+    window_title: str = "Factorio"
+    host_check: hostcheck.HostCheck | None = None
+    cwd: str = "/home/agent/work"
+    budget_seconds: float | None = None
+    budget_tokens: int | None = None
+    backoff_base: float = 30
+    backoff_cap: float = 3600
+    max_failures: int = 12
+    long_turn_seconds: float = 600
+    poll: float = 1.0                         # how often mid-turn checks run
+    host_poll: float = 30                     # how often the host is checked
+    stall_timeout: float = 1800               # no message at all for this long: kill and retry
+    interrupt_grace: float = 60               # turn/interrupt must end the turn within this
+    request_timeout: float = 120
+    sleep: Callable[[float], None] = time.sleep
+    clock: Callable[[], float] = time.time
+
+
+@dataclass
+class Outcome:
+    status: str                    # completed | interrupted | failed
+    duration_s: float | None = None
+    error: str | None = None
+    interrupt: str | None = None   # why we interrupted it, if we did
+
+
+class Runner:
+    def __init__(self, cfg: Config) -> None:
+        self.cfg = cfg
+        self.run_dir = cfg.run_dir = cfg.run_dir.resolve()  # docker mounts need absolute paths
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        (self.run_dir / "raw").mkdir(exist_ok=True)
+        self.state_path = self.run_dir / "runner-state.json"
+        self.lock = RunLock(self.run_dir / "runner.lock")
+        self.host_check = cfg.host_check or hostcheck.resolve("factorio-window")
+        self.srv: AppServer | None = None
+        self.toolserver: ToolServer | None = None
+        self.state: RunState
+        self.log: EventLog
+        self.mapper: Mapper
+
+    # Top level ------------------------------------------------------------------
+
+    def run(self) -> str:
+        self.lock.acquire()
+        try:
+            return self._run()
+        except KeyboardInterrupt:
+            self.log.write("marker", label="runner stopped by signal; run is resumable",
+                           kind="runner_signal")
+            raise
+        finally:
+            self._close_session()
+            if self.toolserver:
+                self.toolserver.stop()
+            self.lock.release()
+
+    def _run(self) -> str:
+        existing = RunState.load(self.state_path)
+        run_id = (existing.run_id if existing else None) or self.cfg.run_id or self.run_dir.name
+        self.log = EventLog(self.run_dir / "runner.jsonl", run_id, writer="runner")
+        self.mapper = Mapper(self.log)
+        self.mapper.on_usage = self._save_usage
+        if existing:
+            self.state = existing
+            if self.state.status == "ended":
+                print(f"run already ended: {self.state.ended_reason}")
+                return self.state.ended_reason or "ended"
+            self.mapper.total = dict(self.state.extra.get("usage_total") or {})
+            lost = f"; turn {self.state.turns} was cut off" if self.state.active_turn_id else ""
+            self.log.write("marker", label=f"runner restarted, resuming thread {self.state.thread_id}{lost}",
+                           kind="runner_restart")
+            if self.state.active_turn_id:  # close it, with the tokens it used before the crash
+                self.mapper.restore_turn(self.state.turns, self.state.active_turn_id,
+                                         self.state.extra.get("turn_base") or {})
+                self.mapper.end_turn("cut_off", None, "the runner stopped during this turn")
+            self.state.active_turn_id = None
+            self._save()
+        else:
+            if not self.cfg.goal:
+                raise SystemExit("a new run needs --goal or --goal-file")
+            self.state = RunState(run_id=run_id, started_at=self.cfg.clock(),
+                                  extra={"goal": self.cfg.goal, "host": self.cfg.host})
+            self._save()
+
+        if self.cfg.toolserver:
+            old = self.state.extra.get("toolserver_pid")
+            if old and pid_alive(old):  # orphaned by a runner that crashed
+                kill_tree(old)
+                self.log.write("marker", label=f"killed tool server {old} left by a crashed runner",
+                               kind="toolserver_restart")
+            self.toolserver = ToolServer(self.run_dir, run_id, self.cfg.port, self.cfg.window_title)
+            self._start_toolserver()
+
+        while True:
+            reason = self._end_reason()
+            if reason:
+                return self._end(reason)
+            if (self.run_dir / "PAUSE").exists():
+                self.mapper.state("paused", "PAUSE file present")
+                self._wait(self.cfg.host_poll)
+                continue
+            up, detail = self.host_check()
+            if not up:
+                self.mapper.state("host_down", detail)
+                self._wait(self.cfg.host_poll)
+                continue
+            if self.toolserver and not self.toolserver.alive():
+                self.log.write("marker", label="tool server died; restarting", kind="toolserver_restart")
+                self._start_toolserver()
+
+            try:
+                self._ensure_session()
+                outcome = self._run_turn()
+            except (AppServerError, ToolServerError, Stalled) as e:
+                outcome = Outcome("failed", error=f"{type(e).__name__}: {e}")
+                if self.mapper.turn is not None:  # the turn died with the process
+                    self.mapper.end_turn("failed", None, outcome.error)
+                    self.state.active_turn_id = None
+                self._close_session()
+
+            if outcome.interrupt in ("host_down", "paused", "stop", "budget_time", "budget_tokens"):
+                continue  # not a failure; the loop top decides what happens next
+            if outcome.duration_s is not None and outcome.duration_s > self.cfg.long_turn_seconds:
+                self.state.failures = 0
+            if outcome.status == "completed":
+                self.state.failures = 0
+                self._save()
+                continue
+            self.state.failures += 1
+            self._save()
+            if self.state.failures >= self.cfg.max_failures:
+                return self._end("too_many_failures")
+            delay = min(self.cfg.backoff_base * 2 ** (self.state.failures - 1), self.cfg.backoff_cap)
+            self.mapper.state("backing_off", f"failure {self.state.failures}: {outcome.error or outcome.status}; "
+                                             f"retrying in {delay:.0f} s",
+                              delay_s=delay, failures=self.state.failures)
+            self._wait(delay)
+
+    # One turn -------------------------------------------------------------------
+
+    def _run_turn(self) -> Outcome:
+        assert self.srv
+        if self.state.goal_sent:
+            prompt, kind = CONTINUE_PROMPT, "continue"
+        else:
+            prompt, kind = self.state.extra["goal"] + NOTES_HINT, "goal"
+        res = self.srv.request("turn/start", {"threadId": self.state.thread_id,
+                                              "input": [{"type": "text", "text": prompt}]},
+                               timeout=self.cfg.request_timeout)
+        turn_id = res["turn"]["id"]
+        self.state.turns += 1
+        self.state.goal_sent = True
+        self.state.active_turn_id = turn_id
+        self.mapper.begin_turn(self.state.turns, turn_id)
+        self.state.extra["turn_base"] = dict(self.mapper.turn_base)
+        self._save()
+        self.log.write("marker", label=f"prompt: {kind}", kind=f"prompt_{kind}")
+
+        t0 = last = self.cfg.clock()
+        next_host = t0 + self.cfg.host_poll
+        interrupt: str | None = None
+        interrupt_deadline = 0.0
+        while True:
+            msg = self.srv.next_message(self.cfg.poll)
+            now = self.cfg.clock()
+            if msg:
+                last = now
+                self.mapper.handle(msg)
+                if msg.get("method") == "turn/completed":
+                    turn = (msg.get("params") or {}).get("turn") or {}
+                    if turn.get("id") == turn_id:
+                        break
+            elif now - last > self.cfg.stall_timeout:
+                raise Stalled(f"no message from the app-server for {self.cfg.stall_timeout:.0f} s")
+            if interrupt is None:
+                check_host = now >= next_host
+                if check_host:
+                    next_host = now + self.cfg.host_poll
+                interrupt = self._interrupt_reason(check_host)
+                if interrupt:
+                    self.srv.send_request("turn/interrupt", {"threadId": self.state.thread_id,
+                                                             "turnId": turn_id})
+                    self.log.write("marker", label=f"interrupting turn {self.state.turns}: {interrupt}",
+                                   kind="interrupt")
+                    interrupt_deadline = now + self.cfg.interrupt_grace
+            elif now > interrupt_deadline:
+                raise AppServerError(f"turn did not end {self.cfg.interrupt_grace:.0f} s after turn/interrupt")
+
+        status = turn.get("status") or "failed"
+        duration_ms = turn.get("durationMs")
+        if duration_ms is None:
+            duration_ms = round((self.cfg.clock() - t0) * 1000)
+        error = ((turn.get("error") or {}).get("message")) or (self.mapper.last_error if status == "failed" else None)
+        self.mapper.end_turn(status, duration_ms, error)
+        if status == "completed":
+            self.log.write("checkpoint", label=f"turn {self.state.turns} completed",
+                           ref=f"{self.state.thread_id}/{turn_id}")
+        self.state.active_turn_id = None
+        self.state.extra["usage_total"] = self.mapper.total
+        self._save()
+        return Outcome(status, duration_ms / 1000, error, interrupt)
+
+    def _interrupt_reason(self, check_host: bool) -> str | None:
+        reason = self._end_reason()
+        if reason:
+            return reason
+        if (self.run_dir / "PAUSE").exists():
+            return "paused"
+        if check_host:
+            up, detail = self.host_check()
+            if not up:
+                self.mapper.state("host_down", detail)
+                return "host_down"
+        return None
+
+    def _end_reason(self) -> str | None:
+        if (self.run_dir / "STOP").exists():
+            return "stop"
+        if self.cfg.budget_seconds is not None and \
+                self.cfg.clock() - self.state.started_at >= self.cfg.budget_seconds:
+            return "budget_time"
+        if self.cfg.budget_tokens is not None and self.mapper.total_tokens() >= self.cfg.budget_tokens:
+            return "budget_tokens"
+        return None
+
+    # Session --------------------------------------------------------------------
+
+    def _ensure_session(self) -> None:
+        if self.srv and self.srv.alive():
+            return
+        self._close_session()
+        if self.cfg.agent_cmd:
+            cmd = self.cfg.agent_cmd
+        else:
+            agent.remove_container(self.state.run_id)
+            cmd = agent.docker_cmd(self.run_dir, self.state.run_id, self.cfg.auth_json, self.cfg.port,
+                                   self.cfg.image, self.cfg.model, self.cfg.reasoning_summary)
+        self.srv = AppServer(cmd, raw_log=self.run_dir / "raw" / "appserver.jsonl",
+                             stderr_path=self.run_dir / "raw" / "appserver.stderr.log")
+        self.srv.initialize()
+        if self.state.thread_id:
+            res = self.srv.request("thread/resume", {"threadId": self.state.thread_id, "excludeTurns": True},
+                                   timeout=self.cfg.request_timeout)
+        else:
+            res = self.srv.request("thread/start", {"cwd": self.cfg.cwd}, timeout=self.cfg.request_timeout)
+            self.state.thread_id = res["thread"]["id"]
+            self._save()  # before anything else can go wrong
+        self.state.model = res.get("model") or self.state.model
+        self._save()
+        if not self.state.run_started_logged:
+            self.log.write("run_started", agent="codex", model=self.state.model, host=self.state.extra.get("host"),
+                           goal=self.state.extra.get("goal"), thread_id=self.state.thread_id)
+            self.state.run_started_logged = True
+            self._save()
+
+    def _close_session(self) -> None:
+        if self.srv:
+            self.srv.close(grace=10)
+            self.srv = None
+        if not self.cfg.agent_cmd and hasattr(self, "state"):
+            agent.remove_container(self.state.run_id)
+
+    # Helpers --------------------------------------------------------------------
+
+    def _save_usage(self, total: dict) -> None:
+        self.state.extra["usage_total"] = dict(total)
+        self._save()
+
+    def _start_toolserver(self) -> None:
+        assert self.toolserver
+        self.toolserver.start()
+        self.state.extra["toolserver_pid"] = self.toolserver.proc.pid
+        self._save()
+
+    def _end(self, reason: str) -> str:
+        self.mapper.state("ended", reason)
+        self.log.write("run_ended", reason=reason, turns=self.state.turns,
+                       total_tokens=self.mapper.total_tokens())
+        self.state.status, self.state.ended_reason = "ended", reason
+        self._save()
+        return reason
+
+    def _wait(self, seconds: float) -> None:
+        """Sleep, waking early if STOP appears."""
+        left = seconds
+        while left > 0:
+            if (self.run_dir / "STOP").exists():
+                return
+            step = min(left, 1.0)
+            self.cfg.sleep(step)
+            left -= step
+
+    def _save(self) -> None:
+        self.state.save(self.state_path)
+
+
+# CLI ----------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Drive one long Codex session. See runner/README.md.")
+    ap.add_argument("--run-dir", type=Path, help="default: runs/<UTC stamp>; pass an existing one to resume")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--goal", help="the run's objective (first prompt)")
+    g.add_argument("--goal-file", type=Path)
+    ap.add_argument("--host", default="factorio")
+    ap.add_argument("--host-check", default="factorio-window",
+                    help="factorio-window | window:<title> | always | cmd:<command> | py:<module>:<fn>")
+    ap.add_argument("--model")
+    ap.add_argument("--reasoning-summary", default="detailed", choices=["auto", "concise", "detailed", "none"])
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--image", default=agent.DEFAULT_IMAGE)
+    ap.add_argument("--auth-json", type=Path, default=Path.home() / ".codex" / "auth.json")
+    ap.add_argument("--budget-hours", type=float)
+    ap.add_argument("--budget-tokens", type=int, help="on Codex's thread total (includes cached input)")
+    ap.add_argument("--no-toolserver", action="store_true")
+    ap.add_argument("--agent-cmd", help="JSON list; replaces the agent container (tests, fakes)")
+    ap.add_argument("--stall-timeout", type=float, default=1800)
+    ap.add_argument("--build", action="store_true", help="docker build the agent image first")
+    args = ap.parse_args(argv)
+
+    run_dir = args.run_dir or agent.REPO / "runs" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    goal = args.goal_file.read_text(encoding="utf-8") if args.goal_file else args.goal
+    if args.build and not args.agent_cmd:
+        import subprocess
+        if subprocess.run(["docker", "build", "-t", args.image, str(agent.REPO / "agent")]).returncode:
+            print("docker build failed", file=sys.stderr)
+            return 3
+    if not args.agent_cmd and not args.auth_json.exists():
+        print(f"{args.auth_json} not found; run `codex login` first", file=sys.stderr)
+        return 3
+    cfg = Config(run_dir=run_dir, goal=goal, host=args.host, model=args.model,
+                 reasoning_summary=args.reasoning_summary, port=args.port, image=args.image,
+                 auth_json=args.auth_json, toolserver=not args.no_toolserver,
+                 agent_cmd=json.loads(args.agent_cmd) if args.agent_cmd else None,
+                 host_check=hostcheck.resolve(args.host_check), stall_timeout=args.stall_timeout,
+                 budget_seconds=args.budget_hours * 3600 if args.budget_hours else None,
+                 budget_tokens=args.budget_tokens)
+    print(f"run dir: {run_dir}")
+    reason = Runner(cfg).run()
+    print(f"run ended: {reason}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
