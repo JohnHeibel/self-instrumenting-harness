@@ -101,3 +101,8 @@ Change: `--reset-context-tokens N` (default 0 = off). When one request's context
 'handoff ready'; 5 min cap), then starts the next turn as a fresh session (brief + goal + continue prompt + skills index). Markers: `context_handoff`, `context_handoff_done`, `context_reset`.
 The fresh context is about 40k, so steps cost about 5x less until it grows again. This is Anthropic's "reset with a structured handoff" pattern from docs/research/long-horizon-harnesses.md.
 State machine tested in `runner/tests/test_skills_note.py`; the turn-loop wiring has not been run end to end (no fake claude CLI in runner/tests), so first use should be watched.
+
+## 2026-10-24 (critic, cycle 10: deaths as host events) graders/minecraft, runner/claude_runner.py, docs/interfaces/event-log.md
+Evidence: three drownings (02:43, 03:29, 03:54 local) in a flooded cave; the second cost all iron and stone gear (about 30 min) right after iron_tools; nothing in the logs flagged it.
+1. Grader writes `marker` records `kind: agent_died` (`cause`, `player`, `game_time`, `key`, `count`) from the game log's death lines. Please add the kind to the `marker` row in docs/interfaces/event-log.md; Factorio could write the same kind (character death).
+2. Runner: `new_host_events()` reads those markers; a new death interrupts the turn (reason `host_event`) and the next continue prompt carries a generic "you died; re-check inventory; re-plan" note. Tests in runner/tests/test_skills_note.py and graders/minecraft/tests.

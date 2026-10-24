@@ -123,6 +123,34 @@ def handoff_end_turn(extra: dict, failed: bool) -> bool:
     return False
 
 
+HOST_EVENT_KINDS = {"agent_died"}
+DEATH_NOTE = ("Host event: you died ({cause}). You respawned, and your inventory is probably gone. Before anything "
+              "else: read your inventory and position, work out what you lost and whether it is safe to fetch "
+              "(the items lie where you died for about 5 minutes), and re-plan from your notes. Find out what "
+              "killed you and change the tool or the habit that led there, so it cannot happen again. Store "
+              "valuables in your chest before risky trips.")
+
+
+def new_host_events(grader_path: Path, seen: set[str]) -> list[dict]:
+    """Grader markers of the kinds that matter right now (a death), not yet reported. Marks them seen."""
+    out = []
+    try:
+        lines = grader_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return out
+    for ln in lines:
+        try:
+            r = json.loads(ln)
+        except ValueError:
+            continue
+        if r.get("type") == "marker" and r.get("kind") in HOST_EVENT_KINDS:
+            key = r.get("key") or r.get("ts")
+            if key not in seen:
+                seen.add(key)
+                out.append(r)
+    return out
+
+
 class IdleWatch:
     """Notices a stall that the agent's own waiting hides: the host's picture (live/latest.jpg) is unchanged
     and the tool server logged no call for `idle_s` seconds. Host-generic; off when idle_s <= 0."""
@@ -234,6 +262,8 @@ class ClaudeRunner:
         self.uncached = int(self.state.extra.get("uncached_tokens", 0))
         self.total_tokens = int(self.state.extra.get("total_tokens", 0))
         self.pending_note = ""
+        self.seen_events: set[str] = set()
+        new_host_events(self.run_dir / "grader.jsonl", self.seen_events)   # old ones were already dealt with
         self.context = 0
         self.last_state: tuple | None = None
         self._tick_at = time.monotonic()
@@ -516,6 +546,13 @@ class ClaudeRunner:
                 why = "nudge"
             if not why and st.extra.get("handoff") == "asked" and time.monotonic() - t0 > HANDOFF_TIMEOUT_S:
                 why = "handoff_timeout"
+            if not why:
+                evs = new_host_events(self.run_dir / "grader.jsonl", self.seen_events)
+                if evs:
+                    why = "host_event"
+                    self.pending_note += (("\n\n" if self.pending_note else "")
+                                          + "\n\n".join(DEATH_NOTE.format(cause=e.get("cause", "unknown"))
+                                                         for e in evs[-1:]))
             if not why and why_handoff:
                 why = "handoff"
             if not why and idle.idle():

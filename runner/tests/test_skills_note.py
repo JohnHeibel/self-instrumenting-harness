@@ -56,3 +56,14 @@ def test_handoff_state_machine():
     assert "NOTES.md" in cr.handoff_begin_turn(e)
     assert cr.handoff_end_turn(e, False) and e["fresh_session"] and not e["handoff"]
     assert cr.handoff_begin_turn(e) == ""
+
+
+def test_new_host_events(tmp_path):
+    import json
+    p = tmp_path / "grader.jsonl"
+    seen = set()
+    assert cr.new_host_events(p, seen) == []
+    p.write_text(json.dumps({"type": "marker", "kind": "agent_died", "key": "k1", "cause": "drowned"}) + "\n"
+                 + json.dumps({"type": "milestone", "id": "x"}) + "\n")
+    assert [e["cause"] for e in cr.new_host_events(p, seen)] == ["drowned"]
+    assert cr.new_host_events(p, seen) == []

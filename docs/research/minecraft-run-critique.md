@@ -52,3 +52,7 @@ Trend: tokens per step rising with context (45k -> 200k); steps per milestone no
 Evidence: iron_ingot + iron_tools at 10:26Z (+65 min after the stone batch): 90k uncached tokens but 18.9M total tokens (steps now carry a 200k+ context). Cumulative: 26.1M total, 249k uncached at 10:26Z.
 Cost: wall-clock and rate-limit pressure grow with context; model requests are about 200k tokens each, 5x the start.
 Fix: opt-in `--reset-context-tokens` handoff to a fresh session (see requests). Recommend a deliberate restart with `--reset-context-tokens 150000`: the notes and skills index already exist, so a handoff should be cheap and safe. The run is now at 212k.
+
+## 2026-10-24 04:10 PDT, cycle 10: deaths
+Evidence: latest.log shows "threstral drowned" at 02:43, 03:29 and 03:54 local. Deaths were invisible to grader.jsonl, runner and supervisor.
+Fix: grader `agent_died` markers (needs a grader restart); runner interrupts and tells the agent (needs a runner restart); goal file "Staying alive" paragraph. Also seen: context fell to 62k at about 03:50 local, so a handoff or a fresh session happened (see next cycle for the handoff markers).

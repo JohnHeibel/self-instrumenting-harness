@@ -56,3 +56,22 @@ def test_nbt_reads_names_before_values(tmp_path):
     p = tmp_path / "x.dat"
     p.write_bytes(gzip.compress(body))
     assert nbt.load(p) == {"Id": 7, "Name": "hello", "Inner": {"b": 5}}
+
+
+def test_deaths_are_logged_once(tmp_path):
+    import json
+    log = tmp_path / "latest.log"
+    log.write_text(
+        "[24Oct2026 02:43:12.408] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: threstral drowned\n"
+        "[24Oct2026 02:43:12.415] [Render thread/INFO] [ChatComponentMixin/]: [System] [CHAT] threstral drowned\n"
+        "[24Oct2026 02:50:00.000] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: threstral was slain by Zombie\n")
+    run = tmp_path / "run"
+    run.mkdir()
+    gr = g.Grader(run, tmp_path / "world", log_file=log)
+    gr._deaths()
+    gr._deaths()
+    recs = [json.loads(x) for x in (run / "grader.jsonl").read_text().splitlines()]
+    deaths = [r for r in recs if r.get("kind") == "agent_died"]
+    assert [d["cause"] for d in deaths] == ["drowned", "was slain by Zombie"] and deaths[1]["count"] == 2
+    g.Grader(run, tmp_path / "world", log_file=log)._deaths()   # a restarted grader does not repeat them
+    assert len([x for x in (run / "grader.jsonl").read_text().splitlines() if "agent_died" in x]) == 2

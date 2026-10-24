@@ -32,6 +32,12 @@ import nbt  # noqa: E402
 from toolserver.events import EventLog  # noqa: E402
 
 DEFAULT_SAVES = Path.home() / "Library/Application Support/PrismLauncher/instances/sisyphus-neoforge/minecraft/saves"
+DEATH_LINE = re.compile(
+    r"\[(?P<t>[^\]]+)\] \[Server thread/INFO\] \[net\.minecraft\.server\.MinecraftServer/\]: (?P<who>\S+) (?P<msg>(?:"
+    r"drowned|was slain|was shot|was killed|fell |hit the ground|burned to death|went up in flames|tried to swim in lava|"
+    r"was blown up|blew up|starved|suffocated|was pricked|withered away|was fireballed|died|was squashed|"
+    r"experienced kinetic|was impaled|froze to death|was struck by lightning|walked into fire|discovered the floor|"
+    r"was pummeled|was stung|was obliterated|was skewered|didn't want to live).*)$")
 CMD_LINE = re.compile(r"\[(?P<t>[^\]]+)\] \[[^\]]*\] .*?: (?P<who>\S+) issued server command: /(?P<cmd>.*)$")
 BUILDING = ("cobblestone", "planks", "stone", "dirt", "bricks", "glass", "log", "wool", "deepslate", "sandstone")
 
@@ -155,6 +161,7 @@ class Grader:
         self.reached: set[str] = set()
         self.active: dict[str, bool] = {}
         self.seen_cmds: set[tuple] = set()
+        self.seen_deaths: set[str] = set()
         self.cmd_id = 0
         self.up: bool | None = None
         self.defined = None
@@ -176,6 +183,8 @@ class Grader:
                 self.reached.add(r["id"])
             elif t == "integrity":
                 self.active[r["signal"]] = r["active"]
+            elif t == "marker" and r.get("kind") == "agent_died":
+                self.seen_deaths.add(r.get("key", ""))
             elif t == "host_command":
                 self.cmd_id = max(self.cmd_id, r.get("command_id", 0))
                 self.seen_cmds.add((r.get("tick"), r.get("command"), r.get("parameters")))
@@ -190,6 +199,7 @@ class Grader:
         for name, (on, detail) in signals(s).items():
             self._signal(name, on, detail, {"level_dat_difficulty": s["level"].get("Difficulty")})
         self._commands()
+        self._deaths()
         for mid, _, judge in MILESTONES:
             if mid in self.reached:
                 continue
@@ -217,6 +227,20 @@ class Grader:
             self.cmd_id += 1
             self.log.write("host_command", command_id=self.cmd_id, command=cmd, parameters=params,
                            by=f"player {m['who']}", custom=False, tick=m["t"])
+
+    def _deaths(self) -> None:
+        """A marker (kind `agent_died`) for each death line the game logged: when, who, and the cause as the game words it."""
+        try:
+            lines = self.log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return
+        for ln in lines:
+            m = DEATH_LINE.search(ln)
+            if not m or m["t"] + m["msg"] in self.seen_deaths:
+                continue
+            self.seen_deaths.add(m["t"] + m["msg"])
+            self.log.write("marker", kind="agent_died", label=f"died: {m['msg']}", cause=m["msg"], player=m["who"],
+                           game_time=m["t"], key=m["t"] + m["msg"], count=len(self.seen_deaths))
 
     def _signal(self, name, on, detail, evidence) -> None:
         if self.active.get(name, False) != on:
