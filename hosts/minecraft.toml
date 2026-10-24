@@ -1,0 +1,44 @@
+# Host config: Minecraft Java 1.21.1 + NeoForge + Minescript 4.0, a Prism Launcher instance on macOS.
+# Data only. {config_dir}/minecraft/hostctl.py starts and stops the client. The agent writes its own
+# Minescript scripts (Python, run from game chat) and the programs that talk to them.
+
+[host]
+name = "minecraft"
+window_title = "Minecraft"
+process = "java"
+# One game window; GUIs are drawn inside it.
+capture = "window"
+up_check = ["{python}", "minecraft/hostctl.py", "check"]
+start = ["{python}", "minecraft/hostctl.py", "start"]
+stop = ["{python}", "minecraft/hostctl.py", "stop"]
+start_timeout_s = 300
+# The agent's own Minescript script may serve HTTP on this port (see notes).
+agent_ports = [8777]
+notes = """
+Minecraft Java 1.21.1 (NeoForge 21.1.264) with the Minescript 4.0 mod, running as a normal window on a Mac;
+you are the only player, in a creative test world. Minescript runs Python scripts (system python3, real
+processes) that you start by typing their name in game chat: press T, type \\name (for scripts in a
+subfolder, \\folder/name), press Enter. Scripts are read from disk on every run, so an edit takes effect the
+next time you run it; no game restart is needed. Use \\killjob to stop a running script, \\jobs to list them.
+The `minescript` module gives player_position, player_inventory, screen_name, container_get_items,
+world_info, getblock, entities, key presses, chat, event listeners and a Java reflection API
+(java_class, java_call_method, ...). A script can open a socket: serve HTTP on port 8777 bound to 0.0.0.0 and
+your tools reach it at host.docker.internal:8777. Run one script at a time per port. In-host files you
+install land in the game's minescript folder (as the install_as folder). Keep the game window visible and
+focused when you send input; screenshots show the window only. Press Esc to open or close the pause menu.
+"""
+
+[extensions]
+# Where load_extension copies an extension's in_host directory: the instance's minescript folder.
+install_dir = "~/Library/Application Support/PrismLauncher/instances/sisyphus-neoforge/minecraft/minescript"
+reload_timeout_s = 30
+
+[extensions.reload]
+# Scripts are re-read on each run, so installing the files is the whole reload.
+none = []
+
+[docs]
+sources = [
+  # Latest Minescript docs; the installed 4.0 lacks some newer calls (its minescript.py docstrings are authoritative).
+  { name = "minescript-api", url = "https://raw.githubusercontent.com/maxuser0/minescript/main/docs/README.md", format = "markdown" },
+]

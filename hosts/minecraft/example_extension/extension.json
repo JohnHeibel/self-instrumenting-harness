@@ -1,0 +1,12 @@
+{
+  "name": "mc_state",
+  "reason": "Read player position, inventory and the open container from the running game as JSON.",
+  "in_host": {"source": "plugin", "install_as": "agent_ext"},
+  "reload": "none",
+  "tools": [{
+    "name": "get_state",
+    "description": "Live game state: player position, health, inventory, open screen and container items. Needs \\agent_ext/state_bridge running in the game.",
+    "run": ["python3", "tools/get_state.py"],
+    "timeout_s": 15, "read_only": true
+  }]
+}
