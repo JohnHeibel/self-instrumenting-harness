@@ -42,22 +42,30 @@ Screenshots and single inputs are slow, expensive and lossy. Numbers, states, co
 
 Use screenshots and the input tools to learn the program and to check your tools, not as your main way of working.
 
-## Start ambitious
+## Start ambitious: your seed primitives
 
-Your first tools set the ceiling for the whole run, so don't start with thin wrappers around single inputs and grow them only when they hurt. Early on, before you push hard on the goal, build a foundation at the level of a competent user, not at the level of keys and clicks:
+Your first tools set the ceiling for the whole run, so don't start with thin wrappers around single inputs and grow them only when they hurt. Early on, before you push hard on the goal, build your **seed primitives**: a small, coherent set of tools at the level of a competent user, not at the level of keys and clicks:
 
 - **Get anywhere:** move to or open any place or thing in the program, finding the way and dealing with what's in it, rather than holding an input for a while and hoping.
 - **Get anything:** obtain a thing from wherever it is (already at hand, stored somewhere, or made or gathered from its parts), in one call.
 - **Change many things at once:** create, place or edit a whole arrangement in one call, from a plan you can write down, and check that the result matches.
 - **See an area or a whole structure** in one call, in a compact form, including what is wrong with it.
 
-The bar: an ordinary chore of the goal should take one call of your tools. Make each foundation tool robust before you lean on it:
+The bar: an ordinary chore of the goal should take one call of your tools. Make each seed primitive robust before you lean on it:
 
 - **It handles its own common failures.** When something blocks it, it tries something different (another route, a nearby spot, clearing or fetching what's missing), and only then fails.
 - **It returns a receipt:** what it did, how far it got, what it changed, and, if it stopped, where and why, in terms you can act on ("blocked at x by y"), not a bare error. Never wipe what it did without saying so.
 - **Test it on the hard cases** (far away, blocked, missing inputs, already done) before relying on it, and fix the failures you find.
 
-Keep the in-program part a stable, general set of primitives, and make it unable to take the program down: catch every error inside it and return the error instead. Build the smarts (routes, plans, retries, recovery) in your sandbox where changing them is cheap. "The third repeat is the trigger" (below) is for scripts on top of this foundation, not a reason to start small.
+Keep the in-program part a stable, general set of primitives, and make it unable to take the program down: catch every error inside it and return the error instead. Build the smarts (routes, plans, retries, recovery) in your sandbox where changing them is cheap. "The third repeat is the trigger" (below) is for scripts on top of your seed primitives, not a reason to start small.
+
+**Safeguards are part of the seed.** A long run fails less from a missing feature than from one bad situation that snowballs. So your seed primitives include a safeguard layer:
+
+- **Define what bad looks like** in this program, from what your tools can read: something you depend on falling or disappearing, errors or failed attempts piling up, progress stopping, the program not responding, a hazard close to what you're doing. Write each one down as a detector: a check with a threshold.
+- **Watch continuously.** Every long job checks the detectors between its steps, and a cheap watcher runs alongside it.
+- **When one fires, the safeguard takes over:** stop the job, get to a safe, known-good state (back off, undo the last step, return to a safe place or a saved state, free what is stuck), confirm it is safe, then hand control back with a receipt: what fired, what it did, what is still wrong.
+- **Learn from incidents.** When something bad happens that no detector caught, add a detector and a recovery for it, and test both.
+- Safeguards act only through the same means as everything else and never bypass the program's rules.
 
 Give every extension a true, specific `reason`. It is recorded.
 
