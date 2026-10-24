@@ -85,7 +85,7 @@ def _covered(spans: list[tuple[float, float]], a: float, b: float) -> float:
 def _not_running(runner: list[dict], a: float, b: float) -> list[tuple[float, float]]:
     """Spans of [a, b] where the runner said the agent wasn't running (host down, paused, backing off...)."""
     states = [(_t(r), r.get("state")) for r in runner if r.get("type") == "agent_state"]
-    out = []
+    out = [(a, states[0][0])] if states and states[0][0] > a else []   # before the run began
     for (t0, st), nxt in zip(states, states[1:] + [(b, None)]):
         if st not in AGENT_STATES:
             out.append((t0, nxt[0]))

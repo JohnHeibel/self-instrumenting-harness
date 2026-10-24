@@ -82,3 +82,6 @@ def test_time_use_splits_hands_tools_and_idle(tmp_path):
     u = time_use(tmp_path, a, b)
     assert [round(u[k] / 60) for k in ("hands", "tools", "idle", "off")] == [10, 6, 34, 10], u
     assert "hands busy 20%" in report(tmp_path, 60, now=NOW)
+    u = time_use(tmp_path, a - 1800, b)                                               # before the run: off
+    assert [round(u[k] / 60) for k in ("hands", "tools", "idle", "off")] == [10, 6, 34, 40], u
+    assert "hands busy 20%" in report(tmp_path, 90, now=NOW)
