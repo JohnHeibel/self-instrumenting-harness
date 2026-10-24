@@ -73,14 +73,23 @@ export type Integrity = {
  *  records in it; actions are real `program_actions` counts in it; hands busy is a share of the time the agent ran. */
 export type Metrics = {
   wallMs: number; offMs: number; handsMs: number; toolsMs: number; idleMs: number
-  tokens: number; steps: number; actions: number
+  tokens: number; cw: number; steps: number; actions: number; milestones: number
   tokPerHour?: number; handsPct?: number; tokPerStep?: number; tokPerAction?: number
+  cwPerMilestone?: number; cwPerAction?: number; actPerStep?: number
+  context?: number  // raw context of the newest request: its input_tokens + cached_input_tokens
 }
 /** One point of a metric series: the four efficiency numbers over a stretch of the run (a bin, or the run so far). */
-export type MetricPoint = { t0: number; t1: number; tokPerHour?: number; tokPerStep?: number; tokPerAction?: number; handsPct?: number }
+/** Cache-weighted tokens of one `usage` record (docs/BRIEF.md "Metrics"): uncached input and output in full, cached input at
+ *  a tenth. The runner's `input_tokens` excludes cached input. */
+export const cacheWeighted = (u: Rec) => (Number(u.input_tokens) || 0) + (Number(u.output_tokens) || 0) + 0.1 * (Number(u.cached_input_tokens) || 0)
+/** One point of a headline series: over a 15-minute bin, or over the run from the series origin to t1. */
+export type MetricPoint = { t0: number; t1: number; cwPerAction?: number; actPerStep?: number; handsPct?: number }
 export type MetricSeries = { bins: MetricPoint[]; cum: MetricPoint[]; start: number; binMs: number }
-export const METRIC_BIN_MS = 10 * 60_000  // tools/time_use.py's default --bin-min 10
-type Sums = { wall: number; off: number; hands: number; tokens: number; steps: number; actions: number }
+/** Cache-weighted tokens spent between milestones: one segment per milestone reached, plus the one in progress. */
+export type Segment = { t0: number; t1: number; cw: number; id?: string; name?: string }
+export const METRIC_BIN_MS = 15 * 60_000  // docs/BRIEF.md: 15-minute bins
+type Sums = { wall: number; off: number; hands: number; tokens: number; cw: number; steps: number; actions: number; counted: number }
+const ZERO: Sums = { wall: 0, off: 0, hands: 0, tokens: 0, cw: 0, steps: 0, actions: 0, counted: 0 }
 /** Counts from the records up to a moment, for the ledger. Undefined fields: the run has no record of that kind. */
 export type Ledger = {
   input: number; cached: number; output: number; failed: number; scripts: number
@@ -131,10 +140,11 @@ export class Run {
   private toolSeries: { t: number; n: number }[] = []
   private steps_: MilestoneStep[] = []
   /** Tokens of each model request (growth of the thread total), as time_use.py's usage_points. */
-  private requests: { t: number; tokens: number }[] = []
+  private requests: { t: number; tokens: number; cw: number }[] = []
   /** First and last record of the runner and tool server: time_use.py's window. */
   private own?: [number, number]
   private fullBins_?: Sums[]
+  private preSums_?: Sums
   private handsMerged_?: Span[]
   private spans_?: { hands: Span[]; tools: Span[]; off: Span[] }
 
@@ -170,7 +180,7 @@ export class Run {
       cum += d
       prev = total
       this.tokenSeries.push({ t: u.t, cum })
-      this.requests.push({ t: u.t, tokens: d })
+      this.requests.push({ t: u.t, tokens: d, cw: cacheWeighted(u) })
     }
     const seen = new Set<string>()
     for (const h of this.of('hook_loaded')) if (!seen.has(h.hook)) { seen.add(h.hook); this.toolSeries.push({ t: h.t, n: seen.size }) }
@@ -373,54 +383,95 @@ export class Run {
     return !st || RUNNING_STATES.has(String(st.state))
   }
 
-  /** time_use.py's raw sums over [a, b] (b clipped to the last runner/tool-server record). */
-  private sums(a: number, b: number): Sums {
+  /** Sums over [a, b]: wall, off and hands time by costs.py's rules over the closed interval; usage records (raw tokens,
+   *  cache-weighted tokens, steps) and real program_actions counts in [a, b), or [a, b] when `closed`. */
+  private sums(a: number, b: number, closed = false): Sums {
     const { hands: H, off: O } = this.timeSpans()
     const off = covered(O, a, b)
-    const req = this.requests.filter(r => r.t >= a && (r.t < b || r.t === b))
+    const inside = (t: number) => t >= a && (t < b || (closed && t === b))
+    const req = this.requests.filter(r => inside(r.t))
     return {
       wall: b - a, off, hands: covered([...H, ...O], a, b) - off,
-      tokens: req.reduce((x, r) => x + r.tokens, 0), steps: req.length,
-      actions: this.of('program_actions').filter(r => r.writer !== 'estimator' && r.source !== ESTIMATED && r.t >= a && r.t <= b)
+      tokens: req.reduce((x, r) => x + r.tokens, 0), cw: req.reduce((x, r) => x + r.cw, 0), steps: req.length,
+      actions: this.of('program_actions').filter(r => r.writer !== 'estimator' && r.source !== ESTIMATED && inside(r.t))
         .reduce((x, r) => x + (Number(r.count) || 0), 0),
+      counted: this.of('program_actions').some(r => r.writer !== 'estimator' && r.source !== ESTIMATED && r.t < b) ? 1 : 0,  // the host counts actions
     }
   }
   private static point(t0: number, t1: number, s: Sums): MetricPoint {
     const on = s.wall - s.off
-    return { t0, t1, tokPerHour: s.wall > 0 ? s.tokens / (s.wall / 3_600_000) : undefined, handsPct: on > 0 ? s.hands / on : undefined,
-      tokPerStep: s.steps ? s.tokens / s.steps : undefined, tokPerAction: s.actions ? s.tokens / s.actions : undefined }
+    return { t0, t1, handsPct: on > 0 ? s.hands / on : undefined,
+      cwPerAction: s.actions ? s.cw / s.actions : undefined, actPerStep: s.steps && s.counted ? s.actions / s.steps : undefined }
   }
 
-  /** The headline numbers up to `at`, exactly as tools/time_use.py computes its "all" line. Undefined before anything ran. */
+  /** The headline (docs/BRIEF.md "Metrics") up to `at`. Cache-weighted tokens, steps and actions are every `usage` record and
+   *  real `program_actions` count so far (as ~/sisyphus-work/stats.py); hands busy and the raw tokens/hour diagnostic use
+   *  tools/time_use.py's window (first runner/tool-server record → now). Undefined before anything ran. */
   metrics(at: number): Metrics | undefined {
     if (!this.own) return undefined
     const [a, last] = this.own
     const b = Math.min(at, last)
     if (b <= a) return undefined
     const { hands: H, tools: T, off: O } = this.timeSpans()
-    const s = this.sums(a, b)
+    const s = this.sums(a, b, true)
     const all = covered([...H, ...T, ...O], a, b)
-    const p = Run.point(a, b, s)
-    return { wallMs: s.wall, offMs: s.off, handsMs: s.hands, toolsMs: all - s.off - s.hands, idleMs: Math.max(0, s.wall - all),
-      tokens: s.tokens, steps: s.steps, actions: s.actions, tokPerHour: p.tokPerHour, handsPct: p.handsPct, tokPerStep: p.tokPerStep, tokPerAction: p.tokPerAction }
+    const us = this.upTo('usage', at), u = us[us.length - 1]
+    const cw = this.requests.filter(r => r.t <= at).reduce((x, r) => x + r.cw, 0)
+    const steps = us.length
+    const actions = this.upTo('program_actions', at).filter(r => r.writer !== 'estimator' && r.source !== ESTIMATED)
+      .reduce((x, r) => x + (Number(r.count) || 0), 0)
+    const milestones = new Set(this.upTo('milestone', at).map(m => m.id)).size
+    const on = s.wall - s.off
+    return {
+      wallMs: s.wall, offMs: s.off, handsMs: s.hands, toolsMs: all - s.off - s.hands, idleMs: Math.max(0, s.wall - all),
+      tokens: s.tokens, cw, steps, actions, milestones,
+      tokPerHour: s.tokens / (s.wall / 3_600_000), handsPct: on > 0 ? s.hands / on : undefined,
+      tokPerStep: s.steps ? s.tokens / s.steps : undefined, tokPerAction: s.actions ? s.tokens / s.actions : undefined,
+      cwPerMilestone: milestones ? cw / milestones : undefined, cwPerAction: actions ? cw / actions : undefined,
+      actPerStep: steps && this.upTo('program_actions', at).length ? actions / steps : undefined,
+      context: u ? (Number(u.input_tokens) || 0) + (Number(u.cached_input_tokens) || 0) : undefined,
+    }
   }
 
-  /** The four numbers in 10-minute bins from the run's start (time_use.py's rows) and cumulatively at each bin's end, up to
-   *  `at`. Whole bins are computed once; only the bin `at` falls in is recomputed. Bin edges: [t, t+10m), the last bin closed. */
+  /** Cache-weighted tokens per segment between milestones up to `at`: usage records in (previous milestone, milestone], the
+   *  first segment from the first runner record (as stats.py), and the segment in progress last (no id). */
+  segments(at: number): Segment[] {
+    const start = this.runnerStart
+    const names = new Map(this.milestonesDefined.map(m => [m.id, m.name]))
+    const seen = new Set<string>(), out: Segment[] = []
+    let prev = start
+    const cwIn = (a: number, b: number) => this.requests.filter(r => r.t > a && r.t <= b).reduce((x, r) => x + r.cw, 0)
+    for (const m of this.upTo('milestone', at)) {
+      if (seen.has(m.id)) continue
+      seen.add(m.id)
+      out.push({ t0: prev, t1: m.t, cw: cwIn(prev, m.t), id: m.id, name: names.get(m.id) ?? m.id })
+      prev = m.t
+    }
+    const end = Math.min(at, this.t1)
+    if (end > prev) out.push({ t0: prev, t1: end, cw: cwIn(prev, end) })
+    return out
+  }
+
+  /** Where the 15-minute bins start: the first runner record, as stats.py. */
+  get runnerStart(): number { return this.recs.find(r => r.writer === 'runner')?.t ?? this.t0 }
+
+  /** cw/action, actions/step and hands busy in 15-minute bins from the first runner record (stats.py's bins: usage and
+   *  actions in [b, b+15m)), and for the run so far at each bin's end. Whole bins are computed once. */
   metricSeries(at: number): MetricSeries | undefined {
     if (!this.own) return undefined
-    const [a, last] = this.own
+    const last = this.own[1], a = this.runnerStart
     const BIN = METRIC_BIN_MS
     if (!this.fullBins_) {
       this.fullBins_ = []
-      for (let t = a; t + BIN <= last; t += BIN) this.fullBins_.push(this.sums(a + this.fullBins_.length * BIN, Math.min(t + BIN, last) - (t + BIN < last ? 0.001 : 0)))
+      for (let t = a; t + BIN <= last; t += BIN) this.fullBins_.push(this.sums(t, t + BIN))
+      this.preSums_ = this.own[0] < a ? this.sums(this.own[0], a) : { ...ZERO }  // time_use's window starts a little earlier
     }
     const b = Math.min(at, last)
     const bins: MetricPoint[] = [], cum: MetricPoint[] = []
-    const run: Sums = { wall: 0, off: 0, hands: 0, tokens: 0, steps: 0, actions: 0 }
+    const run: Sums = { ...this.preSums_!, tokens: 0, cw: 0, steps: 0, actions: 0, counted: 0 }
     for (let i = 0, t = a; t < b; i++, t += BIN) {
       const e = Math.min(t + BIN, b)
-      const s = e === t + BIN && i < this.fullBins_.length ? { ...this.fullBins_[i], wall: BIN } : this.sums(t, e)
+      const s = e === t + BIN && i < this.fullBins_.length ? this.fullBins_[i] : this.sums(t, e, e === b)
       bins.push(Run.point(t, e, s))
       for (const k of Object.keys(run) as (keyof Sums)[]) run[k] += s[k]
       cum.push(Run.point(a, e, run))
@@ -464,7 +515,7 @@ export class Run {
   actions(at: number, n = 10): ActionLine[] {
     const calls = this.of('tool_call')
     const out: ActionLine[] = []
-    for (let i = upper(calls, at) - 1, k = 0; i >= 0 && k < 3000 && out.length <= n; i--, k++) {
+    for (let i = upper(calls, at) - 1, k = 0; i >= 0 && k < 20000 && out.length <= n; i--, k++) {
       const c = calls[i]
       const via = String(c.via ?? '')
       if (!byAgent(c) || via === 'script' || via === 'forward' || via.startsWith('task:') || c.tool === 'costs') continue

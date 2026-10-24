@@ -86,10 +86,14 @@ export function Ledger({ run, at }: { run: Run; at: number }) {
     ['stalls', String(l.stalls), undefined, 'task_stalled records'],
     ['handoffs', String(l.handoffs), undefined, 'marker kind context_handoff_done'],
     ['nudges', String(l.nudges), undefined, 'marker kinds idle_nudge, supervisor_nudge'],
+    ['cw tokens', num(m?.cw), 'diag', 'Σ usage input + output + 0.1 × cached input'],
+    ['raw tok / hour', num(m?.tokPerHour), 'diag', 'diagnostic: Σ usage total_tokens growth ÷ wall hours (time_use.py)'],
+    ['raw tok / step', num(m?.tokPerStep), 'diag', 'diagnostic: Σ usage total_tokens growth ÷ usage records'],
+    ['context / req', num(m?.context), 'diag', 'diagnostic: newest usage input_tokens + cached_input_tokens'],
   ]
   return (
     <dl className="box ledger" aria-label="Counts">
-      {rows.map(([k, v, tone, how]) => <div key={k} title={how}><dt>{k}</dt><dd className={tone}>{v}</dd></div>)}
+      {rows.map(([k, v, tone, how]) => <div key={k} title={how} className={tone === 'diag' ? 'diag' : undefined}><dt>{k}</dt><dd className={tone === 'diag' ? undefined : tone}>{v}</dd></div>)}
     </dl>
   )
 }
@@ -156,7 +160,8 @@ export function Kits({ run, at, onOpen }: { run: Run; at: number; onOpen: (hook:
     <section className="box kits" aria-label="Tools the agent built">
       <h2>tools <span>{hooks} hooks · {ext.length} ext · {scripts.length} scripts</span></h2>
       {!kits.length && <p className="none">{DASH}</p>}
-      {kits.map(k => <KitRow key={k.kind + k.name} kit={k} run={run} at={at} onOpen={onOpen} />)}
+      {[...ext, ...scripts.slice(0, 3)].map(k => <KitRow key={k.kind + k.name} kit={k} run={run} at={at} onOpen={onOpen} />)}
+      {scripts.length > 3 && <p className="kmore">+{scripts.length - 3} scripts</p>}
     </section>
   )
 }
