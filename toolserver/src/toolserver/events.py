@@ -26,9 +26,10 @@ class _Result:
 
 
 class EventLog:
-    def __init__(self, path: Path, run_id: str) -> None:
+    def __init__(self, path: Path, run_id: str, writer: str = "toolserver") -> None:
         self.path = path
         self.run_id = run_id
+        self.writer = writer
         self._seq = 0
         self._lock = threading.Lock()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -40,6 +41,7 @@ class EventLog:
                 "v": SCHEMA_VERSION,
                 "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
                 "run_id": self.run_id,
+                "writer": self.writer,
                 "seq": self._seq,
                 "type": type_,
                 **fields,

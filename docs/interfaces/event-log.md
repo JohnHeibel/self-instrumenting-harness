@@ -1,6 +1,14 @@
 # Event log (interface, v1)
 
-One JSONL file per run, `runs/<run>/events.jsonl`, append-only. The tool server writes it (`toolserver/src/toolserver/events.py`); the runner may append its own records to the same file. The grader, the dashboard and the coverage and cost curves read only this file, so changes here need agreement (AGENTS.md: shared interfaces).
+Each run is a directory, `runs/<run>/`, holding one append-only JSONL file per writer, so writers never interleave lines:
+
+| File | Writer |
+|---|---|
+| `events.jsonl` | Tool server (`toolserver/src/toolserver/events.py`) |
+| `runner.jsonl` | Runner |
+| `grader.jsonl` | Grader |
+
+Readers merge all `*.jsonl` files in the run directory, ordered by `ts` and then by `writer` and `seq`. Saved files such as screenshot thumbnails sit beside them (see `artifact`). The grader, the UI and the coverage and cost curves read only these files, so changes here need agreement (AGENTS.md: shared interfaces).
 
 ## Every record
 
@@ -9,6 +17,7 @@ One JSONL file per run, `runs/<run>/events.jsonl`, append-only. The tool server 
 | `v` | int | Schema version, currently 1 |
 | `ts` | string | UTC, ISO 8601 with milliseconds, `Z` suffix |
 | `run_id` | string | One per run |
+| `writer` | string | `toolserver`, `runner` or `grader` |
 | `seq` | int | 1, 2, 3, … per writer, no gaps |
 | `type` | string | One of the record types below |
 
@@ -29,18 +38,55 @@ One JSONL file per run, `runs/<run>/events.jsonl`, append-only. The tool server 
 
 Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` and `image_size`.
 
-**`hook_loaded`**: `hook`, `version`. Written when `load_extension` registers or replaces a hook.
+**`hook_loaded`**: written when `load_extension` registers or replaces a hook.
+
+| Field | Meaning |
+|---|---|
+| `hook`, `version` | Name (also its tool name) and version, 1, 2, 3, … |
+| `reason` | Why the agent wrote or changed it, in its own words |
+| `language` | Main language, e.g. `lua`, `python`, `csharp` |
+| `kind` | `in_host` (runs inside the host, e.g. a mod) or `helper` (runs outside it, in the agent's sandbox) |
+| `depends_on` | Names of hooks it calls; this is the library hierarchy |
+| `files` | `[{path, content}]`. Source inline so a replay is self-contained; content is capped at 64 KB per file |
+| `source_ref` | Commit in the hook library repo, when there is one |
+
+**`hook_status`**: `hook`, `status` (`ok`, `broken` or `repaired`), `detail`. Written by health checks and repairs.
 
 **`server_started`**: `host`, `port`.
 
-**Planned, written by the runner:**
-- `usage`: per turn, with `input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`, and running totals.
-- `turn_started` / `turn_completed`.
-- `task_started` / `task_completed`, for measurement tasks.
-- `checkpoint`.
+### Fields any `tool_call` may carry, for the UI
+
+| Field | Meaning |
+|---|---|
+| `summary` | One short plain-language line for feeds and pop-ups, e.g. `6 assemblers idle near mine_2` |
+| `artifact` | Path relative to the run dir of a saved file, e.g. `shots/000123.jpg` (screenshot thumbnail, at most 640 px wide) |
+
+### Written by the runner
+
+| Type | Fields |
+|---|---|
+| `run_started` | `agent` (`codex`, `claude-code`), `model`, `host` (`factorio`, …), `goal` (the run's overall objective) |
+| `agent_state` | `state`: `thinking`, `acting`, `waiting`, `compacting`, `host_down`, `backing_off`, `paused` or `ended`; plus `text` |
+| `reasoning` | `title`, `text`: the model's reasoning summary when one is available |
+| `agent_message` | `text`: what the agent said |
+| `goal` | `text`, `serves`: the agent's current subgoal and what it is for (from a `set_goal` tool, planned) |
+| `usage` | Per turn: `input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`, and `total_tokens` so far |
+| `turn_started`, `turn_completed` | `turn` |
+| `checkpoint` | `label`, `ref` |
+| `marker` | `label`, `kind` (e.g. `planted_break`): a moment worth a timeline marker that no other record implies |
+| `run_ended` | `reason` |
+
+### Written by the grader
+
+| Type | Fields |
+|---|---|
+| `milestones_defined` | `milestones`: ordered `[{id, name}]` for this host and goal, written once at the start of the run |
+| `milestone` | `id`, `evidence`: written when it's reached, judged from host state, never from what the agent says |
 
 ## Derived metrics
 
 - **Interface coverage** over a time window is hook observations ÷ (hook observations + screenshots), where a hook observation is a `tool_call` with `channel = "hook"`. Always show it next to the cost curve, because an agent can raise the ratio just by looking less.
-- **Cost per task** is the sum of `usage` tokens between `task_started` and `task_completed`.
+- **Cost per milestone** is the sum of `usage` tokens between consecutive `milestone` records.
 - **State coverage** comes from the grader, not this log: which kinds of game state have at least one working hook.
+
+All additions are backward compatible: readers ignore types and fields they don't know. Every writer uses the same `run_id`; `seq` counts per writer.
