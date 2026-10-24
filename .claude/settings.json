@@ -1,0 +1,17 @@
+{
+  "enabledMcpjsonServers": ["mailbox"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --script \"$CLAUDE_PROJECT_DIR/tools/mailbox/server.py\" status",
+            "timeout": 60,
+            "statusMessage": "Checking agent mailbox"
+          }
+        ]
+      }
+    ]
+  }
+}
