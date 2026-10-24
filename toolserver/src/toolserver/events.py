@@ -30,9 +30,10 @@ class EventLog:
         self.path = path
         self.run_id = run_id
         self.writer = writer
-        self._seq = 0
         self._lock = threading.Lock()
         path.parent.mkdir(parents=True, exist_ok=True)
+        # A restarted writer appends to its own file, so continue its numbering.
+        self._seq = _resume(path)
 
     def write(self, type_: str, **fields: Any) -> None:
         with self._lock:
@@ -63,6 +64,25 @@ class EventLog:
         self.write("tool_call", tool=tool, channel=channel, args=args, ok=True, error=None,
                    duration_ms=_ms(t0), result_kind=result.kind, result_bytes=result.nbytes,
                    **result.extra, **fields)
+
+
+def _resume(path: Path) -> int:
+    """Last seq in an existing file. Ends a torn last line (from a crash) so the next
+    record starts on its own line."""
+    if not path.exists() or path.stat().st_size == 0:
+        return 0
+    last = 0
+    with path.open("rb") as f:
+        data = f.read()
+    for line in data.splitlines():
+        try:
+            last = max(last, int(json.loads(line).get("seq", 0)))
+        except (ValueError, AttributeError):
+            continue
+    if not data.endswith(b"\n"):
+        with path.open("ab") as f:
+            f.write(b"\n")
+    return last
 
 
 def _ms(t0: float) -> int:
