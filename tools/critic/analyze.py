@@ -72,6 +72,21 @@ def main():
     inline = sum(1 for c in steps if c.get("tool") == "run_script" and not (c.get("args") or {}).get("file"))
     hooks = collections.Counter(c["tool"] for c in steps if c.get("channel") == "hook")
     print(f"skills: run_script inline {inline}, from file {sum(used.values())} {dict(used.most_common(5))}; hook calls {dict(hooks.most_common(6))}")
+    # Bash steps from the raw stream: skills saved (writes under skills/) and reused (calls into it)
+    raw = d / "raw" / "claude-stream.jsonl"
+    if raw.exists():
+        import re
+        n = saved = used = 0
+        for l in raw.read_text(errors="replace").splitlines():
+            try: e = json.loads(l)
+            except ValueError: continue
+            if e.get("type") != "assistant" or not e.get("timestamp") or datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")) < since: continue
+            for c in (e.get("message", {}).get("content") or []):
+                if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "Bash":
+                    cmd = c["input"].get("command", ""); n += 1
+                    if re.search(r"(>>?|sed -i|tee)\s*\S*(skills/|prelude|INDEX)", cmd) or re.search(r"open\(.{0,30}(prelude|skills)", cmd): saved += 1
+                    elif re.search(r"import (sk|job)\b|skills/", cmd): used += 1
+        print(f"bash steps {n}: skill writes {saved}, skill calls {used}, other {n-saved-used}")
     hl = [e for e in ev if e.get("type") == "hook_loaded" and T(e) >= since]
     print(f"hooks loaded in window: {len(hl)}", [(h.get('hook'), h.get('version')) for h in hl][:15])
 main()
