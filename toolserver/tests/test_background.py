@@ -346,3 +346,40 @@ def test_the_same_failure_twice_gets_an_urgent_nudge(tmp_path):
         assert board.items[1].urgent and log.rows.count("task_repeat_failure") == 2
 
     asyncio.run(go())
+
+
+def test_quiet_stall_uses_the_programs_own_action_counts(tmp_path):
+    import json
+    from datetime import datetime, timezone
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    class Board:
+        def __init__(self):
+            self.posts = []
+
+        def post(self, source, text, urgent=False):
+            self.posts.append(text)
+
+    def counts(ts):
+        with (tmp_path / "grader.jsonl").open("a") as f:
+            f.write(json.dumps({"ts": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+                                "type": "program_actions", "count": 2}) + "\n")
+
+    board = Board()
+    w = tm.Work(None, Log(), tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    t0 = datetime.now(timezone.utc).timestamp()
+    t = tm.Task(id="t1", name="direct", hands=True, started=t0, deadline_s=600, wake_on_end=False)
+    w.tasks["t1"] = t
+    w.stall_check(now=t0 + 300)
+    assert board.posts == []                     # no calls through the harness and no counts: can't tell
+    counts(t0 + 250)                             # the program says things are happening
+    w._prog["checked"] = 0
+    w.stall_check(now=t0 + 300)
+    assert board.posts == []
+    w._prog["checked"] = 0
+    w.stall_check(now=t0 + 250 + tm.STALL_NO_ACT_S + 1)
+    assert len(board.posts) == 1 and "the program counted no actions" in board.posts[0]

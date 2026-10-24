@@ -20,6 +20,7 @@ import asyncio
 import json
 import re
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -499,13 +500,57 @@ class Work:
                               f"the same acting call ({n} times: {key[:160]}). It may be stuck in a retry loop. "
                               f"Check what it is waiting for and stop it (task(\"{t.id}\", stop=True)) if it "
                               f"isn't getting anywhere.")
-            quiet = now - (t.last_act or t.started)
+            # Acting is seen two ways: the task's acting calls through the harness, and the program's own
+            # action counts (when the host reports them), which also catch tools that reach the program
+            # directly. With neither (no calls, no counts) there is nothing to judge by, so say nothing.
+            counted, last_prog = self.program_activity()
+            if not counted and t.acts + t.reads == 0:
+                continue
+            quiet = now - max(t.last_act or t.started, last_prog if last_prog > t.started else 0)
             if quiet >= STALL_NO_ACT_S and "quiet" not in t.stall_told:
                 t.stall_told.add("quiet")
                 self._stalled(t, "quiet", f"{t.id} ({t.name}) has held your hands {held:.1f} min but made no acting "
-                              f"call for {quiet / 60:.1f} min ({t.reads} reads since). If it is waiting or polling, "
+                              f"call{' and the program counted no actions' if counted else ''} for {quiet / 60:.1f} "
+                              f"min ({t.reads} reads since). If it is waiting or polling, "
                               f"the hands sit idle meanwhile: stop it and do the waiting outside the hands (a "
                               f"hands=False task, or a rule), or let it finish if the wait is nearly over.")
+
+    def program_activity(self) -> tuple[bool, float]:
+        """(whether the host counts actions in the program at all, time of the latest count), from
+        `program_actions` records in the run's logs, read incrementally."""
+        st = self.__dict__.setdefault("_prog", {"counted": False, "last": 0.0, "pos": {}, "checked": 0.0})
+        if time.time() - st["checked"] < 5:
+            return st["counted"], st["last"]
+        st["checked"] = time.time()
+        for path in Path(self.run_dir).glob("*.jsonl"):
+            if path.name == "events.jsonl":
+                continue
+            try:
+                size = path.stat().st_size
+                pos = st["pos"].get(path.name, 0)
+                if size <= pos:
+                    st["pos"][path.name] = min(pos, size)
+                    continue
+                with path.open("rb") as f:
+                    f.seek(pos)
+                    chunk = f.read(size - pos)
+            except OSError:
+                continue
+            end = chunk.rfind(b"\n") + 1               # leave a half-written last line for next time
+            st["pos"][path.name] = pos + end
+            for line in chunk[:end].splitlines():
+                if b'"program_actions"' not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                    ts = datetime.fromisoformat(r["ts"].replace("Z", "+00:00")).timestamp()
+                except (ValueError, KeyError):
+                    continue
+                if r.get("type") == "program_actions":
+                    st["counted"] = True
+                    if r.get("count"):
+                        st["last"] = max(st["last"], ts)
+        return st["counted"], st["last"]
 
     def _stalled(self, t: Task, kind: str, text: str) -> None:
         self.log.write("task_stalled", task=t.id, name=t.name, kind=kind, acts=t.acts, calls=t.calls,
