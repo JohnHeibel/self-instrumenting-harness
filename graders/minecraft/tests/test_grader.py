@@ -75,3 +75,20 @@ def test_deaths_are_logged_once(tmp_path):
     assert [d["cause"] for d in deaths] == ["drowned", "was slain by Zombie"] and deaths[1]["count"] == 2
     g.Grader(run, tmp_path / "world", log_file=log)._deaths()   # a restarted grader does not repeat them
     assert len([x for x in (run / "grader.jsonl").read_text().splitlines() if "agent_died" in x]) == 2
+
+
+def test_program_actions_are_deltas_from_stats(tmp_path):
+    import json
+    run = tmp_path / "run"; run.mkdir()
+    gr = g.Grader(run, tmp_path / "world", log_file=tmp_path / "none.log")
+    st = {"stats": {"minecraft:mined": {"minecraft:stone": 10, "minecraft:dirt": 5}, "minecraft:crafted": {"minecraft:stick": 4}},
+          "level": {"Time": 99}}
+    gr._actions(st)
+    gr._actions(st)                                         # nothing new: no record
+    st["stats"]["minecraft:mined"]["minecraft:stone"] = 12
+    gr._actions(st)
+    recs = [json.loads(x) for x in (run / "grader.jsonl").read_text().splitlines() if "program_actions" in x]
+    assert [r["kinds"] for r in recs] == [{"mine": 15, "craft": 4}, {"mine": 2}] and recs[1]["count"] == 2
+    assert recs[1]["totals"] == {"mine": 17, "craft": 4}
+    g.Grader(run, tmp_path / "world", log_file=tmp_path / "none.log")._actions(st)   # restart: no repeat
+    assert len([x for x in (run / "grader.jsonl").read_text().splitlines() if "program_actions" in x]) == 2

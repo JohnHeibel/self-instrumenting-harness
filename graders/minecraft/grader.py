@@ -151,6 +151,22 @@ def signals(s: dict) -> dict[str, tuple[bool, str]]:
     }
 
 
+ACTION_STATS = {"mine": "minecraft:mined", "craft": "minecraft:crafted", "use": "minecraft:used",
+                "kill": "minecraft:killed"}
+
+
+def action_totals(stats: dict) -> dict[str, int]:
+    """Cumulative player actions from the game's own statistics (it counts what the player did):
+    blocks mined, items crafted, items/blocks used (placing a block is a use), mobs killed. Walking and
+    pick-ups are left out (pick-ups follow from mining), so this undercounts."""
+    out = {}
+    for kind, key in ACTION_STATS.items():
+        n = sum(v for v in (stats.get(key) or {}).values() if isinstance(v, (int, float)))
+        if n:
+            out[kind] = int(n)
+    return out
+
+
 class Grader:
     def __init__(self, run_dir: Path, world: Path, log_file: Path | None = None) -> None:
         self.run_dir, self.world = run_dir, world
@@ -162,6 +178,7 @@ class Grader:
         self.active: dict[str, bool] = {}
         self.seen_cmds: set[tuple] = set()
         self.seen_deaths: set[str] = set()
+        self.action_totals: dict[str, int] = {}
         self.cmd_id = 0
         self.up: bool | None = None
         self.defined = None
@@ -183,6 +200,8 @@ class Grader:
                 self.reached.add(r["id"])
             elif t == "integrity":
                 self.active[r["signal"]] = r["active"]
+            elif t == "program_actions":
+                self.action_totals = {k: int(v) for k, v in (r.get("totals") or {}).items()}
             elif t == "marker" and r.get("kind") == "agent_died":
                 self.seen_deaths.add(r.get("key", ""))
             elif t == "host_command":
@@ -200,6 +219,7 @@ class Grader:
             self._signal(name, on, detail, {"level_dat_difficulty": s["level"].get("Difficulty")})
         self._commands()
         self._deaths()
+        self._actions(s)
         for mid, _, judge in MILESTONES:
             if mid in self.reached:
                 continue
@@ -227,6 +247,22 @@ class Grader:
             self.cmd_id += 1
             self.log.write("host_command", command_id=self.cmd_id, command=cmd, parameters=params,
                            by=f"player {m['who']}", custom=False, tick=m["t"])
+
+    def _actions(self, s: dict) -> None:
+        """A program_actions record (shape as Factorio's grader writes it) with what is new since the last
+        one. The game saves statistics every few minutes, so records arrive in lumps. A count that went
+        down (an older save) restarts from the new value."""
+        totals = action_totals(s.get("stats", {}))
+        kinds = {}
+        for k, n in totals.items():
+            before = self.action_totals.get(k, 0)
+            d = n - before if n >= before else n
+            if d:
+                kinds[k] = d
+        if kinds:
+            self.log.write("program_actions", count=sum(kinds.values()), kinds=kinds, totals=totals,
+                           tick=(s.get("level") or {}).get("Time"), source="game statistics (mined, crafted, used, killed)")
+        self.action_totals = totals
 
     def _deaths(self) -> None:
         """A marker (kind `agent_died`) for each death line the game logged: when, who, and the cause as the game words it."""
