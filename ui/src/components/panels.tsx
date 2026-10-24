@@ -1,100 +1,172 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FeedItem, HookView, Milestone, Run } from '../data/model'
+import type { FeedItem, HookView, Run, TRec } from '../data/model'
 import { big, hms, span } from '../util'
 
-export function Topbar({ run, at }: { run: Run; at: number }) {
+/** Wall-clock hold times, so nothing flashes by at timelapse speed. */
+const NOTICE_MS = 10_000
+const READ_HOLD_MS = 3_000
+/** An event counts as "just happened" for this long in run time. */
+const RECENT = 10 * 60_000
+
+export function Header({ run, at }: { run: Run; at: number }) {
   const c = run.counts(at)
   return (
-    <div className="topbar">
-      <div className="brand">Self-instrumenting harness<small>{run.title}</small></div>
-      <div className="spacer" />
-      <span className="pill"><b>{c.calls.toLocaleString()}</b> tool calls</span>
-      <span className="pill"><b>{c.failed}</b> failed</span>
-      <span className="pill"><b>{big(run.tokens(at))}</b> tokens</span>
-      <span className="clock">{hms(at - run.t0)}</span>
-    </div>
+    <header className="head">
+      <div className="brand">Self-instrumenting harness<span>{run.title}</span></div>
+      <dl className="stats">
+        <div><dt>Tool calls</dt><dd>{c.calls.toLocaleString()}</dd></div>
+        <div className="fail"><dt>Failed</dt><dd>{c.failed}</dd></div>
+        <div><dt>Tokens</dt><dd>{big(run.tokens(at))}</dd></div>
+        <div><dt>Hooks built</dt><dd>{run.hooks(at).length}</dd></div>
+      </dl>
+      <div className="clock" aria-label="Run time">{hms(at - run.t0)}</div>
+    </header>
   )
 }
 
-export function Milestones({ items }: { items: Milestone[] }) {
-  const current = items.findIndex(m => m.t === undefined)
-  return (
-    <div className="milestones">
-      {items.map((m, i) => (
-        <div key={m.id} className={`milestone ${m.t !== undefined ? 'done' : ''} ${i === current ? 'current' : ''}`}
-             title={m.evidence ?? 'not reached yet'}>
-          {m.t !== undefined ? '✓ ' : i === current ? '▸ ' : ''}{m.name}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-export function Screen({ run, at, artifactUrl }: { run: Run; at: number; artifactUrl: (p: string) => string }) {
-  const shot = run.screenshot(at)
-  const read = run.lastHookCall(at)
-  const hooks = run.hooks(at)
-  const fresh = hooks.flatMap(h => h.versions).filter(v => at - v.t < 8 * 60_000).sort((a, b) => b.t - a.t)[0]
-  const broken = hooks.find(h => h.status === 'broken')
-  return (
-    <div className="panel screen">
-      {shot ? <img src={artifactUrl(shot.artifact)} alt="What the agent saw" /> : <div className="empty">No screenshot yet</div>}
-      {read && at - read.t < 3 * 60_000 && (
-        <div className="readcard">
-          <div className="head"><span className="tag" style={{ color: 'var(--ch-hook)' }}>hook</span>{read.tool} · {span(at - read.t)} ago</div>
-          <div className="body">{read.summary ?? 'ok'}</div>
-        </div>
-      )}
-      {broken ? (
-        <div className="toast bad">
-          <div className="head">⚠ {broken.name} broke</div>
-          <div className="body">{broken.statusDetail}</div>
-        </div>
-      ) : fresh && (
-        <div className="toast">
-          <div className="head">＋ The agent {fresh.version > 1 ? 'rewrote' : 'wrote'} <b>{fresh.name}</b> v{fresh.version} ({fresh.language})</div>
-          <div className="body">“{fresh.reason}”</div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-export function Goal({ run, at }: { run: Run; at: number }) {
+export function Goal({ run, at, opening }: { run: Run; at: number; opening: boolean }) {
   const g = run.subgoal(at)
   return (
-    <div className="panel goal">
-      <div className="label">Goal</div>
-      <div className="text">{g?.text ?? run.goal}</div>
-      {g?.serves && <div className="serves">for {g.serves}</div>}
-    </div>
+    <section className="goal">
+      <div className="kicker">{opening ? 'The mission' : 'Current goal'}</div>
+      <h1>{opening ? run.goal : g?.text ?? run.goal}</h1>
+      <p className="serves">
+        {opening
+          ? `One agent, ${span(run.t1 - run.t0)}, no human help. It builds its own tools inside the host as it goes.`
+          : g?.serves ? (g.serves === 'the goal' ? 'This is the end goal.' : `Why: ${g.serves}`) : ''}
+      </p>
+    </section>
   )
 }
 
-/** State plus the newest reasoning summary, typed out at reading pace the first time it appears. */
-export function Mind({ run, at }: { run: Run; at: number }) {
+const STATE_HUE: Record<string, string> = {
+  thinking: 'var(--c-hook)', acting: 'var(--c-repair)', waiting: 'var(--c-milestone)', compacting: 'var(--c-milestone)',
+  host_down: 'var(--c-break)', backing_off: 'var(--c-break)', paused: 'var(--muted)', ended: 'var(--muted)',
+}
+
+/** State plus the newest reasoning. Typed out only when it arrives during playback; after a seek it is shown whole. */
+export function Mind({ run, at, playing, opening }: { run: Run; at: number; playing: boolean; opening: boolean }) {
   const st = run.agentState(at)
   const r = run.reasoning(at)
-  const [shown, setShown] = useState(0)
   const key = r ? r.t : 0
-  const startedRef = useRef({ key: -1, start: 0 })
+  const live = useRef({ playing, at })
+  const prev = useRef({ key, at })
+  const [typing, setTyping] = useState<{ key: number; start: number } | null>(null)
+  const [, tick] = useState(0)
+  useEffect(() => { live.current = { playing, at } })
   useEffect(() => {
-    if (!r) return
-    if (startedRef.current.key !== key) startedRef.current = { key, start: performance.now() }
+    const p = prev.current
+    prev.current = { key, at: live.current.at }
+    const arrived = live.current.playing && key > p.key && live.current.at - p.at < 120_000
+    setTyping(arrived ? { key, start: performance.now() } : null)
+  }, [key])
+  const active = typing && typing.key === key && r ? typing : null
+  useEffect(() => {
+    if (!active || !r) return
     const id = setInterval(() => {
-      const n = Math.floor((performance.now() - startedRef.current.start) * 0.07)
-      setShown(Math.min(r.text.length, n))
+      tick(n => n + 1)
+      if ((performance.now() - active.start) * 0.07 >= r.text.length) { clearInterval(id); setTyping(null) }
     }, 40)
     return () => clearInterval(id)
-  }, [key, r])
-  const text = r ? r.text.slice(0, shown) : ''
+  }, [active, r])
+  const n = active && r ? Math.min(r.text.length, Math.floor((performance.now() - active.start) * 0.07)) : r?.text.length ?? 0
   return (
-    <div className="panel mind">
-      <div className="state"><span className={`dot ${st.state}`} />{st.label}<span className="since">{span(at - st.since)}</span></div>
-      {r ? <>
-        <div className="title">{r.title}</div>
-        <div className="thought">{text}{shown < r.text.length && <i className="caret" />}</div>
-      </> : <div className="thought" style={{ color: 'var(--text-muted)' }}>No reasoning summary yet</div>}
+    <section className="mind">
+      <div className="kicker">
+        <span>The agent's reasoning</span>
+        <span className="state"><i style={{ background: STATE_HUE[st.state] ?? 'var(--muted)' }} />{st.label} · {span(at - st.since)}</span>
+      </div>
+      {r && !opening ? <>
+        <div className="mtitle">{r.title}</div>
+        <p className="thought">{r.text.slice(0, n)}{n < r.text.length && <i className="caret" />}</p>
+      </> : <p className="thought dim">{opening ? 'Waiting for the agent’s first thought.' : 'No reasoning summary yet.'}</p>}
+    </section>
+  )
+}
+
+type Notice = { key: string; t: number; kind: 'new' | 'rewrite' | 'break' | 'repair'; title: string; body: string }
+
+function recentNotices(run: Run, at: number): Notice[] {
+  const out: Notice[] = []
+  for (const r of run.upTo('hook_loaded', at)) if (at - r.t < RECENT)
+    out.push({ key: `L${r.t}${r.hook}`, t: r.t, kind: r.version > 1 ? 'rewrite' : 'new',
+      title: `The agent ${r.version > 1 ? 'rewrote' : 'wrote'} ${r.hook} v${r.version}`, body: r.reason ?? '' })
+  for (const r of run.upTo('hook_status', at)) if (r.status !== 'ok' && at - r.t < RECENT)
+    out.push({ key: `S${r.t}${r.hook}`, t: r.t, kind: r.status === 'broken' ? 'break' : 'repair',
+      title: `${r.hook} ${r.status === 'broken' ? 'broke' : 'was repaired'}`, body: r.detail ?? '' })
+  return out.sort((a, b) => a.t - b.t)
+}
+
+const NOTICE_LABEL = { new: 'New hook', rewrite: 'Rewrite', break: 'Break', repair: 'Repair' }
+
+/** Hook events, one after another, each held for a fixed wall-clock time. A break never hides the rewrite that follows it. */
+export function Event({ run, at }: { run: Run; at: number }) {
+  const [st, setSt] = useState<{ queue: Notice[]; active: Notice | null }>({ queue: [], active: null })
+  const seen = useRef(new Map<string, number>())
+  const lastAt = useRef(at)
+  useEffect(() => {
+    const back = at < lastAt.current - 1000
+    lastAt.current = at
+    if (back) {
+      for (const [k, t] of seen.current) if (t > at) seen.current.delete(k)
+      setSt(s => ({ queue: s.queue.filter(n => n.t <= at), active: s.active && s.active.t <= at ? s.active : null }))
+    }
+    const fresh = recentNotices(run, at).filter(n => !seen.current.has(n.key))
+    if (!fresh.length) return
+    fresh.forEach(n => seen.current.set(n.key, n.t))
+    setSt(s => ({ ...s, queue: [...s.queue, ...fresh] }))
+  }, [run, at])
+  useEffect(() => {
+    if (!st.active && st.queue.length) setSt({ queue: st.queue.slice(1), active: st.queue[0] })
+    if (!st.active) return
+    const id = setTimeout(() => setSt(s => ({ ...s, active: null })), NOTICE_MS)
+    return () => clearTimeout(id)
+  }, [st.active, st.queue])
+  const a = st.active
+  return (
+    <section className={`event ${a ? a.kind : 'idle'}`} aria-live="polite">
+      {a && <>
+        <div className="etag">{NOTICE_LABEL[a.kind]}{st.queue.length > 0 && <small> · {st.queue.length} more</small>}</div>
+        <div className="etext"><b>{a.title}</b>{a.body && <span> {a.kind === 'break' || a.kind === 'repair' ? a.body : `“${a.body}”`}</span>}</div>
+      </>}
+    </section>
+  )
+}
+
+/** The newest screenshot with its age. */
+export function Screen({ run, at, artifactUrl }: { run: Run; at: number; artifactUrl: (p: string) => string }) {
+  const shot = run.screenshot(at)
+  return (
+    <figure className="screen">
+      <div className="frame">
+        {shot ? <img src={artifactUrl(shot.artifact)} alt="What the agent last saw" /> : <div className="empty">No screenshot yet</div>}
+      </div>
+      <figcaption>{shot ? `Last screenshot it looked at · ${span(at - shot.t)} ago` : 'Screenshots appear as the agent looks at the host'}</figcaption>
+    </figure>
+  )
+}
+
+/** The latest hook observation, held at least a few wall-clock seconds before it is replaced. */
+export function ReadLine({ run, at }: { run: Run; at: number }) {
+  const latest = run.lastHookCall(at)
+  const [shown, setShown] = useState<TRec | undefined>(latest)
+  const lastSwap = useRef(0)
+  const want = useRef(latest)
+  useEffect(() => { want.current = latest })
+  useEffect(() => {
+    const wait = READ_HOLD_MS - (performance.now() - lastSwap.current)
+    const swap = () => { lastSwap.current = performance.now(); setShown(want.current) }
+    if (wait <= 0) { swap(); return }
+    const id = setTimeout(swap, wait)
+    return () => clearTimeout(id)
+  }, [latest])
+  return (
+    <div className="read">
+      <div className="kicker">Latest read through a hook</div>
+      {shown ? <>
+        <div className="rbody">{shown.summary ?? 'ok'}</div>
+        <div className="rmeta">{shown.tool}</div>
+      </> : <div className="rbody dim">None yet. Hooks start empty.</div>}
     </div>
   )
 }
@@ -113,51 +185,62 @@ export function HookLibrary({ hooks, onOpen }: { hooks: HookView[]; onOpen: (nam
   const walk = (h: HookView, depth: number) => { rows.push({ h, depth }); for (const c of children.get(h.name) ?? []) walk(c, depth + 1) }
   roots.forEach(h => walk(h, 0))
   return (
-    <div className="panel hooks">
-      <h3>Hook library <span className="count">· {hooks.length} built by the agent</span></h3>
+    <section className="hooks">
+      <h2>Hooks the agent built <span>{hooks.length}</span></h2>
       <ul>
         {rows.map(({ h, depth }) => {
           const v = h.versions[h.versions.length - 1]
           return (
-            <li key={h.name} className={`hookrow ${h.isNew ? 'new' : ''}`} style={{ paddingLeft: 8 + depth * 22 }} onClick={() => onOpen(h.name)}>
-              {depth > 0 && <span style={{ color: 'var(--text-muted)' }}>└</span>}
-              <span className="name">{h.name}</span>
-              <span className="lang">{v.language}{v.kind === 'in_host' ? ' · in game' : ''}</span>
-              {h.status === 'broken' && <span className="badge broken">⚠ broken</span>}
-              {h.status === 'repaired' && <span className="badge repaired">✓ repaired</span>}
-              {h.isNew && h.status === 'ok' && <span className="badge new">new</span>}
-              <span className="meta">v{v.version} · {h.calls} calls</span>
+            <li key={h.name} style={{ paddingLeft: depth * 16 }}>
+              <button onClick={() => onOpen(h.name)} title={`Open ${h.name}: source and version history`}>
+                <span className="name">{depth > 0 ? '└ ' : ''}{h.name}</span>
+                {h.status === 'broken' && <span className="st broken">broken</span>}
+                {h.status === 'repaired' && <span className="st repaired">repaired</span>}
+                {h.isNew && h.status === 'ok' && <span className="st new">new</span>}
+                <span className="meta">v{v.version} · {h.calls}</span>
+              </button>
             </li>
           )
         })}
-        {!rows.length && <li style={{ color: 'var(--text-muted)', fontSize: 15 }}>No hooks yet. The agent is working from screenshots.</li>}
+        {!rows.length && <li className="none">None yet.</li>}
       </ul>
-    </div>
+    </section>
   )
 }
 
 const TAG: Record<FeedItem['kind'], [string, string]> = {
-  hook: ['hook', 'var(--ch-hook)'], screenshot: ['look', 'var(--ch-screenshot)'], input: ['input', 'var(--ch-input)'],
-  docs: ['docs', 'var(--ch-docs)'], extension: ['build', 'var(--ch-hook)'], meta: ['meta', 'var(--text-muted)'],
-  say: ['says', 'var(--text-primary)'], milestone: ['✓', 'var(--good)'], marker: ['event', 'var(--warn)'],
-  goal: ['goal', 'var(--text-secondary)'], fail: ['fail', 'var(--bad)'], status: ['⚠', 'var(--bad)'],
+  hook: ['hook', 'var(--c-hook)'], screenshot: ['look', 'var(--muted-hi)'], input: ['input', 'var(--muted-hi)'],
+  docs: ['docs', 'var(--muted-hi)'], extension: ['build', 'var(--c-hook)'], meta: ['meta', 'var(--muted)'],
+  say: ['says', 'var(--text)'], milestone: ['done', 'var(--c-milestone)'], marker: ['event', 'var(--c-break)'],
+  goal: ['goal', 'var(--muted-hi)'], fail: ['failed', 'var(--c-fail)'], status: ['hook', 'var(--c-break)'],
 }
 
-export function Feed({ items, t0 }: { items: FeedItem[]; t0: number }) {
+/** Plain-language feed. Failures are marked in the line, and the count and latest one are pinned above it. */
+export function Feed({ run, at, items }: { run: Run; at: number; items: FeedItem[] }) {
+  const t0 = run.t0
+  const calls = run.upTo('tool_call', at)
+  let failed = 0, last: TRec | undefined
+  for (const c of calls) if (!c.ok) { failed++; last = c }
   return (
-    <div className="panel feed">
-      <h3>Activity</h3>
-      {items.map((it, i) => {
-        const [label, color] = TAG[it.kind]
-        return (
-          <div key={i} className={`line ${it.kind}`}>
-            <span className="ts">{hms(it.t - t0)}</span>
-            <span className="tag" style={{ color, borderColor: color }}>{label}</span>
-            <span className="msg">{it.text}</span>
-            {it.count > 1 && <span className="x">×{it.count}</span>}
-          </div>
-        )
-      })}
-    </div>
+    <section className="feed">
+      <h2>What it is doing</h2>
+      <div className={`pin ${failed ? 'has' : ''}`}>
+        <span className="n">{failed}</span>
+        <span className="pl">failed tool call{failed === 1 ? '' : 's'}</span>
+        {last && <span className="pm" title={`${last.tool}: ${last.error}`}>latest: {last.tool}: {last.error}</span>}
+      </div>
+      <div className="lines">
+        {items.map((it, i) => {
+          const [label, color] = TAG[it.kind]
+          return (
+            <div key={i} className={`line ${it.kind}`} title={it.text}>
+              <span className="ts">{hms(it.t - t0)}</span>
+              <span className="tag" style={{ color }}>{label}</span>
+              <span className="msg">{it.text}{it.count > 1 && <em> ×{it.count}</em>}</span>
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }

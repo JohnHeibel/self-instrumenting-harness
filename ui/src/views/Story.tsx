@@ -1,8 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Run } from '../data/model'
-import { CostChart, CoverageChart } from '../components/charts'
 import { HookDetail } from '../components/HookDetail'
-import { Feed, Goal, HookLibrary, Milestones, Mind, Screen, Topbar } from '../components/panels'
+import { Event, Feed, Goal, Header, HookLibrary, Mind, ReadLine, Screen } from '../components/panels'
 import { SPEEDS, Timeline } from '../components/Timeline'
 
 /** Replay of a whole run: scrub, play at timelapse speed, jump between key moments, open any hook. */
@@ -11,7 +10,7 @@ export function Story({ run, artifactUrl }: { run: Run; artifactUrl: (p: string)
   const [at, setAt] = useState(() => Number(params.get('t')) ? run.t0 + Number(params.get('t')) * 1000 : run.t0)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(600)
-  const [open, setOpen] = useState<string | null>(null)
+  const [open, setOpen] = useState<string | null>(() => params.get('hook'))
   const scale = useFit()
 
   useEffect(() => {
@@ -33,7 +32,9 @@ export function Story({ run, artifactUrl }: { run: Run; artifactUrl: (p: string)
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key === ' ') { e.preventDefault(); setPlaying(p => !p) }
+      // Space toggles playback, except when a button or field has focus (there it presses the button or types).
+      const el = e.target instanceof Element ? e.target.closest('button, input, textarea, select, a, [contenteditable]') : null
+      if (e.key === ' ' && !el) { e.preventDefault(); setPlaying(p => !p) }
       if (e.key === 'Escape') setOpen(null)
       const i = SPEEDS.indexOf(speed)
       if (e.key === ']' && i < SPEEDS.length - 1) setSpeed(SPEEDS[i + 1])
@@ -64,25 +65,25 @@ export function Story({ run, artifactUrl }: { run: Run; artifactUrl: (p: string)
 
   const hooks = run.hooks(at)
   const openHook = open ? hooks.find(h => h.name === open) : undefined
+  const opening = at - run.t0 < 90_000
   return (
     <div className="stage-fit">
       <div className="canvas" style={{ transform: `scale(${scale})` }}>
-        <Topbar run={run} at={at} />
-        <Milestones items={run.milestones(at)} />
-        <div className="main">
-          <div className="left">
+        <Header run={run} at={at} />
+        <div className="upper">
+          <div className="story">
+            <Goal run={run} at={at} opening={opening} />
+            <Mind run={run} at={at} playing={playing} opening={opening} />
+            <Event run={run} at={at} />
+          </div>
+          <div className="look">
             <Screen run={run} at={at} artifactUrl={artifactUrl} />
-            <div className="charts">
-              <CoverageChart run={run} at={at} />
-              <CostChart run={run} at={at} />
-            </div>
+            <ReadLine run={run} at={at} />
           </div>
-          <div className="right">
-            <Goal run={run} at={at} />
-            <Mind run={run} at={at} />
-            <Feed items={run.feed(at, 13)} t0={run.t0} />
+          <aside className="side">
             <HookLibrary hooks={hooks} onOpen={setOpen} />
-          </div>
+            <Feed run={run} at={at} items={run.feed(at, 4)} />
+          </aside>
         </div>
         <Timeline run={run} at={at} playing={playing} speed={speed}
                   onSeek={t => setAt(Math.max(run.t0, Math.min(run.t1, t)))} onPlay={setPlaying} onSpeed={setSpeed} />

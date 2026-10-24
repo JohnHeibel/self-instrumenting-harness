@@ -13,7 +13,7 @@ export function HookDetail({ hook, run, onClose }: { hook: HookView; run: Run; o
         <div className="hd">
           <span className="name">{hook.name}</span>
           <span className="lang">{v.language}</span>
-          <span className="lang">{v.kind === 'in_host' ? 'runs inside the game' : 'helper outside the game'}</span>
+          <span className="lang">{v.kind === 'in_host' ? 'runs inside the host program' : 'helper outside the host program'}</span>
           {v.dependsOn.length > 0 && <span style={{ color: 'var(--text-muted)' }}>built on {v.dependsOn.join(', ')}</span>}
           <span style={{ color: 'var(--text-muted)' }}>· {hook.calls} calls</span>
           <button className="btn close" onClick={onClose}>Close</button>
