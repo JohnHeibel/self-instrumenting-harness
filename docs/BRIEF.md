@@ -118,7 +118,7 @@ The harness itself is the product. Each sponsor track is one demo of it.
 ## Decisions already made
 
 - ~~Minecraft replaces Factorio.~~ Reversed: **Factorio is the first host** (installed via Steam). Minecraft and KSP are later hosts.
-- Claude Code and Codex are supported together from the first slice, through one shared primitive server.
+- One agent runs at a time, never two simultaneously. **Codex goes first**; Claude Code uses the same tool server for a later run.
 - The user-possible-actions rule is policy only: stated to the agent and logged, not enforced.
 - Extension loading starts from a small per-host config; a docs-only discovery run on a fresh host comes later.
 - The agent runs in a Docker sandbox and reaches a tool server on the host through one port. The game runs natively on the host (John's Windows PC, RTX 5070 Ti), not in Docker.
