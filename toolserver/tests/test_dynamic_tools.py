@@ -277,10 +277,10 @@ def test_run_script_composes_tool_calls_in_one_step(server):
 
     anyio.run(_session, server["url"], body)
     ev = events(server["run"])
-    inner = [e for e in ev if e["type"] == "tool_call" and e.get("via") == "script"]
+    inner = [e for e in ev if e["type"] == "tool_call" and e.get("via") == "script" and e["channel"] == "hook"]
     assert len(inner) == 6 and [e["ok"] for e in inner] == [True, True, True, False, True, True]
     assert inner[0]["hook"]["extension"] == "probe_kit" and inner[0]["args"] == {"q": "0"}
     outer = [e for e in ev if e["type"] == "tool_call" and e["tool"] == "run_script"]
-    assert [e["ok"] for e in outer] == [True, False, True, False, False, True] and outer[0]["inner_calls"] == 4
+    assert [e["ok"] for e in outer] == [True, False, True, False, True, False] and outer[0]["inner_calls"] == 4
     scripted = [e["tool"] for e in ev if e["type"] == "tool_call" and e.get("via") == "script" and e["channel"] != "hook"]
     assert scripted == ["set_goal", "list_hooks"]

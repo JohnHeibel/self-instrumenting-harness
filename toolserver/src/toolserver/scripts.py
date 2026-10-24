@@ -132,7 +132,7 @@ async def run(ext: "Extensions", code: str, timeout_s: float, file: str = "", ar
             errors.append(line[len(ERR):])
             continue
         rest.append(line)
-    out = out.strip()
+    out = out.replace("\r\n", "\n").strip()
     if len(out) > MAX_RESULT_CHARS:
         out = out[:MAX_RESULT_CHARS] + f"\n… [{len(out) - MAX_RESULT_CHARS} more characters cut]"
     took = f"{time.monotonic() - t0:.1f} s, {len(calls)} tool calls"
