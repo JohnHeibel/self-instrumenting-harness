@@ -51,6 +51,11 @@ MILESTONES = [
     {"id": "adv_circuit", "name": "Advanced circuits", "items": ["advanced-circuit"], "min": 1},
     {"id": "engine", "name": "Engine units", "items": ["engine-unit"], "min": 1},
     {"id": "blue", "name": "Blue science", "items": ["chemical-science-pack"], "min": 1},
+    {"id": "purple", "name": "Production science", "items": ["production-science-pack"], "min": 1},
+    {"id": "yellow", "name": "Utility science", "items": ["utility-science-pack"], "min": 1},
+    {"id": "silo", "name": "Rocket silo", "items": ["rocket-silo"], "min": 1},
+    {"id": "rocket_part", "name": "First rocket part", "items": ["rocket-part"], "min": 1},
+    {"id": "launch", "name": "Rocket launched", "stat": "rockets_launched", "min": 1},
 ]
 
 
@@ -62,6 +67,9 @@ def request() -> dict:
 
 def judge(m: dict, state: dict) -> dict | None:
     """Evidence if milestone `m` is reached in `state` (the mod's reply), else None."""
+    if "stat" in m:   # a force counter the mod reports, e.g. rockets_launched
+        n = state.get(m["stat"]) or 0
+        return {"source": "force", "stat": m["stat"], "value": n, "min": m["min"]} if n >= m["min"] else None
     if "recipe" in m:
         r = _dict(state.get("recipes")).get(m["recipe"]) or {}
         if r.get("finished", 0) >= m["min"]:
@@ -101,18 +109,19 @@ class Grader:
         self._resume()
         self.log = EventLog(self.path, run_id, writer="grader")
         self.connect = connect or self._connect
-        if not self.defined:
-            self.log.write("milestones_defined", milestones=[{"id": m["id"], "name": m["name"]} for m in MILESTONES])
+        defined = [{"id": m["id"], "name": m["name"]} for m in MILESTONES]
+        if self.defined != defined:   # new run, or the list grew since this run started
+            self.log.write("milestones_defined", milestones=defined)
 
     def _resume(self) -> None:
-        self.defined = False
+        self.defined: list | None = None
         if not self.path.exists():
             return
         for line in self.path.read_text(encoding="utf-8").splitlines():
             r = json.loads(line)
             t = r.get("type")
             if t == "milestones_defined":
-                self.defined = True
+                self.defined = r.get("milestones")
             elif t == "milestone":
                 self.reached.add(r["id"])
             elif t == "integrity":

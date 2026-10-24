@@ -99,6 +99,7 @@ commands.add_command(SELF, "Harness grader: read-only game state as JSON.", func
     items = counts(req.items, function(f, s) return f.get_item_production_statistics(s) end),
     fluids = counts(req.fluids, function(f, s) return f.get_fluid_production_statistics(s) end),
     recipes = by_recipe(req.recipes),
+    rockets_launched = game.forces.player and game.forces.player.rockets_launched or 0,
     console_command_used = game.console_command_used,
     players = players,
     mods = script.active_mods,

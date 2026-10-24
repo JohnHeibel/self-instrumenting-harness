@@ -59,7 +59,8 @@ def test_milestones_from_production_and_assemblers(tmp_path):
         gr.poll()
     defined = records(tmp_path, "milestones_defined")
     assert len(defined) == 1 and [m["id"] for m in defined[0]["milestones"]] == [
-        "first_assembler", "red_auto", "green_auto", "oil", "plastic", "adv_circuit", "engine", "blue"]
+        "first_assembler", "red_auto", "green_auto", "oil", "plastic", "adv_circuit", "engine", "blue",
+        "purple", "yellow", "silo", "rocket_part", "launch"]
     ms = records(tmp_path, "milestone")
     assert [m["id"] for m in ms] == ["first_assembler", "red_auto", "oil"]
     assert ms[0]["evidence"]["counts"]["assembling-machine-1"] == 2 and ms[0]["evidence"]["tick"] == 100
@@ -130,9 +131,31 @@ def test_judge_ignores_empty_tables_written_as_lists():
 @pytest.mark.parametrize("m", g.MILESTONES, ids=lambda m: m["id"])
 def test_every_milestone_can_be_reached(m):
     s = {"items": {}, "fluids": {}, "recipes": {}}
-    if "recipe" in m:
+    if "stat" in m:
+        s[m["stat"]] = m["min"]
+    elif "recipe" in m:
         s["recipes"][m["recipe"]] = {"machines": 1, "finished": m["min"]}
     else:
         kind = "items" if "items" in m else "fluids"
         s[kind][m[kind][0]] = m["min"]
     assert g.judge(m, s)
+
+
+def test_rocket_launch_is_judged_from_the_force_counter():
+    m = next(m for m in g.MILESTONES if m["id"] == "launch")
+    assert g.judge(m, {"rockets_launched": 0}) is None
+    assert g.judge(m, {"rockets_launched": 1})["value"] == 1
+
+
+def test_a_longer_milestone_list_is_announced_again_on_resume(tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    run.mkdir()
+    short = g.MILESTONES[:2]
+    monkeypatch.setattr(g, "MILESTONES", short)
+    g.Grader(run, connect=lambda: None)
+    g.Grader(run, connect=lambda: None)   # same list: not written again
+    monkeypatch.setattr(g, "MILESTONES", short + [{"id": "x", "name": "X", "items": ["x"], "min": 1}])
+    g.Grader(run, connect=lambda: None)
+    lines = [json.loads(l) for l in (run / "grader.jsonl").read_text().splitlines()]
+    defined = [r["milestones"] for r in lines if r["type"] == "milestones_defined"]
+    assert [len(d) for d in defined] == [2, 3]

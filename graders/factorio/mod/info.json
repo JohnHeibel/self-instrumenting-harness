@@ -1,6 +1,6 @@
 {
   "name": "harness-grader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Harness grader",
   "author": "self-instrumenting-harness",
   "description": "Read-only: answers the harness grader's /harness-grader command over RCON and logs console commands. Installed by hosts/factorio/hostctl.py, not by the agent.",
