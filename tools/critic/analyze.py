@@ -58,6 +58,10 @@ def main():
     # milestones
     allus = [r for r in rn if r.get("type") == "usage"]
     t0 = T(rn[0]) if rn else None
+    deaths = [g for g in gr if g.get("type") == "marker" and g.get("kind") == "agent_died"]
+    resets = sum(1 for r in rn if r.get("type") == "marker" and r.get("kind") == "context_reset")
+    nudges = sum(1 for r in rn if r.get("type") == "marker" and r.get("kind") in ("supervisor_nudge", "idle_nudge"))
+    print(f"deaths {len(deaths)} {dict(collections.Counter(g.get('cause') for g in deaths))}; context resets {resets}; nudges {nudges}")
     print("milestones:")
     for g in gr:
         if g.get("type") in ("milestone", "milestone_reached", "milestone_achieved"):
