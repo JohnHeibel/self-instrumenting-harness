@@ -51,6 +51,8 @@ DEFAULT_STEAM = r"C:\Program Files (x86)\Steam\steam.exe"
 CLIENT_TITLE = "Factorio"
 CREATE_NO_WINDOW = 0x08000000
 SAVES = Path(__file__).parent / "saves"      # gitignored; made by make-start-save
+GRADER = Path(__file__).resolve().parents[2] / "graders" / "factorio"
+GRADER_MOD = "harness-grader"
 
 
 class HostError(Exception):
@@ -66,6 +68,8 @@ class Host:
         self.game_port = args.game_port
         self.rcon_port = args.rcon_port
         self.seed = args.seed
+        self.final = getattr(args, "final", False)
+        self.no_grader = getattr(args, "no_grader", False)
 
     # Paths ------------------------------------------------------------------------
 
@@ -136,6 +140,10 @@ class Host:
             info = self.rcon_info()
             if _listening(self.rcon_port) or _listening_udp(self.game_port):
                 raise HostError(f"port {self.rcon_port} (RCON) or {self.game_port} (game) is already in use")
+            if not self.no_grader:
+                # The grader's read-only mod, refreshed on every start. The tool server refuses an
+                # agent extension with this folder name, since the agent didn't install it.
+                shutil.copytree(GRADER / "mod", self.mods / GRADER_MOD, dirs_exist_ok=True)
             proc = subprocess.Popen(
                 [str(self.exe), "--config", str(self.server / "config.ini"),
                  "--start-server-load-latest", "--server-settings", str(self.dir / "server-settings.json"),
@@ -155,10 +163,23 @@ class Host:
             pids["client"] = self._client_pid()
             self._save_pids(pids)
             self._wait(self._client_joined, timeout, "the client to join the server")
-        return "host up: server answers RCON, client joined"
+        if not self.no_grader and not _alive(pids.get("grader")):
+            proc = subprocess.Popen([sys.executable, str(GRADER / "grader.py"), "--run-dir", str(self.run_dir)],
+                                    stdout=(self.dir / "grader.log").open("ab"), stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
+            pids["grader"] = proc.pid
+            self._save_pids(pids)
+        return "host up: server answers RCON, client joined, grader running"
 
     def stop(self) -> str:
+        """Stops the game. With --final (the end of the run) the grader too, after a last poll."""
         pids = self._pids()
+        if self.final and _alive(pids.get("grader")):
+            subprocess.run([sys.executable, str(GRADER / "grader.py"), "--run-dir", str(self.run_dir), "--once"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            subprocess.run(["taskkill", "/PID", str(pids["grader"]), "/T", "/F"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            pids.pop("grader")
         if _alive(pids.get("server")):
             try:
                 self.save()
@@ -170,8 +191,8 @@ class Host:
                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL)
             self._wait(lambda: not _alive(pid), 30, f"the {key} to exit")
-        self._save_pids({})
-        return "host stopped"
+        self._save_pids({k: v for k, v in pids.items() if k == "grader"})
+        return "host stopped" + (" (grader too)" if self.final else "")
 
     def restart(self) -> str:
         t0 = time.monotonic()
@@ -314,6 +335,8 @@ def main() -> int:
     ap.add_argument("--game-port", type=int, default=34297, help="UDP; not 34197, so the user's own games are unaffected")
     ap.add_argument("--rcon-port", type=int, default=27015)
     ap.add_argument("--seed", type=int, default=0, help="map seed for the starting save (0: random)")
+    ap.add_argument("--final", action="store_true", help="stop: the run is over, so stop the grader too")
+    ap.add_argument("--no-grader", action="store_true", help="start: without the grader mod and process")
     args = ap.parse_args()
     host = Host(args)
     try:

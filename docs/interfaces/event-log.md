@@ -83,6 +83,9 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 |---|---|
 | `milestones_defined` | `milestones`: ordered `[{id, name}]` for this host and goal, written once at the start of the run |
 | `milestone` | `id`, `evidence`: written when it's reached, judged from host state, never from what the agent says |
+| `integrity` | `signal`, `active`, `detail`, `evidence`: written when a signal turns on or off (Factorio: `console_command_used`, `cheat_mode`, `editor_mode`, `grader_unavailable`) |
+| `host_command` | `command_id`, `command`, `parameters`, `by` (`rcon` or `player <name>`), `custom` (a mod-registered command, i.e. the agent's own helpers), `tick`: each console command the host saw, so the log shows which channel changed state |
+| `grader_status` | `ok`, `detail`: written when the host becomes reachable or unreachable for the grader |
 
 ## Derived metrics
 

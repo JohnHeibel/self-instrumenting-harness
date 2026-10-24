@@ -16,7 +16,7 @@ capture = "window"
 # Up when the server answers RCON and the client is running.
 up_check = ["{python}", "factorio/hostctl.py", "check", "--run-dir", "{run_dir}"]
 start = ["{python}", "factorio/hostctl.py", "start", "--run-dir", "{run_dir}"]
-stop = ["{python}", "factorio/hostctl.py", "stop", "--run-dir", "{run_dir}"]
+stop = ["{python}", "factorio/hostctl.py", "stop", "--final", "--run-dir", "{run_dir}"]
 start_timeout_s = 300
 # The server's RCON port, which the agent's sandbox reaches as host.docker.internal.
 agent_ports = [27015]
@@ -40,3 +40,12 @@ reload_timeout_s = 300
 # "none": copy files only (the next restart picks them up).
 none = []
 restart = ["{python}", "factorio/hostctl.py", "restart", "--run-dir", "{run_dir}"]
+
+[docs]
+# The API docs for the installed game version (Factorio 2.1.23, Steam).
+sources = [
+  { name = "runtime-api", url = "https://lua-api.factorio.com/2.1.23/runtime-api.json", format = "json" },
+  { name = "prototype-api", url = "https://lua-api.factorio.com/2.1.23/prototype-api.json", format = "json" },
+  { name = "data-lifecycle", url = "https://lua-api.factorio.com/2.1.23/auxiliary/data-lifecycle.html", format = "html" },
+  { name = "storage", url = "https://lua-api.factorio.com/2.1.23/auxiliary/storage.html", format = "html" },
+]
