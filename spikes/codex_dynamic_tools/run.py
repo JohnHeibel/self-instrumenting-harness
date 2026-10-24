@@ -141,7 +141,10 @@ def check(run_dir: Path, **context) -> dict:
     probe_named = [n for n in model_calls if PROBE in n]
 
     reasons = []
-    if not loaded:
+    if not calls:
+        verdict = "FAIL"; reasons.append("the model called no harness tool at all; it was likely not offered any "
+                                         "(check exposure: omit_tools_from, tool search, code mode)")
+    elif not loaded:
         verdict = "FAIL"; reasons.append("load_extension was never called successfully")
     elif not direct and fallback:
         verdict = "FAIL"; reasons.append(f"{PROBE} was only reached through call_hook")

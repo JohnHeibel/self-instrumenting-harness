@@ -62,6 +62,21 @@ def test_tool_added_mid_session(server):
     assert any(e["type"] == "hook_loaded" and e["hook"] == "probe_hello" for e in events)
 
 
+def test_accepts_docker_host_header(server):
+    """The agent container reaches the server as host.docker.internal (DNS-rebinding protection is on)."""
+    import httpx
+
+    url, _ = server
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}
+    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    port = url.split(":")[2].split("/")[0]
+    ok = httpx.post(url, json=init, headers={**headers, "Host": f"host.docker.internal:{port}"})
+    assert ok.status_code == 200, ok.text
+    bad = httpx.post(url, json=init, headers={**headers, "Host": f"evil.example:{port}"})
+    assert bad.status_code == 421
+
+
 async def _scenario(url: str) -> None:
     notified = anyio.Event()
 
