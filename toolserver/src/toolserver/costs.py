@@ -131,8 +131,9 @@ def time_use(run_dir: Path, a: float, b: float, sp: dict | None = None, runner: 
     runner = _all(run_dir / "runner.jsonl") if runner is None else runner
     off_spans = _not_running(runner, a, b)
     off = _covered(off_spans, a, b)
-    hands = _covered(sp["hands"], a, b)
-    busy = _covered(sp["hands"] + sp["tools"], a, b)
+    # Only while the agent ran: a task still going while the run is off doesn't count.
+    hands = _covered(sp["hands"] + off_spans, a, b) - off
+    busy = _covered(sp["hands"] + sp["tools"] + off_spans, a, b) - off
     idle = max(0.0, (b - a) - _covered(sp["hands"] + sp["tools"] + off_spans, a, b))
     return {"wall": b - a, "hands": hands, "tools": busy - hands, "idle": idle, "off": off,
             "off_spans": off_spans}
