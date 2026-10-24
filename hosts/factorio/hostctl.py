@@ -305,13 +305,33 @@ class Host:
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "pids.json").write_text(json.dumps(pids))
 
+    def _server_errors(self) -> str:
+        """The server log's errors, so a mod that fails to load says why (e.g. a wrong
+        factorio_version) instead of only "the process exited"."""
+        log = self.server / "factorio-current.log"
+        try:
+            lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return ""
+        out, keep = [], 0
+        for line in lines:
+            if " Error " in line or "Failed to load mod" in line:
+                out.append(line.strip())
+                keep = 4   # the reasons follow on indented lines
+            elif keep and line.startswith((" ", "\t", "•")) and "Info " not in line:
+                out.append(line.strip())
+                keep -= 1
+            else:
+                keep = 0
+        return ("; server log:\n" + "\n".join(out[-12:])) if out else ""
+
     def _wait(self, cond, timeout: float, what: str, pid: int | None = None) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if cond():
                 return
             if pid is not None and not _alive(pid):
-                raise HostError(f"gave up waiting for {what}: the process exited")
+                raise HostError(f"gave up waiting for {what}: the process exited{self._server_errors()}")
             time.sleep(1)
         raise HostError(f"timed out after {timeout:.0f} s waiting for {what}")
 
