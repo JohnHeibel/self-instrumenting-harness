@@ -44,7 +44,7 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 | ID | Task | Status | Done when |
 |---|---|---|---|
 | N1 | **Story view redesign** on one branch (pick one of `ui-story-redesign`, `ui-variant-b`, `ui-variant-c` and delete the others), in Nazeem's direction: clean, official, nothing decorative, not stock AI-generated UI | in progress | John signs off on the look |
-| N2 | **Non-game fake-run scenario** (PR #2), so the UI is proven generic | in review (john-mac) | merged |
+| N2 | **Non-game fake-run scenario** (PR #2), so the UI is proven generic | done (merged 54806f1) | merged |
 | N3 | **SpacetimeDB module and publisher.** The publisher tails a run's top-level `*.jsonl` and batches writes; tested against fake runs; john-pc runs it on the PC | queued | Story replays a run from SpacetimeDB |
 | N4 | **Stage overlay** (live, over the game screen) | later | |
 | N5 | **Ops view** (health, alerts, STOP/PAUSE controls through reducers) | later | |
@@ -55,8 +55,8 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 
 | ID | Task | Status |
 |---|---|---|
-| M1 | Keep this board, BRIEF and the interfaces current; review PRs into `main` (next: PR #2) | ongoing |
-| M2 | Generic `read_docs` design: the host config lists doc sources, and the tool searches them | queued |
+| M1 | Keep this board, BRIEF and the interfaces current; review PRs into `main`  | ongoing |
+| M2 | Generic `read_docs` design: the host config lists doc sources, and the tool searches them | in progress |
 | M3 | A generic agent brief and goal-file format (host notes come from the host config), plus the Factorio goal file | queued |
 | M4 | Evaluation plan: screenshot-only baseline, ablation, planted break, held-out tasks | queued |
 | M5 | **macOS screenshot and input backend** (`toolserver/src/toolserver/macos.py`, plus dispatch edits in capture.py, inputs.py and io_tools.py, agreed with john-pc), so hosts can run on a Mac (Nazeem's Minecraft). Tests with a fake, plus a live check on John's Mac | in progress |
