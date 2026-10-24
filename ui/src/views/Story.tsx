@@ -3,13 +3,15 @@ import type { Run, TRec } from '../data/model'
 import type { Spectator } from '../data/source'
 import { Backdrop } from '../Backdrop'
 import { HookDetail } from '../components/HookDetail'
-import { Actions, Event, Goal, Header, Kits, Ledger, Metrics, Now, Progress, Screen } from '../components/panels'
+import { Actions, Event, Goal, Header, Kits, Ledger, Now, Screen } from '../components/panels'
+import { MetricCharts } from '../components/MetricCharts'
+import { Column } from '../components/Column'
 import { Timeline } from '../components/Timeline'
 import { SPEEDS, useNow } from '../util'
 
 /** A run, live or finished: follows the newest moment by default; scrub, play at timelapse speed, jump between
  *  key moments, open any hook. `t=live` in the URL means following. */
-export function Story({ run, spectator, imageUrl }: { run: Run; spectator: Spectator | null; imageUrl: (r: TRec) => string | undefined }) {
+export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare?: Run | null; spectator: Spectator | null; imageUrl: (r: TRec) => string | undefined }) {
   const now = useNow(1000)
   const live = run.isLive(now)
   const params = new URLSearchParams(location.hash.slice(1))
@@ -87,24 +89,25 @@ export function Story({ run, spectator, imageUrl }: { run: Run; spectator: Spect
   return (
     <div className="stage-fit">
       <div className="canvas" style={{ transform: `scale(${scale})` }}>
-        <Backdrop />
+        <Column side="left" height={1032} />
+        <Column side="right" height={1032} />
         <Header run={run} at={at} now={now} onJump={jumpLive} />
-        <div className="hero">
+        <div className="box hero">
           <Screen run={run} at={at} now={now} following={following} spectator={spectator} imageUrl={imageUrl} />
           <Event run={run} at={at} />
         </div>
-        <div className="under">
-          <Goal run={run} at={at} />
-          <Progress run={run} at={at} />
-          <Ledger run={run} at={at} />
-        </div>
+        <MetricCharts run={run} at={at} compare={compare} />
         <Timeline run={run} at={at} playing={playing} speed={speed} live={live} onJump={jumpLive}
                   onSeek={t => setAt(Math.max(run.t0, Math.min(run.t1, t)))} onPlay={setPlaying} onSpeed={setSpeed} />
         <aside className="side">
-          <Metrics run={run} at={at} />
-          <Now run={run} at={at} />
+          <Goal run={run} at={at} />
+          <Now run={run} at={at} now={now} />
+          <Ledger run={run} at={at} />
           <Kits run={run} at={at} onOpen={setOpen} />
-          <Actions run={run} at={at} />
+          <div className="sidefoot">
+            <Actions run={run} at={at} />
+            <div className="box figure"><Backdrop /></div>
+          </div>
         </aside>
         {openHook && <HookDetail hook={openHook} run={run} onClose={() => setOpen(null)} />}
       </div>

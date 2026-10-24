@@ -5,8 +5,8 @@ import { createElement } from 'react'
 import './backdrop/sisyphus-parts.js'
 import './backdrop/sisyphus-v3.js'
 
-/** Bottom-right quarter, behind the data, at full opacity. styles.css (.backdrop) recolours it to one tone on the
- *  page ground, so the figure is crisp and flat rather than faded; it never intercepts input. */
+/** In its own panel at the foot of the side column, at full opacity. styles.css (.backdrop) recolours it to one light
+ *  stone tone on the page ground, so the figure is crisp; it never intercepts input. */
 export function Backdrop() {
   return createElement('sisyphus-backdrop-v3', { class: 'backdrop', palette: 'marble', bands: 'none', opacity: '1', 'aria-hidden': 'true' })
 }

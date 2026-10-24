@@ -3,7 +3,7 @@ import { KEY_KINDS, type Run } from '../data/model'
 import { SPEEDS, hms } from '../util'
 
 // Canvas pixels: the climb is milestones reached (grader `milestone` records) over run time, as a stepped slope.
-const W = 1060, H = 48, X0 = 6, X1 = W - 10, BASE = 40, TOP = 6, R = 6
+const W = 940, H = 48, X0 = 6, X1 = W - 10, BASE = 40, TOP = 6, R = 6
 
 /** Scrubber and playback. The slope rises one step per milestone; the stone is the moment shown. Deaths are marked
  *  under the base line. Click or drag to seek. */
@@ -46,7 +46,7 @@ export function Timeline({ run, at, playing, speed, live, onJump, onSeek, onPlay
     if (next) onSeek(next.t + 2000)
   }
   return (
-    <section className="timeline" aria-label="Run timeline">
+    <section className="box timeline" aria-label="Run timeline">
       <div className="controls">
         <button onClick={() => step(-1)} aria-label="Previous key moment" title="Previous key moment">
           <svg viewBox="0 0 16 16" width="14" height="14"><path d="M11 3 L5 8 L11 13" /></svg>

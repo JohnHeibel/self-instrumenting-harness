@@ -10,7 +10,6 @@ const RECENT = 10 * 60_000
 const DASH = '—'
 
 const num = (n: number | undefined, f: (n: number) => string = big) => (n === undefined || !Number.isFinite(n) ? DASH : f(n))
-const pct = (p: number | undefined) => num(p, x => `${Math.round(x * 100)}%`)
 
 export function Header({ run, at, now, onJump }: { run: Run; at: number; now: number; onJump: () => void }) {
   const h = run.harness
@@ -32,66 +31,42 @@ export function Header({ run, at, now, onJump }: { run: Run; at: number; now: nu
   )
 }
 
-/** Where the view is relative to the run: following it live, behind it, idle, or replaying a finished run. */
+/** Where the view is relative to the run (position, not the agent's state: that is in Now). */
 export function LiveBadge({ run, at, now, onJump }: { run: Run; at: number; now: number; onJump: () => void }) {
   const behind = run.t1 - at
-  if (run.ended) return <span className="pill" title="run_ended recorded"><i className="dot" />Ended</span>
-  if (!run.isLive(now)) return (
-    <span className="pill idle" title="No run_ended record, nothing written for two minutes">
-      <i className="dot" />Idle {span(now - run.t1)}
-      {behind > 2000 && <button className="jump" onClick={onJump}>Latest</button>}
+  const live = run.isLive(now)
+  if (live && behind <= 2000) return <span className="pill live"><i className="livedot" />live</span>
+  if (behind > 2000) return (
+    <span className="pill behind">replay −{span(behind)}
+      <button className="jump" onClick={onJump}>{live ? 'live' : 'latest'}</button>
     </span>
   )
-  if (behind <= 2000) return <span className="pill live"><i className="livedot" />Live</span>
-  return (
-    <span className="pill behind"><i className="dot" />−{span(behind)}
-      <button className="jump" onClick={onJump}>Live</button>
-    </span>
-  )
+  return run.ended ? <span className="pill">replay</span> : null
 }
 
-/** The current subgoal (`goal` record from set_goal) and what it serves; the run's own goal line until one is set. */
+/** The current subgoal (`goal` record from set_goal), what it serves and how long ago it was set, so a stale goal shows;
+ *  the run's own goal line until one is set. Then milestones reached of those announced, one cell each, the next named. */
 export function Goal({ run, at }: { run: Run; at: number }) {
-  const g = run.subgoal(at)
-  return (
-    <section className="goal" aria-label="Current goal">
-      <span className="gl">{g ? 'goal' : 'run goal'}</span>
-      <h1>{g?.text ?? (run.goalTitle || DASH)}</h1>
-      {g?.serves && <><span className="gl">for</span><p className="serves">{g.serves}</p></>}
-    </section>
-  )
-}
-
-/** Milestones reached of those announced, one cell each; the next one named. */
-export function Progress({ run, at }: { run: Run; at: number }) {
+  const g = run.latest('goal', at)
   const ms = run.milestones(at)
   const done = ms.filter(m => m.t !== undefined).length
   const next = ms.find(m => m.t === undefined)
-  if (!ms.length) return <section className="progress"><div className="pn"><b>{DASH}</b></div><p className="next">no milestones defined</p></section>
   return (
-    <section className="progress" aria-label="Milestones">
-      <div className="pn"><b>{done}</b><span>/ {ms.length}</span><em>milestones</em></div>
-      <ol className="cells">
-        {ms.map(m => <li key={m.id} className={m.t !== undefined ? (at - m.t < RECENT ? 'on recent' : 'on') : m === next ? 'next' : ''} title={m.t !== undefined ? `${m.name} · ${hms(m.t - run.t0)}` : m.name} />)}
-      </ol>
-      <p className="next">{next ? <>next <span>{next.name}</span></> : 'all reached'}</p>
+    <section className="box goal" aria-label="Current goal">
+      <div className="gtop">
+        <span className="gl">{g ? 'goal' : 'run goal'}</span>
+        {g && <span className="gage">set {span(at - g.t)} ago</span>}
+      </div>
+      <h1>{g?.text ?? (run.goalTitle || DASH)}</h1>
+      {g?.serves && <p className="serves">for {g.serves}</p>}
+      <div className="progress">
+        <div className="pn"><b>{ms.length ? done : DASH}</b>{ms.length > 0 && <span>/ {ms.length}</span>}<em>milestones</em></div>
+        <ol className="cells">
+          {ms.map(m => <li key={m.id} className={m.t !== undefined ? (at - m.t < RECENT ? 'on recent' : 'on') : m === next ? 'next' : ''} title={m.t !== undefined ? `${m.name} · ${hms(m.t - run.t0)}` : m.name} />)}
+        </ol>
+        <p className="next">{next ? <>next <span>{next.name}</span></> : ms.length ? 'all reached' : ''}</p>
+      </div>
     </section>
-  )
-}
-
-/** The four efficiency numbers, as tools/time_use.py's "all" line, set as a ruled table. */
-export function Metrics({ run, at }: { run: Run; at: number }) {
-  const m = run.metrics(at)
-  const rows: [string, string, string][] = [
-    ['tokens / hour', num(m?.tokPerHour), 'Σ usage tokens ÷ wall hours, first runner/tool-server record → now'],
-    ['tokens / step', num(m?.tokPerStep), 'Σ usage tokens ÷ model requests (usage records)'],
-    ['tokens / action', num(m?.tokPerAction), 'Σ usage tokens ÷ Σ program_actions.count'],
-    ['hands busy', pct(m?.handsPct), 'hands-busy time ÷ time the agent ran (wall − off)'],
-  ]
-  return (
-    <dl className="metrics" aria-label="Efficiency">
-      {rows.map(([label, value, how]) => <div key={label} title={how}><dt>{label}</dt><dd>{value}</dd></div>)}
-    </dl>
   )
 }
 
@@ -113,7 +88,7 @@ export function Ledger({ run, at }: { run: Run; at: number }) {
     ['nudges', String(l.nudges), undefined, 'marker kinds idle_nudge, supervisor_nudge'],
   ]
   return (
-    <dl className="ledger" aria-label="Counts">
+    <dl className="box ledger" aria-label="Counts">
       {rows.map(([k, v, tone, how]) => <div key={k} title={how}><dt>{k}</dt><dd className={tone}>{v}</dd></div>)}
     </dl>
   )
@@ -124,23 +99,30 @@ const STATE: Record<string, string> = {
   input_blocked: 'input blocked', backing_off: 'backing off', paused: 'paused', ended: 'ended',
 }
 
-/** What the agent is doing now: its state, the background task running (if any), and its newest words. */
-export function Now({ run, at }: { run: Run; at: number }) {
+/** What the agent is doing now, as one state: the run ended, the run stopped writing (when following the newest moment of a
+ *  run with no records for two minutes, its last agent_state is not trusted), or the agent's state. Then the background task
+ *  running, and the agent's newest words. */
+export function Now({ run, at, now }: { run: Run; at: number; now: number }) {
+  const atEnd = at >= run.t1 - 2000
+  const stale = atEnd && !run.ended && !run.isLive(now)
   const st = run.agentState(at)
-  const tasks = run.openTasks(at)
+  const [label, cls, age] = atEnd && run.ended ? ['ended', 'ended', at - run.t1]
+    : stale ? ['no records', 'stale', now - run.t1]
+    : [STATE[st.state] ?? st.state, st.state, at - st.since]
+  const tasks = stale ? [] : run.openTasks(at)
   const t = tasks[0]
   const msg = run.message(at)
   return (
-    <section className="now" aria-label="Now">
+    <section className="box now" aria-label="Now">
       <div className="nowhead">
-        <span className={`state s-${st.state}`}><i />{STATE[st.state] ?? st.state}<em>{span(at - st.since)}</em></span>
+        <span className={`state s-${cls}`}><i />{label}<em>{span(age)}</em></span>
         {t && <span className="task" title={`${t.task} started ${hms(t.t - run.t0)}${t.hands ? ' · holds the hands' : ''}`}>
           <b>{t.task}</b><span className="tn">{t.name}</span>{t.hands && <span className="hands">hands</span>}<em>{span(at - t.t)}</em>
           {tasks.length > 1 && <span className="more">+{tasks.length - 1}</span>}
         </span>}
       </div>
       {msg ? <p className="msg"><span>{msg.text}</span></p> : <p className="msg none">{DASH}</p>}
-      {msg && <div className="msgt">{span(at - msg.t)} ago</div>}
+      {msg && <div className="msgt">said {span(at - msg.t)} ago</div>}
     </section>
   )
 }
@@ -149,7 +131,7 @@ export function Now({ run, at }: { run: Run; at: number }) {
 export function Actions({ run, at }: { run: Run; at: number }) {
   const lines = run.actions(at, 9)
   return (
-    <section className="actions" aria-label="Recent actions">
+    <section className="box actions" aria-label="Recent actions">
       <ol>
         {lines.map(l => (
           <li key={l.t + l.label} className={l.ok ? '' : 'fail'}>
@@ -164,40 +146,40 @@ export function Actions({ run, at }: { run: Run; at: number }) {
   )
 }
 
-/** Extensions and kept scripts: each version on the run's time axis, calls, and the last call. A version written in
- *  the last ten minutes of run time is marked. Clicking a hook opens its source and diffs. */
+/** Extensions and kept scripts: the current version and when it changed, the versions before it with their run times,
+ *  calls and the last call. A version written in the last ten minutes of run time is marked. A hook opens its source. */
 export function Kits({ run, at, onOpen }: { run: Run; at: number; onOpen: (hook: string) => void }) {
   const kits = run.kits(at)
-  const dur = Math.max(1, at - run.t0)
   const ext = kits.filter(k => k.kind === 'extension'), scripts = kits.filter(k => k.kind === 'script')
   const hooks = ext.reduce((n, k) => n + k.hooks.length, 0)
   return (
-    <section className="kits" aria-label="Tools the agent built">
+    <section className="box kits" aria-label="Tools the agent built">
       <h2>tools <span>{hooks} hooks · {ext.length} ext · {scripts.length} scripts</span></h2>
       {!kits.length && <p className="none">{DASH}</p>}
-      {kits.map(k => <KitRow key={k.kind + k.name} kit={k} run={run} at={at} dur={dur} onOpen={onOpen} />)}
+      {kits.map(k => <KitRow key={k.kind + k.name} kit={k} run={run} at={at} onOpen={onOpen} />)}
     </section>
   )
 }
 
-function KitRow({ kit, run, at, dur, onOpen }: { kit: Kit; run: Run; at: number; dur: number; onOpen: (hook: string) => void }) {
+function KitRow({ kit, run, at, onOpen }: { kit: Kit; run: Run; at: number; onOpen: (hook: string) => void }) {
   const last = kit.versions[kit.versions.length - 1]
   const fresh = last && at - last.t < RECENT && kit.versions.length > 1
-  const W = 110
   const solo = kit.hooks.length === 1 ? kit.hooks[0] : undefined
+  const earlier = kit.versions.slice(-4, -1).reverse()
   return (
-    <div className={`kit ${fresh ? 'fresh' : ''}`}>
-      <div className="kh" title={kit.versions.map(v => `v${v.version} ${hms(v.t - run.t0)}`).join(' → ')}>
+    <div className={`kit ${kit.kind} ${fresh ? 'fresh' : ''}`}>
+      <div className="kh">
         {solo ? <button className="kn" onClick={() => onOpen(solo.name)}>{solo.name}</button> : <span className="kn">{kit.name}</span>}
-        <span className="kv">{last ? `v${last.version}` : DASH}</span>
-        <svg width={W} height={12} aria-hidden="true" className="vticks">
-          <line x1={0} x2={W} y1={6} y2={6} />
-          {kit.versions.map(v => <rect key={v.version} x={Math.min(W - 2, ((v.t - run.t0) / dur) * W) - 1} y={1} width={2} height={10} />)}
-          {kit.restored.map(t => <circle key={t} cx={((t - run.t0) / dur) * W} cy={6} r={2.5} />)}
-        </svg>
+        <span className="kv">{last ? <><b>v{last.version}</b> {span(at - last.t)} ago{fresh && <i>new</i>}</> : <span className="dim">{DASH}</span>}</span>
         <span className="kc" title="calls">{kit.calls.toLocaleString('en-US')}</span>
         <span className="kl" title="last call">{kit.lastCall ? span(at - kit.lastCall) : DASH}</span>
       </div>
+      {earlier.length > 0 && (
+        <div className="khist" title={kit.versions.map(v => `v${v.version} ${hms(v.t - run.t0)}`).join(' → ')}>
+          {earlier.map(v => <span key={v.version}>v{v.version} <em>{hms(v.t - run.t0)}</em></span>)}
+          {kit.versions.length > 4 && <span className="dim">… v{kit.versions[0].version} <em>{hms(kit.versions[0].t - run.t0)}</em></span>}
+        </div>
+      )}
       {kit.hooks.length > 1 && (
         <ul className="hk">
           {kit.hooks.map(h => (

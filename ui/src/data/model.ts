@@ -76,6 +76,11 @@ export type Metrics = {
   tokens: number; steps: number; actions: number
   tokPerHour?: number; handsPct?: number; tokPerStep?: number; tokPerAction?: number
 }
+/** One point of a metric series: the four efficiency numbers over a stretch of the run (a bin, or the run so far). */
+export type MetricPoint = { t0: number; t1: number; tokPerHour?: number; tokPerStep?: number; tokPerAction?: number; handsPct?: number }
+export type MetricSeries = { bins: MetricPoint[]; cum: MetricPoint[]; start: number; binMs: number }
+export const METRIC_BIN_MS = 10 * 60_000  // tools/time_use.py's default --bin-min 10
+type Sums = { wall: number; off: number; hands: number; tokens: number; steps: number; actions: number }
 /** Counts from the records up to a moment, for the ledger. Undefined fields: the run has no record of that kind. */
 export type Ledger = {
   input: number; cached: number; output: number; failed: number; scripts: number
@@ -129,6 +134,7 @@ export class Run {
   private requests: { t: number; tokens: number }[] = []
   /** First and last record of the runner and tool server: time_use.py's window. */
   private own?: [number, number]
+  private fullBins_?: Sums[]
   private spans_?: { hands: Span[]; tools: Span[]; off: Span[] }
 
   constructor(records: Rec[]) {
@@ -348,6 +354,24 @@ export class Run {
     return { bins, binMs: BIN, pre, now, kinds, anyEstimated: bins.some(b => b.estimated) }
   }
 
+  /** time_use.py's raw sums over [a, b] (b clipped to the last runner/tool-server record). */
+  private sums(a: number, b: number): Sums {
+    const { hands: H, off: O } = this.timeSpans()
+    const off = covered(O, a, b)
+    const req = this.requests.filter(r => r.t >= a && (r.t < b || r.t === b))
+    return {
+      wall: b - a, off, hands: covered([...H, ...O], a, b) - off,
+      tokens: req.reduce((x, r) => x + r.tokens, 0), steps: req.length,
+      actions: this.of('program_actions').filter(r => r.writer !== 'estimator' && r.source !== ESTIMATED && r.t >= a && r.t <= b)
+        .reduce((x, r) => x + (Number(r.count) || 0), 0),
+    }
+  }
+  private static point(t0: number, t1: number, s: Sums): MetricPoint {
+    const on = s.wall - s.off
+    return { t0, t1, tokPerHour: s.wall > 0 ? s.tokens / (s.wall / 3_600_000) : undefined, handsPct: on > 0 ? s.hands / on : undefined,
+      tokPerStep: s.steps ? s.tokens / s.steps : undefined, tokPerAction: s.actions ? s.tokens / s.actions : undefined }
+  }
+
   /** The headline numbers up to `at`, exactly as tools/time_use.py computes its "all" line. Undefined before anything ran. */
   metrics(at: number): Metrics | undefined {
     if (!this.own) return undefined
@@ -355,21 +379,34 @@ export class Run {
     const b = Math.min(at, last)
     if (b <= a) return undefined
     const { hands: H, tools: T, off: O } = this.timeSpans()
-    const off = covered(O, a, b)
-    const handsMs = covered([...H, ...O], a, b) - off
+    const s = this.sums(a, b)
     const all = covered([...H, ...T, ...O], a, b)
-    const wallMs = b - a
-    const req = this.requests.filter(r => r.t >= a && r.t <= b)
-    const tokens = req.reduce((x, r) => x + r.tokens, 0), steps = req.length
-    const actions = this.of('program_actions')
-      .filter(r => r.writer !== 'estimator' && r.source !== ESTIMATED && r.t >= a && r.t <= b)
-      .reduce((x, r) => x + (Number(r.count) || 0), 0)
-    const on = wallMs - off
-    return {
-      wallMs, offMs: off, handsMs, toolsMs: all - off - handsMs, idleMs: Math.max(0, wallMs - all), tokens, steps, actions,
-      tokPerHour: tokens / (wallMs / 3_600_000), handsPct: on > 0 ? handsMs / on : undefined,
-      tokPerStep: steps ? tokens / steps : undefined, tokPerAction: actions ? tokens / actions : undefined,
+    const p = Run.point(a, b, s)
+    return { wallMs: s.wall, offMs: s.off, handsMs: s.hands, toolsMs: all - s.off - s.hands, idleMs: Math.max(0, s.wall - all),
+      tokens: s.tokens, steps: s.steps, actions: s.actions, tokPerHour: p.tokPerHour, handsPct: p.handsPct, tokPerStep: p.tokPerStep, tokPerAction: p.tokPerAction }
+  }
+
+  /** The four numbers in 10-minute bins from the run's start (time_use.py's rows) and cumulatively at each bin's end, up to
+   *  `at`. Whole bins are computed once; only the bin `at` falls in is recomputed. Bin edges: [t, t+10m), the last bin closed. */
+  metricSeries(at: number): MetricSeries | undefined {
+    if (!this.own) return undefined
+    const [a, last] = this.own
+    const BIN = METRIC_BIN_MS
+    if (!this.fullBins_) {
+      this.fullBins_ = []
+      for (let t = a; t + BIN <= last; t += BIN) this.fullBins_.push(this.sums(a + this.fullBins_.length * BIN, Math.min(t + BIN, last) - (t + BIN < last ? 0.001 : 0)))
     }
+    const b = Math.min(at, last)
+    const bins: MetricPoint[] = [], cum: MetricPoint[] = []
+    const run: Sums = { wall: 0, off: 0, hands: 0, tokens: 0, steps: 0, actions: 0 }
+    for (let i = 0, t = a; t < b; i++, t += BIN) {
+      const e = Math.min(t + BIN, b)
+      const s = e === t + BIN && i < this.fullBins_.length ? { ...this.fullBins_[i], wall: BIN } : this.sums(t, e)
+      bins.push(Run.point(t, e, s))
+      for (const k of Object.keys(run) as (keyof Sums)[]) run[k] += s[k]
+      cum.push(Run.point(a, e, run))
+    }
+    return { bins, cum, start: a, binMs: BIN }
   }
 
   ledger(at: number): Ledger {

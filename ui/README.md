@@ -26,10 +26,11 @@ Both produce the same records, so nothing above `src/data/source.ts` knows which
 
 ## Layout and numbers
 
-One 1920×1080 stage, scaled to fit: the game (agent screenshot, or the spectator frame when live and the last look is old) as the hero; under it the current goal (`goal` record, else the first line of `run_started.goal`), milestones reached of announced (grader), a ledger and the scrubber; on the right the efficiency table, what the agent is doing now, the tools it built and its recent calls. Every number comes from a record; where a run has no record of a kind it shows a dash.
+One 1920×1080 stage, scaled to fit, framed by two line-drawn Doric columns. Flat panels on a 16px gutter: the game (agent screenshot, or the spectator frame when live and the last look is old) as the hero; under it the four efficiency charts and the scrubber; on the right the current goal (`goal` record with how long ago it was set, else the first line of `run_started.goal`) with milestones reached of announced, what the agent is doing now (one state: ended, no records for two minutes, or its `agent_state`), the ledger, the tools it built, its recent calls and the Sisyphus panel. Every number comes from a record; where a run has no record of a kind it shows a dash.
 
 | Shown | Source |
 |---|---|
+| charts behind the four numbers | `Run.metricSeries`: the same four numbers per 10-minute bin from the run's start (time_use.py's rows, bars) and for the run so far at each bin's end (line; its end is the big number); grader milestones as ticks; tokens / action on a log scale. The previous comparable run (`#cmp=<name>`, else the run name with its trailing number one lower) is a thin reference line, aligned at its start |
 | tokens / hour, tokens / step, tokens / action, hands busy | `Run.metrics`, the same computation as `tools/time_use.py`'s "all" line: window from the first runner/tool-server record to now; tokens and steps are `usage` records in it (growth of `total_tokens`); actions are real `program_actions.count`; hands busy is hands time ÷ (wall − off), with `costs.py` span rules |
 | steps, actions, failed calls, scripts run, tokens in / cached in / out, tasks, deaths, stalls, handoffs, nudges | `Run.metrics` / `Run.ledger`: `usage` count; Σ `program_actions.count`; `tool_call` ok=false (health checks excluded); agent `run_script` calls; Σ `usage.input_tokens` / `cached_input_tokens` / `output_tokens`; `task_started`; `marker` `agent_died`; `task_stalled`; `marker` `context_handoff_done`; `marker` `idle_nudge` + `supervisor_nudge` |
 | agent, model, effort, host | `run_started` (`effort` / `agent_version` only if recorded; a dash otherwise) |
@@ -40,7 +41,7 @@ The single accent (terracotta) marks state changes only: a milestone reached, a 
 
 ## Backdrop
 
-`src/Backdrop.tsx` is the only file that names the background animation. To swap it, change its one import and element. The current one is `src/backdrop/sisyphus-v3.js`, a `<sisyphus-backdrop-v3>` web component; `styles.css` (`.backdrop`) places it in the bottom-right quarter at full opacity and recolours it to one tone on the page ground. It holds a still pose under reduced motion.
+`src/Backdrop.tsx` is the only file that names the background animation. To swap it, change its one import and element. The current one is `src/backdrop/sisyphus-v3.js`, a `<sisyphus-backdrop-v3>` web component; `styles.css` (`.figure .backdrop`) crops it to the figure, stone and slope in a panel at the foot of the side column, at full opacity, recoloured to light stone on the page ground. It holds a still pose under reduced motion.
 
 ## Fake runs for development
 

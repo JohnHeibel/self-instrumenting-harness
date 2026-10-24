@@ -11,6 +11,7 @@ export default function App() {
   const [, setAssets] = useState(0)
   const [runs, setRuns] = useState<{ name: string }[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [compare, setCompare] = useState<Run | null>(null)
 
   useEffect(() => {
     const on = () => setRunName(new URLSearchParams(location.hash.slice(1)).get('run'))
@@ -38,9 +39,29 @@ export default function App() {
     return () => { stop(); clearTimeout(timer); clearTimeout(imgTimer) }
   }, [runName])
 
+  // The previous comparable run, for reference lines: `#cmp=<name>`, else the same name with its trailing number one
+  // lower (mc-nether-03 → mc-nether-02) when the source has it. Loaded once; it is never followed.
+  useEffect(() => {
+    setCompare(null)
+    if (!runName) return
+    let stop: (() => void) | null = null, dead = false
+    const want = new URLSearchParams(location.hash.slice(1)).get('cmp')
+    const m = /^(.*?)(\d+)$/.exec(runName)
+    const guess = m && Number(m[2]) > 1 ? m[1] + String(Number(m[2]) - 1).padStart(m[2].length, '0') : null
+    source.listRuns().then(list => {
+      const name = want ?? guess
+      if (dead || !name || name === runName || !list.some(r => r.name === name)) return
+      stop = source.watch(name, {
+        records: recs => { if (recs.length && !dead) { setCompare(new Run(recs)); stop?.() } },
+        spectator: () => {}, assets: () => {}, error: () => {},
+      })
+    }, () => {})
+    return () => { dead = true; stop?.() }
+  }, [runName])
+
   if (error) return <div className="picker">Couldn't load: {error}</div>
   if (runName && !run) return <div className="picker">Loading {runName}…</div>
-  if (run) return <Story key={runName} run={run} spectator={spectator} imageUrl={rec => source.imageUrl(runName!, rec)} />
+  if (run) return <Story key={runName} run={run} compare={compare} spectator={spectator} imageUrl={rec => source.imageUrl(runName!, rec)} />
   return (
     <div className="picker">
       <h2 style={{ fontWeight: 500 }}>Runs</h2>
