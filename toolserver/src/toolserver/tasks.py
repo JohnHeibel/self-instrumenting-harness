@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from .extensions import Extensions
 
 WAKE = "WAKE"                  # run-dir file the runner watches; holds the urgent notices not yet seen
+WAKE_TAKEN = "WAKE_TAKEN"      # keys of notices the runner delivered in a wake prompt: they count as seen
 MAX_TASK_MINUTES = 480
 MAX_TASKS = 8
 MAX_RULES = 32
@@ -121,7 +122,27 @@ class Board:
         return n
 
     def unseen(self) -> list[Notice]:
+        self._absorb_taken()
         return [n for n in self.items if not n.seen]
+
+    def _absorb_taken(self) -> None:
+        """Notices the runner already delivered in a wake prompt are seen: don't wake for them again."""
+        p = self.run_dir / WAKE_TAKEN
+        try:
+            st = p.stat()
+            mtime = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return
+        if mtime == getattr(self, "_taken_mtime", None):
+            return
+        self._taken_mtime = mtime
+        try:
+            keys = set(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return
+        for n in self.items:
+            if not n.seen and _key(n) in keys:
+                n.seen = True
 
     def mark_seen(self, notices: list[Notice]) -> None:
         for n in notices:
@@ -168,7 +189,8 @@ class Board:
         return True
 
     def _write_wake(self) -> None:
-        urgent = [{"source": n.source, "text": n.text} for n in self.items if n.urgent and not n.seen]
+        self._absorb_taken()
+        urgent = [{"source": n.source, "text": n.text, "key": _key(n)} for n in self.items if n.urgent and not n.seen]
         p = self.run_dir / WAKE
         if urgent:
             tmp = p.with_suffix(".tmp")
@@ -176,6 +198,10 @@ class Board:
             tmp.replace(p)
         else:
             p.unlink(missing_ok=True)
+
+
+def _key(n: Notice) -> str:
+    return f"{n.ts:.6f}:{n.id}"
 
 
 def _from(n: Notice, sources: list[str]) -> bool:

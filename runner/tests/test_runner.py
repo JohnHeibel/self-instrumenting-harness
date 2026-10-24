@@ -248,6 +248,19 @@ def test_wake_file_interrupts_thinking_and_prompts_with_the_notices(h):
     assert not (h.run_dir / "WAKE").exists()
 
 
+def test_a_lost_interrupt_is_sent_again_and_a_delivered_wake_is_recorded(h, monkeypatch):
+    import json
+    from runner import run as runmod
+    monkeypatch.setattr(runmod, "INTERRUPT_RESEND", 0.5)
+    script = {"processes": [{"turns": [[{"deaf": 1}, {"hang": True}], [{"usage": 100}]]}]}
+    wake = '[{"source": "t2", "text": "stuck", "key": "1.0:3"}]'
+    threading.Timer(0.3, lambda: (h.run_dir / "WAKE").write_text(wake)).start()
+    assert h.runner(script, budget_tokens=50).run() == "budget_tokens"
+    assert len(h.requests("turn/interrupt")) >= 2
+    assert not [s for s in h.records("agent_state") if s["state"] == "backing_off"]
+    assert json.loads((h.run_dir / "WAKE_TAKEN").read_text()) == ["1.0:3"]
+
+
 def test_deadline_mid_turn_ends_without_backing_off(h):
     script = {"processes": [{"turns": [[{"hang": True}]]}]}
     t0 = time.monotonic()

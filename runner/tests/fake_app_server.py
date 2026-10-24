@@ -22,6 +22,7 @@ Steps:
   {"tool": "list_hooks"}          an mcpToolCall item on server harness
   {"sleep": 0.2}                  pause
   {"hang": true}                  wait until turn/interrupt, then complete as interrupted
+  {"deaf": 1}                     ignore that many turn/interrupt requests (a lost interrupt)
   {"exit": 1}                     exit the process mid-turn (a crash)
   {"complete": "completed"}       turn/completed with that status (default at the end)
   {"fail": "message"}             error notification + turn/completed status failed
@@ -51,6 +52,7 @@ THREAD = script.get("thread_id", "thr_fake")
 
 out_lock = threading.Lock()
 interrupted = threading.Event()
+deaf = [0]
 turn_counter = 0
 total_tokens = int(script.get("start_total", 0))
 
@@ -109,6 +111,8 @@ def run_turn(turn_id: str, steps: list) -> None:
         elif "tool" in step:
             item("mcpToolCall", turn_id, server="harness", tool=step["tool"], status="completed",
                  arguments={})
+        elif "deaf" in step:
+            deaf[0] = step["deaf"]
         elif "sleep" in step:
             if interrupted.wait(step["sleep"]):
                 status = "interrupted"
@@ -166,7 +170,10 @@ def handle(req: dict) -> None:
         threading.Thread(target=run_turn, args=(turn_id, steps), daemon=True).start()
         return
     elif method == "turn/interrupt":
-        interrupted.set()
+        if deaf[0] > 0:
+            deaf[0] -= 1
+        else:
+            interrupted.set()
         result = {}
     else:
         send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"fake: {method}"}})

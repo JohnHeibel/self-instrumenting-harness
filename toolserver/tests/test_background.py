@@ -383,3 +383,23 @@ def test_quiet_stall_uses_the_programs_own_action_counts(tmp_path):
     w._prog["checked"] = 0
     w.stall_check(now=t0 + 250 + tm.STALL_NO_ACT_S + 1)
     assert len(board.posts) == 1 and "the program counted no actions" in board.posts[0]
+
+
+def test_notices_the_runner_delivered_in_a_wake_prompt_count_as_seen(tmp_path):
+    import json
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    board = tm.Board(Log(), tmp_path)
+    board.post("t2", "stuck", urgent=True)
+    items = json.loads((tmp_path / "WAKE").read_text())
+    (tmp_path / "WAKE").unlink()                                          # the runner took it...
+    (tmp_path / "WAKE_TAKEN").write_text(json.dumps([items[0]["key"]]))   # ...and delivered it
+    board.post("t9", "plain")
+    assert not (tmp_path / "WAKE").exists()          # not written again for what was delivered
+    assert "stuck" not in board.footer()
+    board.post("t3", "new trouble", urgent=True)
+    assert [i["text"] for i in json.loads((tmp_path / "WAKE").read_text())] == ["new trouble"]
