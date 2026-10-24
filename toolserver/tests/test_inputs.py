@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import anyio
 import pytest
 
 from toolserver import inputs as I
-from toolserver.capture import Capture, Shot
+from toolserver.capture import Capture, NotFound, Region, Shot, Target
 from toolserver.events import EventLog
 from toolserver.inputs import Controller, InputError
 
@@ -20,24 +21,31 @@ US_SHIFTED = {'!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '
               '~': '`', '|': '\\', '<': ',', '>': '.', '?': '/'}
 
 
+TARGET = Target(title="Untitled - Notepad", process="notepad.exe")
+
+
 class FakeBackend:
-    """Records SendInput events; a window with a fixed client rect on a fixed desktop."""
+    """Records SendInput events; the host is a fixed region on a fixed desktop."""
 
     def __init__(self, rect=None, vscreen=(0, 0, 2560, 1440), hwnd=42) -> None:
         self.hwnd = hwnd
         self.rect = rect if rect is not None else {"left": 0, "top": 0, "width": 2560, "height": 1440}
         self.vscreen = vscreen
+        self.not_found: str | None = None
+        self.located: list[Target] = []
         self.events: list[tuple] = []
         self.timeline: list[tuple] = []   # events and sleeps, in order
         self.focused = 0
         self.focus_ok = True
         self.fail_after: int | None = None
 
-    def find_window(self, title):
-        return self.hwnd
-
-    def client_rect(self, hwnd):
-        return self.rect
+    def locate(self, target):
+        self.located.append(target)
+        if self.not_found:
+            raise NotFound(self.not_found)
+        r = self.rect
+        ident = "monitor" if target.mode == "monitor" else ("window", self.hwnd)
+        return Region(self.hwnd, ident, r["left"], r["top"], r["width"], r["height"])
 
     def virtual_screen(self):
         return self.vscreen
@@ -67,13 +75,17 @@ class FakeBackend:
         self.timeline.append(("sleep", s))
 
 
+def region(width=2560, height=1440, left=0, top=0, hwnd=42) -> Region:
+    return Region(hwnd, ("window", hwnd), left, top, width, height)
+
+
 def cap(width=2560, height=1440, image=(1280, 720), left=0, top=0, hwnd=42) -> Capture:
-    return Capture(hwnd, left, top, width, height, *image)
+    return Capture(region(width, height, left, top, hwnd), *image)
 
 
 def ctl(backend=None, capture=None) -> tuple[Controller, FakeBackend]:
     b = backend or FakeBackend()
-    c = Controller(b, "Factorio")
+    c = Controller(b, TARGET)
     c.capture = capture if capture is not None else cap()
     return c, b
 
@@ -95,7 +107,7 @@ def test_mapping_follows_physical_capture_size_at_any_dpi_scale(scale):
     # agent always sees a 1280-wide image.
     w, h = round(1280 * scale), round(720 * scale)
     c = cap(w, h, image=(1280, 720), left=300, top=200)
-    rect = {"left": 300, "top": 200, "width": w, "height": h}
+    rect = region(w, h, 300, 200)
     assert I.to_screen(c, rect, 0, 0) == (300 + int(0.5 * scale), 200 + int(0.5 * scale))
     assert I.to_screen(c, rect, 640, 360) == (300 + int(640.5 * scale), 200 + int(360.5 * scale))
     sx, sy = I.to_screen(c, rect, 1279, 719)
@@ -104,7 +116,7 @@ def test_mapping_follows_physical_capture_size_at_any_dpi_scale(scale):
 
 def test_mapping_with_a_smaller_window_than_the_image_limit():
     c = cap(800, 600, image=(800, 600))  # no downscale: 1:1
-    assert I.to_screen(c, {"left": 10, "top": 20, "width": 800, "height": 600}, 799, 0) == (809, 20)
+    assert I.to_screen(c, region(800, 600, 10, 20), 799, 0) == (809, 20)
 
 
 def test_window_moved_since_capture_uses_its_current_position():
@@ -142,23 +154,24 @@ def test_needs_a_screenshot_first():
         c.click(1, 1)
 
 
-def test_window_missing_minimized_resized_or_replaced():
+def test_host_missing_minimized_resized_or_replaced():
     c, b = ctl()
-    b.hwnd = None
-    with pytest.raises(InputError, match="is not open"):
+    b.not_found = "the host's window (process notepad.exe) is not open"
+    with pytest.raises(InputError, match="is not open; input needs it on screen"):
         c.key("e")
-    b.hwnd = 42
-    b.rect = None
+    b.not_found = "the host's window (process notepad.exe) is minimized"
     with pytest.raises(InputError, match="minimized"):
         c.key("e")
+    b.not_found = None
     b.rect = {"left": 0, "top": 0, "width": 1920, "height": 1080}
-    with pytest.raises(InputError, match="resized"):
+    with pytest.raises(InputError, match="changed size"):
         c.click(1, 1)
-    c.key("e")  # keys don't need coordinates, so a resize doesn't block them
+    c.key("e")  # keys don't need coordinates, so a size change doesn't block them
     b.rect = {"left": 0, "top": 0, "width": 2560, "height": 1440}
     b.hwnd = 43
-    with pytest.raises(InputError, match="changed since the last screenshot"):
+    with pytest.raises(InputError, match="not the one in the last screenshot"):
         c.click(1, 1)
+    assert all(t == TARGET for t in b.located)  # the host config's target, every time
 
 
 def test_focus_failure_sends_nothing():
@@ -300,14 +313,20 @@ def test_type_uses_scan_codes_with_shift_and_unicode_fallback():
 # Through the MCP server: logging, artifacts, set_goal ----------------------------------
 
 
-def _server(tmp_path, backend=None):
+REPO = Path(__file__).resolve().parents[2]
+HOSTS = {"notepad": REPO / "hosts" / "notepad.toml", "factorio": REPO / "hosts" / "factorio.toml"}
+
+
+def _server(tmp_path, host="notepad", backend=None):
+    from toolserver.extensions import HostConfig
     from toolserver.server import build_server
     b = backend or FakeBackend()
-    controller = Controller(b, "Factorio")
-    shot = Shot(b"\x89PNG fake", b"\xff\xd8 fake jpeg", {"source": "window", "captured_size": [2560, 1440],
+    shot = Shot(b"PNG fake", b"JPEG fake", {"source": "window", "captured_size": [2560, 1440],
                                                          "image_size": [1280, 720]}, cap())
     log = EventLog(tmp_path / "events.jsonl", "t")
-    mcp = build_server(log, "127.0.0.1", 0, io={"controller": controller, "shoot": lambda: shot})
+    mcp = build_server(log, "127.0.0.1", 0, host_config=HostConfig.load(HOSTS[host]),
+                       workspace=tmp_path / "ws", archive_dir=tmp_path / "ext",
+                       io={"backend": b, "shoot": lambda: shot})
     return mcp, b
 
 
@@ -315,8 +334,10 @@ def _records(tmp_path):
     return [json.loads(l) for l in (tmp_path / "events.jsonl").read_text().splitlines()]
 
 
-def test_tools_log_summaries_artifacts_and_goal(tmp_path):
-    mcp, b = _server(tmp_path)
+@pytest.mark.parametrize("host", ["notepad", "factorio"])
+def test_tools_log_summaries_artifacts_and_goal(tmp_path, host):
+    from toolserver.extensions import HostConfig
+    mcp, b = _server(tmp_path, host)
 
     async def scenario():
         out = {}
@@ -343,21 +364,60 @@ def test_tools_log_summaries_artifacts_and_goal(tmp_path):
         ("type", "input", True), ("set_goal", "meta", True), ("click", "input", False)]
     shot = calls[0]
     assert shot["artifact"] == f"shots/{shot['seq']:06d}.jpg"
-    assert (tmp_path / shot["artifact"]).read_bytes() == b"\xff\xd8 fake jpeg"
-    assert shot["summary"] == "Screenshot of the game window"
+    assert (tmp_path / shot["artifact"]).read_bytes() == b"JPEG fake"
+    assert shot["summary"] == "Screenshot of the program's window"
     assert calls[2]["summary"] == "Pressed e" and calls[3]["summary"] == "Typed 'iron'"
     assert calls[5]["summary"].startswith("click failed: (5000.0, 1.0) is outside")
+    hc = HostConfig.load(HOSTS[host])
+    assert b.located and all(t == Target(hc.window_title, hc.process, hc.capture) for t in b.located)
     goal = next(r for r in recs if r["type"] == "goal")
     assert (goal["writer"], goal["text"], goal["serves"]) == ("toolserver", "Automate iron", "Red science")
     assert [r["seq"] for r in recs] == list(range(1, len(recs) + 1))
 
 
-def test_input_tools_are_listed_with_descriptions(tmp_path):
+def test_tool_descriptions_are_host_neutral(tmp_path):
     mcp, _ = _server(tmp_path)
     tools = {t.name: t for t in anyio.run(mcp.list_tools)}
-    assert {"screenshot", "click", "drag", "move", "scroll", "key", "type", "set_goal"} <= set(tools)
-    assert all(tools[n].description for n in ("click", "drag", "key", "type", "set_goal"))
+    names = {"screenshot", "click", "drag", "move", "scroll", "key", "type", "set_goal"}
+    assert names <= set(tools)
+    assert all(tools[n].description for n in names)
     assert "last screenshot" in tools["click"].description
+    for n in names:  # the generality rule: nothing assumes a game or names a host
+        text = (tools[n].description + json.dumps(tools[n].inputSchema)).lower()
+        assert not any(w in text for w in ("game", "factorio", "inventory", "craft")), n
+
+
+def test_monitor_mode_with_no_window_named_sends_input_without_focusing():
+    b = FakeBackend()
+    b.hwnd = None
+    c = Controller(b, Target(mode="monitor"))
+    c.capture = Capture(Region(None, "monitor", 0, 0, 2560, 1440), 1280, 720)
+    c.click(10, 10)
+    assert b.focused == 0 and len(b.events) == 3
+
+
+def test_process_mode_maps_through_the_bounding_box_of_its_windows():
+    from toolserver.capture import union_rect
+    main, dialog = (100, 100, 1200, 800), (1000, 50, 600, 400)
+    box = union_rect([main, dialog])
+    assert box == (100, 50, 1500, 850)
+    r = Region(42, ("process", 7), *box)
+    c = Capture(r, 1280, 725)
+    # A click on the dialog's spot in the image lands on the dialog on screen.
+    x, y = (1300 - 100) * 1280 / 1500, (200 - 50) * 725 / 850
+    sx, sy = I.to_screen(c, r, x, y)
+    assert abs(sx - 1300) <= 1 and abs(sy - 200) <= 1
+
+
+def test_host_config_capture_fields(tmp_path):
+    from toolserver.extensions import HostConfig
+    hc = HostConfig.load(HOSTS["notepad"])
+    assert (hc.process, hc.capture) == ("notepad.exe", "process")
+    bad = tmp_path / "bad.toml"
+    bad.write_text('[host]\nname = "x"\ncapture = "screen"\n')
+    with pytest.raises(ValueError, match="capture must be one of window, process, monitor"):
+        HostConfig.load(bad)
+    assert HostConfig.load(None).capture == "window"
 
 
 def test_a_lost_thumbnail_keeps_the_record(tmp_path):

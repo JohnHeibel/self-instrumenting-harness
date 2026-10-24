@@ -1,18 +1,22 @@
-"""Live check of the input tools against the real Factorio window (Windows, this PC).
+"""Live check of screenshot and input against a real program on this PC (Windows).
 
-Takes a screenshot, presses "e" (opens the character inventory), takes another and checks
-the images differ by much more than the game's own animation does between two idle
-screenshots. Then presses "e" again and checks the screen went back. It goes through
-the real tool server code (MCP tools in process, Win32 SendInput), so it moves the real
-cursor and takes focus.
+Goes through the real tool server code (MCP tools in process, Win32 SendInput), so it
+moves the real cursor, takes focus and sends real keys. Start the program first.
 
-  uv run --project toolserver python toolserver/scripts/live_input_check.py
+Two checks; each compares screenshots against the program's own idle flicker:
+  --key K     press K: the screen must change; press K again: it must change back
+              (a key that toggles a panel)
+  --type T    type T into the focused text field: the screen must change; backspace once
+              per character: it must change back. A dialog or anything else that changes
+              the screen on its own fails the check rather than passing it.
 
-First start Factorio and get into a game: Single player > New game > Freeplay > Play, then
-press Tab to skip the crash-site intro (while it runs, "e" does nothing). Launching it
-with arguments (--load-game) from here makes Steam ask the user to confirm them, so the
-script doesn't. Use a new game, not one of your saves.
-Exit 0 on pass. Images and events.jsonl are left in runs/live-input-check/.
+  uv run --project toolserver python toolserver/scripts/live_input_check.py \
+      --host-config hosts/notepad.toml --before ctrl+n --type "hello from the harness" \
+      --after ctrl+w
+
+The program's own instructions (which key toggles what, what must be open first) belong
+with its host config, in hosts/. Exit 0 on pass. Screenshots, thumbnails and events.jsonl
+are left in runs/live-input-check-<host>/.
 """
 
 from __future__ import annotations
@@ -22,7 +26,6 @@ import base64
 import io
 import json
 import sys
-import time
 from pathlib import Path
 
 import anyio
@@ -33,39 +36,35 @@ sys.path.insert(0, str(REPO / "toolserver" / "src"))
 
 from toolserver import capture  # noqa: E402
 from toolserver.events import EventLog  # noqa: E402
+from toolserver.extensions import HostConfig  # noqa: E402
 from toolserver.server import build_server  # noqa: E402
 
-def wait_for_window(title: str, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if capture._find_window(title):
-            return
-        time.sleep(1)
-    raise SystemExit(f"no '{title}' window after {timeout:.0f} s")
+
+TILES = (16, 8)
 
 
-def diff(a: Image.Image, b: Image.Image, center: bool = False) -> float:
-    """Mean absolute difference, 0-255, on small grayscale copies; `center`: only the
-    middle half of the screen, where the inventory opens (on an ultrawide it covers a
-    small share of the whole frame)."""
-    if center:
-        box = (a.width // 4, a.height // 4, a.width * 3 // 4, a.height * 3 // 4)
-        a, b = a.crop(box), b.crop(box)
-    small = (320, round(320 * a.height / a.width))
-    d = ImageChops.difference(a.convert("L").resize(small), b.convert("L").resize(small))
-    return ImageStat.Stat(d).mean[0]
+def diff(a: Image.Image, b: Image.Image) -> float:
+    """How much the most-changed part of the image changed: the largest mean absolute
+    difference (0-255, grayscale) over a 16x8 grid of tiles. A line of text or a small
+    panel shows up here even when it is a tiny share of a wide screen."""
+    if a.size != b.size:
+        return 255.0
+    d = ImageChops.difference(a.convert("L"), b.convert("L"))
+    tw, th = d.width // TILES[0], d.height // TILES[1]
+    return max(ImageStat.Stat(d.crop((x * tw, y * th, (x + 1) * tw, (y + 1) * th))).mean[0]
+               for x in range(TILES[0]) for y in range(TILES[1]))
 
 
-async def main_async(args) -> int:
+async def check(args, hc: HostConfig) -> dict:
     out: Path = args.out
-    log = EventLog(out / "events.jsonl", "live-input-check")
-    mcp = build_server(log, "127.0.0.1", 0, args.window_title)
+    log = EventLog(out / "events.jsonl", f"live-input-check-{hc.name}")
+    mcp = build_server(log, "127.0.0.1", 0, host_config=hc, workspace=out / "workspace",
+                       archive_dir=out / "extensions")
 
     async def shot(name: str) -> Image.Image:
         res = await mcp.call_tool("screenshot", {})
         content = res[0] if isinstance(res, tuple) else res
-        data = base64.b64decode(content[0].data)
-        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img = Image.open(io.BytesIO(base64.b64decode(content[0].data))).convert("RGB")
         img.save(out / f"{name}.png")
         return img
 
@@ -74,51 +73,77 @@ async def main_async(args) -> int:
         content = res[0] if isinstance(res, tuple) else res
         return content[0].text
 
-    # Wait until the game has finished loading: two screenshots in a row look alike.
-    deadline = time.monotonic() + args.load_timeout
-    prev = await shot("loading")
-    while True:
-        await anyio.sleep(3)
-        cur = await shot("loading")
-        if diff(prev, cur) < 2.0 or time.monotonic() > deadline:
-            break
-        prev = cur
-    await anyio.sleep(args.settle)
-
+    d = diff
+    start = await shot("0_start")  # input maps through the last screenshot
+    # Any input brings the program to the front; do it before the idle shots, so they
+    # aren't of a window that happened to cover it.
+    print(await call("move", x=start.width // 2, y=start.height // 2))
+    await anyio.sleep(args.wait)
+    await shot("0_focused")
+    for keys in args.before:
+        print(await call("key", keys=keys))
+        await anyio.sleep(args.wait)
     idle_a = await shot("1_idle_a")
     await anyio.sleep(1)
     idle_b = await shot("2_idle_b")
-    noise = diff(idle_a, idle_b, center=True)
+    noise = d(idle_a, idle_b)
+    threshold = max(4 * noise, args.min_change)
+    result: dict = {"host": hc.name, "capture": hc.capture, "image_size": list(idle_b.size),
+                    "idle_noise": round(noise, 2), "threshold": round(threshold, 2)}
 
-    print(await call("key", keys="e"))
-    await anyio.sleep(1)
-    opened = await shot("3_after_e")
-    changed = diff(idle_b, opened, center=True)
-
-    print(await call("key", keys="e"))
-    await anyio.sleep(1)
-    closed = await shot("4_after_e_again")
-    back = diff(idle_b, closed, center=True)
-
-    threshold = max(4 * noise, 3.0)
-    result = {"idle_noise": round(noise, 2), "after_e": round(changed, 2),
-              "after_second_e": round(back, 2), "threshold": round(threshold, 2),
-              "inventory_opened": changed > threshold, "inventory_closed": back < threshold,
-              "image_size": list(opened.size), "out": str(out)}
-    print(json.dumps(result, indent=2))
-    return 0 if result["inventory_opened"] and result["inventory_closed"] else 1
+    if args.key:
+        print(await call("key", keys=args.key))
+        await anyio.sleep(args.wait)
+        after = await shot("3_after_key")
+        print(await call("key", keys=args.key))
+        await anyio.sleep(args.wait)
+        back = await shot("4_after_key_again")
+        result.update(after_key=round(d(idle_b, after), 2), after_key_again=round(d(idle_b, back), 2))
+        result["pass"] = result["after_key"] > threshold and result["after_key_again"] < threshold
+    else:
+        print(await call("type", text=args.type))
+        await anyio.sleep(args.wait)
+        after = await shot("3_after_type")
+        for _ in args.type:  # erase exactly what was typed, so only our text is touched
+            await call("key", keys="backspace")
+        await anyio.sleep(args.wait)
+        back = await shot("4_after_erase")
+        result.update(after_type=round(d(idle_b, after), 2), after_erase=round(d(idle_b, back), 2))
+        result["pass"] = result["after_type"] > threshold and result["after_erase"] < threshold
+    for keys in args.after:
+        await shot("5_cleanup")
+        print(await call("key", keys=keys))
+        await anyio.sleep(args.wait)
+    result["out"] = str(out)
+    return result
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--window-title", default="Factorio")
-    ap.add_argument("--out", type=Path, default=REPO / "runs" / "live-input-check")
-    ap.add_argument("--load-timeout", type=float, default=180)
-    ap.add_argument("--settle", type=float, default=5, help="seconds to wait after loading looks done")
+    ap.add_argument("--host-config", type=Path, required=True)
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--key", help="a key that toggles something visible")
+    g.add_argument("--type", help="text to type into the focused field")
+    ap.add_argument("--wait", type=float, default=1.0, help="seconds between input and screenshot")
+    ap.add_argument("--min-change", type=float, default=3.0, help="smallest mean difference that counts")
+    ap.add_argument("--before", action="append", default=[], metavar="KEYS",
+                    help="keys to press first, e.g. ctrl+n for a new document (repeatable)")
+    ap.add_argument("--after", action="append", default=[], metavar="KEYS",
+                    help="keys to press at the end to clean up (repeatable)")
+    ap.add_argument("--out", type=Path)
     args = ap.parse_args()
+    hc = HostConfig.load(args.host_config)
+    args.out = args.out or REPO / "runs" / f"live-input-check-{hc.name}"
     args.out.mkdir(parents=True, exist_ok=True)
-    wait_for_window(args.window_title, 5)
-    return anyio.run(main_async, args)
+    target = capture.Target(hc.window_title, hc.process, hc.capture)
+    try:
+        capture.locate(target)
+    except capture.NotFound as e:
+        print(f"{e}: start it first", file=sys.stderr)
+        return 2
+    result = anyio.run(check, args, hc)
+    print(json.dumps(result, indent=2))
+    return 0 if result["pass"] else 1
 
 
 if __name__ == "__main__":

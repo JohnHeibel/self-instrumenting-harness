@@ -1,11 +1,12 @@
-"""Mouse and keyboard input to the game window, through Win32 SendInput.
+"""Mouse and keyboard input to the host, through Win32 SendInput.
 
 Coordinates are in the pixel space of the last screenshot image the agent received.
-They map to the window's client area with the geometry saved when that screenshot was
-taken (`capture.Capture`), then to SendInput's absolute 0..65535 virtual-desktop range.
-The process is DPI aware (capture.py), so every rect here is in physical pixels.
+They map to the region that screenshot was taken of (`capture.Capture`: the host's
+window, all its windows, or the monitor, per the host config), then to SendInput's
+absolute 0..65535 virtual-desktop range. The process is DPI aware (capture.py), so every
+rect here is in physical pixels.
 
-Keys are sent as scan codes: games often read scan codes and ignore events that carry
+Keys are sent as scan codes: many programs read scan codes and ignore events that carry
 only a virtual-key code.
 
 Everything Win32 sits behind `Backend`, so the logic is tested with a fake that records
@@ -22,7 +23,7 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from .capture import Capture
+from .capture import Capture, NotFound, Region, Target
 
 # SendInput flags (winuser.h)
 MOUSEEVENTF_MOVE = 0x0001
@@ -73,13 +74,13 @@ _ALIASES = {"escape": "esc", "return": "enter", "control": "ctrl", "lctrl": "ctr
             "tilde": "`", "arrowup": "up", "arrowdown": "down", "arrowleft": "left",
             "arrowright": "right"}
 MODIFIERS = {"ctrl", "shift", "alt", "rctrl", "rshift", "ralt"}
-# Combos that would take the agent out of the game window or close it.
+# Combos that would switch away from the host or close it.
 _BLOCKED = {frozenset({"alt", "f4"}), frozenset({"alt", "tab"}), frozenset({"ctrl", "esc"}),
             frozenset({"alt", "esc"})}
 
 MAX_HOLD_MS = 10_000
 MAX_TYPE_CHARS = 2000
-PRESS_S = 0.05      # a key or button stays down this long, so the game sees it for a frame
+PRESS_S = 0.05      # a key or button stays down this long, so a program polling once a frame sees it
 SETTLE_S = 0.03     # after moving the cursor, before pressing
 DOUBLE_GAP_S = 0.08
 TYPE_GAP_S = 0.02
@@ -90,8 +91,7 @@ class InputError(Exception):
 
 
 class Backend(Protocol):
-    def find_window(self, title: str) -> int | None: ...
-    def client_rect(self, hwnd: int) -> dict | None: ...      # None: minimized or gone
+    def locate(self, target: Target) -> Region: ...           # raises capture.NotFound
     def virtual_screen(self) -> tuple[int, int, int, int]: ...  # left, top, width, height
     def focus(self, hwnd: int) -> bool: ...
     def send(self, events: list[tuple]) -> None: ...
@@ -118,20 +118,21 @@ def parse_keys(keys: str) -> list[tuple[str, int, bool]]:
     if len(set(names)) != len(names):
         raise InputError(f"a key appears twice in {keys!r}")
     if frozenset(n.lstrip("r") if n in MODIFIERS else n for n in names) in _BLOCKED:
-        raise InputError(f"{keys!r} is not allowed: it would leave or close the game window")
+        raise InputError(f"{keys!r} is not allowed: it would switch away from or close the program")
     return out
 
 
-def to_screen(cap: Capture, rect: dict, x: float, y: float) -> tuple[int, int]:
-    """Pixel (x, y) of the screenshot image -> physical screen pixel, at the centre of the
-    block of screen pixels that image pixel covers."""
+def to_screen(cap: Capture, region: Region, x: float, y: float) -> tuple[int, int]:
+    """Pixel (x, y) of the screenshot image -> physical screen pixel in `region` (where the
+    host is now), at the centre of the block of screen pixels that image pixel covers."""
     if not (0 <= x < cap.image_width and 0 <= y < cap.image_height):
         raise InputError(f"({x}, {y}) is outside the last screenshot, which is "
                          f"{cap.image_width}x{cap.image_height}; x must be 0..{cap.image_width - 1} "
                          f"and y 0..{cap.image_height - 1}")
-    cx = min(int((x + 0.5) * cap.width / cap.image_width), cap.width - 1)
-    cy = min(int((y + 0.5) * cap.height / cap.image_height), cap.height - 1)
-    return rect["left"] + cx, rect["top"] + cy
+    w, h = cap.region.width, cap.region.height
+    cx = min(int((x + 0.5) * w / cap.image_width), w - 1)
+    cy = min(int((y + 0.5) * h / cap.image_height), h - 1)
+    return region.left + cx, region.top + cy
 
 
 def to_absolute(sx: int, sy: int, vscreen: tuple[int, int, int, int]) -> tuple[int, int]:
@@ -151,9 +152,9 @@ class Controller:
     """The input tools' logic. One call at a time; whatever a call pressed is released
     even if it fails part way, so no key or button is left held down."""
 
-    def __init__(self, backend: Backend, window_title: str) -> None:
+    def __init__(self, backend: Backend, target: Target) -> None:
         self.b = backend
-        self.window_title = window_title
+        self.target = target
         self.capture: Capture | None = None   # set by every window screenshot
         self._lock = threading.Lock()
         self._held: list[tuple] = []          # release events for what is down right now
@@ -264,30 +265,30 @@ class Controller:
         return Controller._Session(self, need_capture)
 
     def _prepare(self, need_capture: bool):
-        """Find and focus the window; return a mapper from image pixels to SendInput coords."""
-        hwnd = self.b.find_window(self.window_title)
-        if hwnd is None:
-            raise InputError(f"the game window ('{self.window_title}') is not open")
-        rect = self.b.client_rect(hwnd)
-        if rect is None:
-            raise InputError(f"the game window ('{self.window_title}') is minimized; input needs it on screen")
+        """Find and focus the host; return a mapper from image pixels to SendInput coords."""
+        try:
+            region = self.b.locate(self.target)
+        except NotFound as e:
+            raise InputError(f"{e}; input needs it on screen") from None
         cap = self.capture
         if need_capture:
             if cap is None:
                 raise InputError("take a screenshot first: coordinates are pixels of the last screenshot")
-            if cap.hwnd != hwnd:
-                raise InputError("the game window changed since the last screenshot; take a new screenshot")
-            if (rect["width"], rect["height"]) != (cap.width, cap.height):
-                raise InputError(f"the game window was resized ({cap.width}x{cap.height} -> "
-                                 f"{rect['width']}x{rect['height']}) since the last screenshot; "
+            if cap.region.ident != region.ident:
+                raise InputError("the program's window is not the one in the last screenshot (it was "
+                                 "closed and reopened?); take a new screenshot")
+            was, now = (cap.region.width, cap.region.height), (region.width, region.height)
+            if was != now:
+                raise InputError(f"what the screenshot shows changed size ({was[0]}x{was[1]} -> "
+                                 f"{now[0]}x{now[1]}), e.g. a window was resized, opened or closed; "
                                  "take a new screenshot")
-        if not self.b.focus(hwnd):
-            raise InputError("could not bring the game window to the front")
+        if region.hwnd is not None and not self.b.focus(region.hwnd):
+            raise InputError("could not bring the program's window to the front")
         vscreen = self.b.virtual_screen()
 
         def point(x: float, y: float) -> tuple[int, int]:
             assert cap is not None
-            return to_absolute(*to_screen(cap, rect, x, y), vscreen)
+            return to_absolute(*to_screen(cap, region, x, y), vscreen)
         return point
 
     @staticmethod
@@ -400,11 +401,8 @@ class Win32Backend:
         self.user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
         self.user32.MapVirtualKeyW.restype = wintypes.UINT
 
-    def find_window(self, title: str) -> int | None:
-        return self._capture.find_hwnd(title)
-
-    def client_rect(self, hwnd: int) -> dict | None:
-        return self._capture.client_rect(hwnd)
+    def locate(self, target: Target) -> Region:
+        return self._capture.locate(target)
 
     def virtual_screen(self) -> tuple[int, int, int, int]:
         m = self.user32.GetSystemMetrics
@@ -428,7 +426,7 @@ class Win32Backend:
                 u.AttachThreadInput(me, fg_tid, False)
         for _ in range(20):
             if u.GetForegroundWindow() == hwnd:
-                time.sleep(0.05)  # let the game process the activation before input arrives
+                time.sleep(0.05)  # let the program process the activation before input arrives
                 return True
             time.sleep(0.025)
         return False

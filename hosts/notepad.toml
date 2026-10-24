@@ -1,0 +1,17 @@
+# Host config for Windows Notepad. Not a target for runs: a host that is plainly not a
+# game, for the tool server's tests and live input check (AGENTS.md: generality rule).
+
+[host]
+name = "notepad"
+window_title = "Notepad"
+process = "notepad.exe"
+# Notepad's dialogs (Open, Save as, Find) are their own windows: capture them all.
+capture = "process"
+up_check = "window"
+
+[extensions]
+# Notepad has no extension mechanism, so load_extension can only add sandbox-side tools.
+reload_timeout_s = 30
+
+[extensions.reload]
+none = []

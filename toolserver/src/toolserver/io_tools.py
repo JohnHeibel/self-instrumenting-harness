@@ -1,6 +1,10 @@
 """Built-in tools for seeing and acting on the host: screenshot, mouse and keyboard
 input, and set_goal. Every call is logged (events.jsonl) with a plain-language
 `summary`; screenshots also save a thumbnail under shots/ for replay.
+
+Nothing here knows what the host is. Which program to capture and send input to comes
+from the host config (`capture.Target`), and the descriptions the agent reads say only
+"the program you're working in".
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from mcp import types
 from mcp.server.fastmcp import FastMCP, Image
 
 from . import capture
+from .capture import Target
 from .events import EventLog
 from .inputs import Controller, InputError, Win32Backend
 
@@ -20,26 +25,27 @@ NAMES = {"screenshot", "click", "drag", "move", "scroll", "key", "type", "set_go
 READ_ONLY = types.ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 ACTS = types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False,
                              openWorldHint=False)
+SHOWN = {"window": "the program's window", "process": "the program's windows", "monitor": "the screen"}
 
 
-def register(mcp: FastMCP, log: EventLog, window_title: str, max_screenshot_width: int,
-             controller: Controller | None = None,
-             shoot: Callable[[], capture.Shot] | None = None) -> Controller:
+def register(mcp: FastMCP, log: EventLog, target: Target, max_screenshot_width: int,
+             backend=None, shoot: Callable[[], capture.Shot] | None = None) -> Controller:
+    """`backend` and `shoot` replace Win32 input and screen capture (tests)."""
     run_dir = Path(log.path).parent
-    if controller is None:
-        controller = Controller(_LazyBackend(), window_title)
-    ctl = controller
-    shoot = shoot or (lambda: capture.screenshot(window_title, max_screenshot_width))
+    ctl = Controller(backend or _LazyBackend(), target)
+    shoot = shoot or (lambda: capture.screenshot(target, max_screenshot_width))
 
     @mcp.tool(annotations=READ_ONLY)
     def screenshot() -> Image:
-        """Capture the game window as an image."""
+        """Take a screenshot of the program you're working in. Mouse coordinates for the other
+        tools are pixels in the most recent screenshot."""
         with log.call("screenshot", "screenshot", {}) as res:
             shot = shoot()
             if shot.capture is not None:
                 ctl.capture = shot.capture
-            res.set("image", len(shot.png), **shot.meta,
-                    summary=f"Screenshot of the {'game window' if shot.capture else 'whole monitor'}")
+            what = SHOWN.get(shot.meta.get("source", ""), "the screen") if shot.capture else \
+                "the whole monitor (the program was not found)"
+            res.set("image", len(shot.png), **shot.meta, summary=f"Screenshot of {what}")
 
             def save(seq: int) -> str:
                 rel = f"shots/{seq:06d}.jpg"
@@ -64,10 +70,10 @@ def register(mcp: FastMCP, log: EventLog, window_title: str, max_screenshot_widt
     @mcp.tool(annotations=ACTS)
     async def click(x: float, y: float, button: str = "left", double: bool = False,
                     modifiers: str = "") -> str:
-        """Click in the game window. button: left, right or middle. double: double-click.
-        modifiers: keys held during the click, e.g. "shift" or "ctrl+shift".
+        """Click in the program you're working in. button: left, right or middle. double:
+        double-click. modifiers: keys held during the click, e.g. "shift" or "ctrl+shift".
         x and y are pixels in the last screenshot you received (0,0 is its top-left), so take
-        a screenshot first, and a new one after the window changes size."""
+        a screenshot first, and a new one whenever what you see changes size."""
         return await act("click", {"x": x, "y": y, "button": button, "double": double, "modifiers": modifiers},
                          lambda: ctl.click(x, y, button, double, modifiers))
 
@@ -94,23 +100,24 @@ def register(mcp: FastMCP, log: EventLog, window_title: str, max_screenshot_widt
 
     @mcp.tool(annotations=ACTS)
     async def key(keys: str, hold_ms: int = 0) -> str:
-        """Press a key or combination in the game window, e.g. "e", "escape", "ctrl+z",
-        "shift+f5", "space". Names: letters, digits, f1-f12, enter, escape, tab, space,
-        backspace, delete, up/down/left/right, home, end, pageup, pagedown, ctrl, shift, alt.
-        hold_ms keeps it held that long (up to 10000), e.g. "w" with 2000 to walk."""
+        """Press a key or key combination in the program you're working in, e.g. "a", "enter",
+        "escape", "ctrl+s", "shift+tab". Key names: letters, digits, punctuation, f1-f12, enter,
+        escape, tab, space, backspace, delete, insert, home, end, pageup, pagedown,
+        up/down/left/right, ctrl, shift, alt, joined with +. hold_ms keeps the keys held down
+        that long (up to 10000)."""
         return await act("key", {"keys": keys, "hold_ms": hold_ms}, lambda: ctl.key(keys, hold_ms))
 
     @mcp.tool(name="type", annotations=ACTS)
     async def type_(text: str) -> str:
-        """Type text into the game window as key presses (for text fields and the console).
-        A newline presses enter."""
+        """Type text into the program you're working in, as key presses, wherever its keyboard
+        focus is. A newline presses enter."""
         return await act("type", {"text": text}, lambda: ctl.type_text(text))
 
     @mcp.tool(annotations=ACTS)
     def set_goal(text: str, serves: str) -> str:
         """Say what you are working on now and what it is for. Call it whenever your current
-        subgoal changes. text: the subgoal, e.g. "Automate iron plates". serves: what it is for,
-        e.g. "Red science needs 1 plate/s"."""
+        subgoal changes. text: the subgoal, in a few words. serves: the larger goal it is a step
+        toward."""
         with log.call("set_goal", "meta", {"text": text, "serves": serves},
                       summary=f"Goal: {text}") as res:
             if not text.strip():

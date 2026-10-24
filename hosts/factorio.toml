@@ -4,6 +4,11 @@
 [host]
 name = "factorio"
 window_title = "Factorio"
+process = "factorio.exe"
+# Factorio draws its own menus inside one window, so the window is enough.
+capture = "window"
+# The host is up while its window is on screen.
+up_check = "window"
 
 [extensions]
 # Where load_extension copies an extension's in_host directory (a Factorio mod folder).

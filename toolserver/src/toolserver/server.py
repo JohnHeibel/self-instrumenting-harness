@@ -16,6 +16,7 @@ from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.transport_security import TransportSecuritySettings
 
 from . import io_tools
+from .capture import Target
 from .events import EventLog
 from .extensions import ContainerExecutor, Executor, Extensions, HostConfig, LocalExecutor
 
@@ -46,11 +47,12 @@ LOAD_EXTENSION_DOC = """Load or update one of your extensions, and register its 
 - Loading again with the same name replaces the extension; tools it no longer lists are removed."""
 
 
-def build_server(log: EventLog, host: str, port: int, window_title: str = "Factorio",
+def build_server(log: EventLog, host: str, port: int, window_title: str = "",
                  max_screenshot_width: int = 1280, *, host_config: HostConfig | None = None,
                  workspace: Path | None = None, executor: Executor | None = None,
                  archive_dir: Path | None = None, io: dict | None = None) -> FastMCP:
-    """`io`: overrides for io_tools.register (tests pass a fake input controller and capture)."""
+    """`window_title` overrides the host config's. `io`: overrides for io_tools.register
+    (tests pass a fake input controller and capture)."""
     # Bound to localhost, the SDK only accepts Host: localhost. The agent container
     # reaches us as host.docker.internal, so allow that too; rebinding protection stays on.
     local = ["127.0.0.1:*", "localhost:*", "[::1]:*", "host.docker.internal:*"]
@@ -66,7 +68,9 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "Facto
                      executor or LocalExecutor(workspace or Path("workspace")),
                      archive_dir or Path("extensions"), BUILTIN)
     # screenshot, the input tools and set_goal: io_tools.py
-    io_tools.register(mcp, log, window_title, max_screenshot_width, **(io or {}))
+    hc = host_config or HostConfig()
+    target = Target(title=window_title or hc.window_title, process=hc.process, mode=hc.capture)
+    io_tools.register(mcp, log, target, max_screenshot_width, **(io or {}))
 
     @mcp.tool(annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                                 idempotentHint=False, openWorldHint=False),
@@ -133,7 +137,7 @@ def main() -> None:
     executor = LocalExecutor(workspace) if container == "local" else ContainerExecutor(container)
     log = EventLog(args.run_dir / "events.jsonl", args.run_id)
     log.write("server_started", host=args.host, port=args.port, host_config=host_config.name)
-    build_server(log, args.host, args.port, args.window_title or host_config.window_title or "Factorio",
+    build_server(log, args.host, args.port, args.window_title or "",
                  host_config=host_config, workspace=workspace, executor=executor,
                  archive_dir=args.run_dir / "extensions").run(transport="streamable-http")
 

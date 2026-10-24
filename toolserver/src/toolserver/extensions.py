@@ -59,6 +59,9 @@ LANGS = {".lua": "lua", ".py": "python", ".cs": "csharp", ".java": "java", ".js"
 class HostConfig:
     name: str = "none"
     window_title: str = ""
+    process: str = ""                         # exe name of the host's program, e.g. "notepad.exe"
+    capture: str = "window"                   # window | process | monitor (see capture.py)
+    up_check: str | list[str] = "window"      # window | always | [argv]: up when it exits 0
     install_dir: Path | None = None          # where in-host extension files go
     reload_actions: dict[str, list[str]] = field(default_factory=dict)
     reload_timeout_s: int = 120
@@ -73,10 +76,22 @@ class HostConfig:
         return cls(
             name=host.get("name", path.stem),
             window_title=host.get("window_title", ""),
+            process=host.get("process", ""),
+            capture=_one_of(host.get("capture", "window"), CAPTURE_MODES, "capture"),
+            up_check=host.get("up_check", "window"),
             install_dir=Path(os.path.expanduser(os.path.expandvars(install))) if install else None,
             reload_actions={k: [os.path.expandvars(a) for a in v] for k, v in ext.get("reload", {}).items()},
             reload_timeout_s=int(ext.get("reload_timeout_s", 120)),
         )
+
+
+CAPTURE_MODES = ("window", "process", "monitor")
+
+
+def _one_of(value: str, allowed: tuple[str, ...], key: str) -> str:
+    if value not in allowed:
+        raise ValueError(f"host config: [host] {key} must be one of {', '.join(allowed)}, not {value!r}")
+    return value
 
 
 # --------------------------------------------------------------------------- where tools run
