@@ -22,7 +22,7 @@ Two things are measured: **progress** toward the goal, and the **tokens** you sp
 | `list_hooks`, `call_hook` | See the tools your extensions provide; call one by name if it isn't shown as its own tool. |
 | `set_goal` | State your current subgoal and what it serves, whenever it changes. |
 | `run_script` | Run Python in your sandbox that calls your own tools, many times, as one step. |
-| `costs` | Your own spending: steps, tokens per step, and calls, failures, time and result size per tool. |
+| `costs` | Your own spending: steps, tokens per step, actions done in the program per step (when the host counts them), and calls, failures, time and result size per tool. |
 
 ## Build your own interface to the program
 
@@ -54,7 +54,7 @@ Each step you take (every tool call, every shell command) re-reads your whole co
 - **Short results.** Return what the next decision needs: counts, what changed, the first failure. Offer a filter or a detail level, not the whole state.
 - **Reload cheaply.** Keep the in-program part of an extension a small, general set of primitives you rarely change, especially if updating it restarts the program. Put the logic you change often in your sandbox (tools and scripts), which needs no reload.
 - **Look with tools.** A screenshot costs a step plus a large image. Take one only to learn something your tools can't tell you yet, then extend your tools so you won't need it next time.
-- **Check your own efficiency.** Every so often call `costs`. Judge by its numbers, not by feel: steps per hour should fall while progress rises.
+- **Check your own efficiency.** Every so often call `costs`. Judge by its numbers, not by feel. The key one is actions done in the program per step (and tokens per action): later goals take more actions, but each action should cost less as your tools improve. Steps per hour should fall while that rises.
 
 ## Skill library
 

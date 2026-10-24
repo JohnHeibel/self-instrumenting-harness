@@ -55,3 +55,23 @@ def test_report_shows_milestone_costs(tmp_path):
     text = report(tmp_path, 60, now=datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc))
     assert "a, b: 10 min, 1 requests, 50,000 uncached tokens" in text
     assert "c: 10 min, 1 requests, 10,000 uncached tokens" in text
+
+def test_report_shows_program_actions_per_step_from_any_log(tmp_path):
+    _write(tmp_path / "runner.jsonl", [
+        {"ts": "2026-01-01T11:10:00Z", "type": "usage", "total_tokens": 0, "uncached_tokens": 0, "input_tokens": 10},
+        {"ts": "2026-01-01T11:20:00Z", "type": "usage", "total_tokens": 40000, "uncached_tokens": 0, "input_tokens": 10},
+        {"ts": "2026-01-01T11:30:00Z", "type": "usage", "total_tokens": 80000, "uncached_tokens": 0, "input_tokens": 10},
+    ])
+    _write(tmp_path / "grader.jsonl", [
+        {"ts": "2026-01-01T09:00:00Z", "type": "program_actions", "count": 99, "kinds": {"build": 99}},  # too old
+        {"ts": "2026-01-01T11:15:00Z", "type": "program_actions", "count": 30, "kinds": {"build": 20, "mine": 10}},
+        {"ts": "2026-01-01T11:25:00Z", "type": "program_actions", "count": 10, "kinds": {"craft": 10}},
+        {"ts": "2026-01-01T11:26:00Z", "type": "host_command", "parameters": "program_actions"},
+    ])
+    text = report(tmp_path, 60, now=NOW)
+    assert "Done in the program: 40 actions (build 20, mine 10, craft 10), 20.0 per step, about 2,000 tokens per action." in text
+
+
+def test_report_without_program_counts_says_nothing_about_them(tmp_path):
+    _write(tmp_path / "grader.jsonl", [{"ts": "2026-01-01T11:26:00Z", "type": "milestone", "id": "x"}])
+    assert "Done in the program" not in report(tmp_path, 60, now=NOW)

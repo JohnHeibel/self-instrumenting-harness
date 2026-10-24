@@ -7,8 +7,18 @@
 -- finished by assembling machines set to it whose supply is automated (supply chain, below),
 -- integrity fields, active mods, the console commands entered since `since` (by players or
 -- over RCON), so the grader can tell which channel changed state, and `fairplay`: what the
--- three fair-play checks found (below). Registered mod commands like this one don't set
--- console_command_used.
+-- three fair-play checks found (below), and `actions`: how many actions players have done in
+-- the game, by kind, counted from the game's own player events (below). Registered mod commands
+-- like this one don't set console_command_used.
+--
+-- Actions. Cumulative counts of what a player did, from events the game raises for a player's
+-- own controls (whatever drove them: a person, or a mod acting through the player's controls):
+--   build    on_built_entity          an entity placed by a player
+--   mine     on_player_mined_entity   an entity mined by a player
+--   craft    on_pre_player_crafted_item  a hand-crafting request (one per request, any count)
+--   rotate   on_player_rotated_entity
+-- Not counted, because the game raises no event for them: walking, moving items to and from
+-- entities by script, setting recipes and research. So this undercounts; it never overcounts.
 --
 -- Supply chain (recipe milestones). An assembler counts only if its supply traces upstream to
 -- resource extraction with no hand-fed leaf. Upstream of a machine or chest: the inserters and
@@ -217,6 +227,7 @@ local function limits()
 end
 
 local function init()
+  storage.actions = storage.actions or {build = 0, mine = 0, craft = 0, rotate = 0}
   storage.commands = storage.commands or {}
   storage.next_id = storage.next_id or 1
   local fp = storage.fairplay or {}
@@ -437,7 +448,15 @@ local function mined_allowance(e)
     a[k] = (a[k] or 0) + it.count
   end
 end
-script.on_event(defines.events.on_player_mined_entity, mined_allowance)
+local function count_action(kind)
+  init()
+  storage.actions[kind] = (storage.actions[kind] or 0) + 1
+end
+
+script.on_event(defines.events.on_player_mined_entity, function(e) count_action("mine"); mined_allowance(e) end)
+script.on_event(defines.events.on_built_entity, function() count_action("build") end)
+script.on_event(defines.events.on_pre_player_crafted_item, function() count_action("craft") end)
+script.on_event(defines.events.on_player_rotated_entity, function() count_action("rotate") end)
 script.on_event(defines.events.on_robot_mined_entity, mined_allowance)
 
 local function scenario_items(fn)
@@ -650,6 +669,7 @@ commands.add_command(SELF, "Harness grader: read-only game state as JSON.", func
     commands = recent,
     last_command_id = storage.next_id - 1,
     fairplay = fairplay(),
+    actions = storage.actions,
   }
   local out = helpers.table_to_json(reply)
   if cmd.player_index then

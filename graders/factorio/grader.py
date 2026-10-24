@@ -21,6 +21,10 @@ run's mods folder by hosts/factorio/hostctl.py) for production counts over RCON 
   host_command        {command, parameters, by, custom, tick}: each console command the game
                       saw, entered by a player or sent over RCON; `custom` is a mod-registered
                       command (the agent's helpers), so the log shows which channel changed state
+  program_actions     {count, kinds, totals, tick, source} when players did more in the game: the
+                      new actions since the last record, from the mod's counts of the game's own
+                      player events (build, mine, craft, rotate; see mod/control.lua for what
+                      isn't counted)
   grader_status       {ok, detail} when the game becomes reachable or unreachable
 
 Restart-safe: it rebuilds what it has already written from grader.jsonl.
@@ -158,6 +162,7 @@ class Grader:
         self.active: dict[str, bool] = {}
         self.counts: dict[str, int] = {}
         self.last_command = 0
+        self.action_totals: dict[str, int] = {}
         self.up: bool | None = None
         self._resume()
         self.log = EventLog(self.path, run_id, writer="grader")
@@ -184,6 +189,8 @@ class Grader:
                     self.counts[r["signal"]] = n
             elif t == "host_command":
                 self.last_command = max(self.last_command, r.get("command_id", 0))
+            elif t == "program_actions":
+                self.action_totals = {k: int(v) for k, v in _dict(r.get("totals")).items()}
 
     def _connect(self) -> Rcon:
         info = json.loads((self.run_dir / "host" / "rcon.json").read_text())
@@ -214,6 +221,7 @@ class Grader:
                 continue   # hostctl's up_check polls these every few seconds; they change nothing
             self.log.write("host_command", command_id=c["id"], command=c["command"], parameters=c.get("parameters", ""),
                            by=c.get("by"), custom=bool(c.get("custom")), tick=c.get("tick"))
+        self._actions(state)
         for name, (on, detail) in signals(state).items():
             self._signal(name, on, detail, {"tick": state.get("tick"), "players": state.get("players")})
         for name, (on, detail, evidence, n) in fair.items():
@@ -235,6 +243,23 @@ class Grader:
             self.active[name] = on
         if count is not None:
             self.counts[name] = count
+
+    def _actions(self, state: dict) -> None:
+        """A program_actions record with what's new since the last one. Counts that went down (a
+        save from before the mod counted, or a reloaded older save) restart from the new value."""
+        totals = {k: int(v) for k, v in _dict(state.get("actions")).items() if isinstance(v, (int, float))}
+        if not totals:
+            return   # a mod older than 0.3.0
+        kinds = {}
+        for k, n in totals.items():
+            before = self.action_totals.get(k, 0)
+            d = n - before if n >= before else n
+            if d:
+                kinds[k] = d
+        if kinds:
+            self.log.write("program_actions", count=sum(kinds.values()), kinds=kinds, totals=totals,
+                           tick=state.get("tick"), source="game player events")
+        self.action_totals = totals
 
     def _status(self, ok: bool, detail: str) -> None:
         if self.up != ok:

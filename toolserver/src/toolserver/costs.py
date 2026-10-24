@@ -2,7 +2,9 @@
 to improve by numbers instead of by feel.
 
 events.jsonl (tool calls: duration, result size, errors) and, when present, runner.jsonl (usage records:
-cumulative model tokens) in the run directory.
+cumulative model tokens) in the run directory, and `program_actions` records from any log there
+(written by host-side code from the program's own counts): actions done in the program per step,
+the number that shows how much each step gets done.
 """
 
 from __future__ import annotations
@@ -26,6 +28,34 @@ def _records(path: Path, since: datetime) -> list[dict]:
     return out
 
 
+def program_actions(run_dir: Path, since: datetime) -> tuple[int, dict[str, int]] | None:
+    """Actions done in the program since `since`, from `program_actions` records in any of the run's
+    logs, with counts by kind. None if no log in the run has such records (the host doesn't count)."""
+    found, count, kinds = False, 0, {}
+    for path in sorted(run_dir.glob("*.jsonl")):
+        if path.name == "events.jsonl":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if '"program_actions"' not in text:
+            continue
+        for line in text.splitlines():
+            if '"program_actions"' not in line:
+                continue
+            try:
+                r = json.loads(line)
+                if r.get("type") != "program_actions":
+                    continue
+                found = True
+                if datetime.fromisoformat(r["ts"].replace("Z", "+00:00")) < since:
+                    continue
+            except (ValueError, KeyError):
+                continue
+            count += int(r.get("count") or 0)
+            for k, v in (r.get("kinds") or {}).items():
+                kinds[k] = kinds.get(k, 0) + int(v)
+    return (count, kinds) if found else None
+
+
 def _kb(n: float) -> str:
     return f"{n / 1024:.1f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
 
@@ -41,12 +71,23 @@ def report(run_dir: Path, minutes: float = 60, now: datetime | None = None) -> s
              + (f"; {inner} more calls ran inside scripts." if inner else ".")]
 
     usage = [r for r in _records(run_dir / "runner.jsonl", since) if r.get("type") == "usage"]
+    n = total = 0
     if len(usage) >= 2:
         total = usage[-1].get("total_tokens", 0) - usage[0].get("total_tokens", 0)
         uncached = usage[-1].get("uncached_tokens", 0) - usage[0].get("uncached_tokens", 0)
         n = len(usage) - 1   # one usage record per model request: your steps, shell commands included
         lines.append(f"Model: {n} steps, {total:,} tokens ({uncached:,} not cached), about {total // n:,} per step. "
                      f"Context now: {usage[-1].get('input_tokens', 0):,} tokens.")
+
+    actions = program_actions(run_dir, since)
+    if actions is not None:
+        count, kinds = actions
+        line = f"Done in the program: {count:,} actions"
+        if kinds:
+            line += " (" + ", ".join(f"{k} {v:,}" for k, v in sorted(kinds.items(), key=lambda kv: -kv[1])) + ")"
+        if n:
+            line += f", {count / n:.1f} per step" + (f", about {total // count:,} tokens per action" if count else "")
+        lines.append(line + ".")
 
     if calls:
         by: dict[str, dict] = {}
