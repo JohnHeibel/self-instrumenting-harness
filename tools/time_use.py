@@ -5,8 +5,10 @@ actions per minute of busy hands).
 
     python tools/time_use.py runs/<run> [--bin-min 10]
 
-Reads events.jsonl, runner.jsonl (usage records) and any log with program_actions records; the same
-split the `costs` tool shows the agent. "-" where a number has nothing to divide by.
+Reads events.jsonl, runner.jsonl (usage records) and any log with program_actions and milestone records;
+the same split the `costs` tool shows the agent. w-tok/act is cache-weighted tokens per action (cached input
+counted at costs.CACHED_WEIGHT), the headline cost number; a table of cache-weighted tokens per milestone
+follows. "-" where a number has nothing to divide by.
 """
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "toolserver" / "src
 from toolserver import costs  # noqa: E402
 
 
-def usage_points(runner: list[dict]) -> list[tuple[float, int, int]]:
-    """(time, tokens, uncached tokens) used by each model request, from the cumulative usage records."""
+def usage_points(runner: list[dict]) -> list[tuple[float, int, int, float]]:
+    """(time, tokens, uncached tokens, cache-weighted tokens) used by each model request, from the usage
+    records (totals are cumulative; the weighted count comes from the request's own fields)."""
     out, prev_t, prev_u = [], 0, 0
     for r in runner:
         if r.get("type") != "usage":
@@ -29,7 +32,7 @@ def usage_points(runner: list[dict]) -> list[tuple[float, int, int]]:
         tot, unc = int(r.get("total_tokens") or 0), int(r.get("uncached_tokens") or 0)
         d_t = tot - prev_t if tot >= prev_t else tot      # counters restarted: count from zero
         d_u = unc - prev_u if unc >= prev_u else unc
-        out.append((costs._t(r), d_t, d_u))
+        out.append((costs._t(r), d_t, d_u, costs.weighted(r)))
         prev_t, prev_u = tot, unc
     return out
 
@@ -58,7 +61,7 @@ def main() -> None:
     start, end = min(stamps), max(stamps)
     sp = costs.spans(a.run_dir, end)
     usage, actions = usage_points(runner), action_points(a.run_dir)
-    keys = ("wall", "hands", "tools", "idle", "off", "tokens", "uncached", "steps", "actions")
+    keys = ("wall", "hands", "tools", "idle", "off", "tokens", "uncached", "weighted", "steps", "actions")
     rows, totals = [], dict.fromkeys(keys, 0.0)
     t = start
     while t < end:
@@ -66,6 +69,7 @@ def main() -> None:
         u = costs.time_use(a.run_dir, t, b, sp, runner)
         inside = [p for p in usage if t <= p[0] < b or (b == end and p[0] == end)]
         u["tokens"], u["uncached"] = sum(p[1] for p in inside), sum(p[2] for p in inside)
+        u["weighted"] = sum(p[3] for p in inside)
         u["steps"] = len(inside)
         u["actions"] = sum(n for ts, n in actions if t <= ts < b or (b == end and ts == end))
         rows.append((t, u))
@@ -74,7 +78,8 @@ def main() -> None:
         t += a.bin_min * 60
 
     head = (f"{'from':<6}{'tok/h':>8}{'uncached/h':>11}{'steps':>6}{'actions':>8}{'act/step':>9}"
-            f"{'tok/act':>8}{'hands':>7}{'tools':>7}{'idle':>6}{'longest idle':>13}{'off':>5}{'act/busy-min':>13}")
+            f"{'tok/act':>8}{'w-tok/act':>10}{'hands':>7}{'tools':>7}{'idle':>6}{'longest idle':>13}{'off':>5}"
+            f"{'act/busy-min':>13}")
     print(head)
     for t, u in rows + [(None, totals)]:
         on = u["wall"] - u["off"]
@@ -87,11 +92,18 @@ def main() -> None:
         unc_h = f"{u['uncached'] / hours / 1e3:.0f}k" if hours else "-"
         per_step = f"{u['actions'] / u['steps']:.1f}" if u["steps"] else "-"
         per_act = f"{u['tokens'] / u['actions'] / 1e3:.0f}k" if u["actions"] else "-"
+        w_act = f"{u['weighted'] / u['actions'] / 1e3:.1f}k" if u["actions"] else "-"
         per_busy = f"{u['actions'] / (u['hands'] / 60):.1f}" if u["hands"] >= 30 else "-"
         longest = costs.longest_idle(sp, u.get("off_spans", []), t, t + u["wall"]) if t else 0
         print(f"{label:<6}{tok_h:>8}{unc_h:>11}{u['steps']:>6.0f}{u['actions']:>8.0f}{per_step:>9}{per_act:>8}"
-              f"{pct('hands'):>7}{pct('tools'):>7}{pct('idle'):>6}"
+              f"{w_act:>10}{pct('hands'):>7}{pct('tools'):>7}{pct('idle'):>6}"
               f"{(f'{longest / 60:.1f} min' if t else ''):>13}{u['off'] / 60:>4.0f}m{per_busy:>13}")
+
+    reached = costs.milestone_costs(a.run_dir, runner)
+    if reached:
+        print(f"\n{'milestone':<20}{'at':>8}{'w-tokens to reach':>19}{'w-tokens since last':>21}")
+        for m, s, spent, step in reached:
+            print(f"{m:<20}{s / 60:>6.0f}m{spent / 1e6:>18.2f}M{step / 1e6:>20.2f}M")
 
 
 if __name__ == "__main__":

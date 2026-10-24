@@ -61,6 +61,46 @@ def program_actions(run_dir: Path, since: datetime) -> tuple[int, dict[str, int]
     return (count, kinds) if found else None
 
 
+CACHED_WEIGHT = 0.1   # cached input costs about a tenth of fresh input; cache-weighted tokens count it so
+
+
+def weighted(r: dict) -> float:
+    """Cache-weighted tokens of one model request (a usage record): fresh input and output in full, cached
+    input at CACHED_WEIGHT. Context re-read from cache each step barely counts, so this tracks what a step
+    really costs, not how long the run has been going."""
+    inp, cached = int(r.get("input_tokens") or 0), int(r.get("cached_input_tokens") or 0)
+    return inp - cached + CACHED_WEIGHT * cached + int(r.get("output_tokens") or 0)
+
+
+def milestones(run_dir: Path) -> list[tuple[float, str]]:
+    """(time, id) of each milestone the run's grader recorded, first time each, in order."""
+    seen: dict[str, float] = {}
+    for path in sorted(run_dir.glob("*.jsonl")):
+        if path.name == "events.jsonl":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if '"milestone"' not in text:
+            continue
+        for r in _all(path):
+            if r.get("type") == "milestone" and r.get("id") and r["id"] not in seen:
+                seen[r["id"]] = _t(r)
+    return sorted((t, m) for m, t in seen.items())
+
+
+def milestone_costs(run_dir: Path, usage: list[dict]) -> list[tuple[str, float, float, float]]:
+    """For each milestone: (id, seconds since the run's first usage record, cache-weighted tokens spent to
+    reach it, cache-weighted tokens since the one before)."""
+    usage = [r for r in usage if r.get("type") == "usage"]
+    if not usage:
+        return []
+    start, out, prev = _t(usage[0]), [], 0.0
+    for t, m in milestones(run_dir):
+        spent = sum(weighted(r) for r in usage if _t(r) <= t)
+        out.append((m, t - start, spent, spent - prev))
+        prev = spent
+    return out
+
+
 AGENT_STATES = {"thinking", "acting", "compacting", "waiting"}   # runner states while the agent runs
 
 
@@ -164,11 +204,14 @@ def report(run_dir: Path, minutes: float = 60, now: datetime | None = None) -> s
 
     usage = [r for r in _records(run_dir / "runner.jsonl", since) if r.get("type") == "usage"]
     n = total = 0
+    w = 0.0
     if len(usage) >= 2:
         total = usage[-1].get("total_tokens", 0) - usage[0].get("total_tokens", 0)
         uncached = usage[-1].get("uncached_tokens", 0) - usage[0].get("uncached_tokens", 0)
         n = len(usage) - 1   # one usage record per model request: your steps, shell commands included
-        lines.append(f"Model: {n} steps, {total:,} tokens ({uncached:,} not cached), about {total // n:,} per step. "
+        w = sum(weighted(r) for r in usage[1:])
+        lines.append(f"Model: {n} steps, {total:,} tokens ({uncached:,} not cached), about {total // n:,} per step; "
+                     f"cache-weighted (cached input at {CACHED_WEIGHT:g}): {w:,.0f}, about {w / n:,.0f} per step. "
                      f"Context now: {usage[-1].get('input_tokens', 0):,} tokens.")
 
     actions = program_actions(run_dir, since)
@@ -178,8 +221,15 @@ def report(run_dir: Path, minutes: float = 60, now: datetime | None = None) -> s
         if kinds:
             line += " (" + ", ".join(f"{k} {v:,}" for k, v in sorted(kinds.items(), key=lambda kv: -kv[1])) + ")"
         if n:
-            line += f", {count / n:.1f} per step" + (f", about {total // count:,} tokens per action" if count else "")
+            line += f", {count / n:.1f} per step" + (
+                f", about {w / count:,.0f} cache-weighted tokens per action ({total // count:,} raw)" if count else "")
         lines.append(line + ".")
+
+    reached = milestone_costs(run_dir, _all(run_dir / "runner.jsonl"))
+    if reached:
+        lines.append("Milestones (whole run), cache-weighted tokens to reach each, and since the one before: " +
+                     "; ".join(f"{m} at {s / 60:.0f} min: {spent:,.0f} (+{step:,.0f})" for m, s, spent, step in reached)
+                     + ".")
 
     a, b = since.timestamp(), now.timestamp()
     sp = spans(run_dir, b)
