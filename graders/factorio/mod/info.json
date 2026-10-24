@@ -1,6 +1,6 @@
 {
   "name": "harness-grader",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "title": "Harness grader",
   "author": "self-instrumenting-harness",
   "description": "Read-only: answers the harness grader's /harness-grader command over RCON, logs console commands and keeps fair-play checks (position jumps, item conservation, crafting speed, automated supply) and counts player actions. Installed by hosts/factorio/hostctl.py, not by the agent.",

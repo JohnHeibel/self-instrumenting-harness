@@ -536,14 +536,15 @@ class Work:
             if quiet >= STALL_NO_ACT_S and "quiet" not in t.stall_told:
                 t.stall_told.add("quiet")
                 self._stalled(t, "quiet", f"{t.id} ({t.name}) has held your hands {held:.1f} min but made no acting "
-                              f"call{' and the program counted no actions' if counted else ''} for {quiet / 60:.1f} "
+                              f"call{' and the program saw no player activity' if counted else ''} for {quiet / 60:.1f} "
                               f"min ({t.reads} reads since). If it is waiting or polling, "
                               f"the hands sit idle meanwhile: stop it and do the waiting outside the hands (a "
                               f"hands=False task, or a rule), or let it finish if the wait is nearly over.")
 
     def program_activity(self) -> tuple[bool, float]:
-        """(whether the host counts actions in the program at all, time of the latest count), from
-        `program_actions` records in the run's logs, read incrementally."""
+        """(whether the host counts actions in the program at all, time of the latest sign of the user
+        doing something), from `program_actions` and `program_activity` records in the run's logs, read
+        incrementally."""
         st = self.__dict__.setdefault("_prog", {"counted": False, "last": 0.0, "pos": {}, "checked": 0.0})
         if time.time() - st["checked"] < 5:
             return st["counted"], st["last"]
@@ -565,7 +566,7 @@ class Work:
             end = chunk.rfind(b"\n") + 1               # leave a half-written last line for next time
             st["pos"][path.name] = pos + end
             for line in chunk[:end].splitlines():
-                if b'"program_actions"' not in line:
+                if b'"program_actions"' not in line and b'"program_activity"' not in line:
                     continue
                 try:
                     r = json.loads(line)
@@ -576,6 +577,8 @@ class Work:
                     st["counted"] = True
                     if r.get("count"):
                         st["last"] = max(st["last"], ts)
+                elif r.get("type") == "program_activity" and r.get("kinds"):
+                    st["last"] = max(st["last"], ts)     # busy (moving, moving items), though not an action
         return st["counted"], st["last"]
 
     def _stalled(self, t: Task, kind: str, text: str) -> None:

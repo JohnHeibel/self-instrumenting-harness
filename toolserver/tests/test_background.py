@@ -381,8 +381,14 @@ def test_quiet_stall_uses_the_programs_own_action_counts(tmp_path):
     w.stall_check(now=t0 + 300)
     assert board.posts == []
     w._prog["checked"] = 0
+    with (tmp_path / "grader.jsonl").open("a") as f:      # walking, moving items: busy, not actions
+        f.write(json.dumps({"ts": datetime.fromtimestamp(t0 + 350, timezone.utc).isoformat(),
+                            "type": "program_activity", "kinds": {"move": 30}}) + "\n")
     w.stall_check(now=t0 + 250 + tm.STALL_NO_ACT_S + 1)
-    assert len(board.posts) == 1 and "the program counted no actions" in board.posts[0]
+    assert board.posts == []
+    w._prog["checked"] = 0
+    w.stall_check(now=t0 + 350 + tm.STALL_NO_ACT_S + 1)
+    assert len(board.posts) == 1 and "the program saw no player activity" in board.posts[0]
 
 
 def test_notices_the_runner_delivered_in_a_wake_prompt_count_as_seen(tmp_path):

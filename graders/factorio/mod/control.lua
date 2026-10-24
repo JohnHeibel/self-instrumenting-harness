@@ -228,6 +228,7 @@ end
 
 local function init()
   storage.actions = storage.actions or {build = 0, mine = 0, craft = 0, rotate = 0}
+  storage.activity = storage.activity or {move = 0, inventory = 0}
   storage.commands = storage.commands or {}
   storage.next_id = storage.next_id or 1
   local fp = storage.fairplay or {}
@@ -459,6 +460,15 @@ script.on_event(defines.events.on_pre_player_crafted_item, function() count_acti
 script.on_event(defines.events.on_player_rotated_entity, function() count_action("rotate") end)
 script.on_event(defines.events.on_robot_mined_entity, mined_allowance)
 
+-- Not actions, but signs a player is doing something (walking, moving items), however it's driven:
+-- so a long walk or a restock doesn't look like a stuck player.
+local function count_activity(kind)
+  init()
+  storage.activity[kind] = (storage.activity[kind] or 0) + 1
+end
+script.on_event(defines.events.on_player_changed_position, function() count_activity("move") end)
+script.on_event(defines.events.on_player_main_inventory_changed, function() count_activity("inventory") end)
+
 local function scenario_items(fn)
   if remote.interfaces.freeplay and remote.interfaces.freeplay[fn] then
     local ok, items = pcall(remote.call, "freeplay", fn)
@@ -670,6 +680,7 @@ commands.add_command(SELF, "Harness grader: read-only game state as JSON.", func
     last_command_id = storage.next_id - 1,
     fairplay = fairplay(),
     actions = storage.actions,
+    activity = storage.activity,
   }
   local out = helpers.table_to_json(reply)
   if cmd.player_index then
