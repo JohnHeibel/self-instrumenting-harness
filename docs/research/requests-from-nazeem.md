@@ -79,3 +79,9 @@ Related: the new 90 s cap on extension tool timeouts means a hook cannot be the 
 ## 2026-10-24 (critic, cycle 4b: delivering guidance to a live run) runner/claude_runner.py
 The brief is frozen into runner state at run start, so edits to prompts/brief.md never reach a live run. `take_update_note()` delivers `<run>/UPDATE_NOTE.md`
 once with the next continue prompt (then renames it `.sent`). Any supervisor can use it without touching runner-state.json while the runner is up. Test in `runner/tests/test_skills_note.py`.
+
+Note on overlap (critic, cycle 5): `NUDGE` interrupts the running turn and resumes with the note; `UPDATE_NOTE.md` is the non-interrupting variant, delivered with the next continue prompt at a natural turn boundary (cheap, no lost work). Keep both: NUDGE for urgent corrections, UPDATE_NOTE for guidance that can wait.
+
+## 2026-10-24 (critic, cycle 5: milestone costs in `costs`) toolserver/src/toolserver/costs.py
+The brief tells the agent to "judge by numbers", but `costs` only showed a time window. It now ends with the last 8 grader milestones: minutes since the previous one, model requests and
+uncached tokens in between (milestones found in the same pass are grouped). Generic: it only reads `milestone` records in grader.jsonl (Factorio's too). Test: `toolserver/tests/test_costs.py`. Effective at tool server restart.

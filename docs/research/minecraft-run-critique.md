@@ -28,3 +28,8 @@ Evidence: milestones at 09:21Z: stone_tools, furnace, chest, crafted_10 (uncache
 Cost: about 33 steps x 120k tokens = 4M cached-read tokens and 15 min of wall clock in 70 min. Uncached cost is small, but wall-clock matters.
 Fix: generic brief bullet (long waits) and a Minecraft goal paragraph (poll for ~4 min inside one call). Takes effect at the next runner restart: this one is worth a deliberate restart (the brief is copied into runner state at first run, so the NUDGE restart will NOT refresh it unless the continue prompt carries it; see below).
 Note: `state.extra["brief"]` is frozen at run start, so brief edits only reach the live run via the continue prompt. Proposed: put critic-approved advice into update_note.
+
+## 2026-10-24 03:00 PDT, cycle 5
+Evidence: after the 02:4x nudge the agent switched to long waits (Monitor/sleep 100-590 s, `sk.wait(100)`); last 15 min: 42 requests at 138k tokens, 24k uncached, context 150k and growing about 2-3k per step, so a compaction is likely within the hour (skills index + NOTES.md are ready for it). Still 0 logged hook calls; all game control goes through Bash -> sk.py -> bridge.
+Fix: `costs` now shows per-milestone minutes, requests and uncached tokens, so the agent sees whether it is getting faster. UPDATE_NOTE (non-interrupting) and NUDGE (interrupting) documented as complementary.
+Watch next: behaviour across the compaction; whether the 90 s hook cap bites (agent uses sk.py, so it does not).
