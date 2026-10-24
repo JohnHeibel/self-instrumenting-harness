@@ -57,6 +57,16 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 
 **`server_started`**: `host`, `port`.
 
+**Background work** (toolserver/src/toolserver/tasks.py). Calls made by a background task are `tool_call` records with `via` = `task:<id>`.
+
+| Type | Fields |
+|---|---|
+| `task_started` | `task` (`t1`, `t2`, …), `name` (kept script, file or `code`), `hands` (it may act, holding the agent's one pair of hands), `minutes`, `args`, `why` (e.g. which rule started it) |
+| `task_ended` | `task`, `name`, `status` (`ok`, `failed`, `stopped`), `duration_ms`, `calls`, `summary` |
+| `rule_set`, `rule_removed`, `rules_restored` | `rule`, its `check` (a kept script name, or `code` with the code), `args`, `every_s`, `do` (`tell`, `wake`, `run:<script>`), `times`, `cooldown_s`; removal adds `why` and `fired` |
+| `rule_fired` | `rule`, `text` (what the check reported), `do`, `count` |
+| `notice` | `notice` (number), `source` (`t3`, `rule:<name>`, `script`), `text`, `urgent`: what was reported to the agent. Urgent notices also go to the run dir's `WAKE` file until delivered, and the runner wakes the agent for them |
+
 ### Fields any `tool_call` may carry, for the UI
 
 | Field | Meaning |
@@ -76,7 +86,7 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 | `usage` | After **every model request**: `total_tokens` (the thread total so far, including cached input), `context_window`, plus the deltas since the previous `usage`: `input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`. Turns can last hours, so per-request records keep the cost curve live |
 | `turn_started`, `turn_completed` | `turn`, `turn_id`. `turn_completed` adds `status` (`completed`, `interrupted`, `failed`, or `cut_off` when the runner died mid-turn and closed it on restart), `duration_ms`, `error`, and `turn_total_tokens` |
 | `checkpoint` | `label`, `ref` |
-| `marker` | `label`, `kind`: a moment worth a timeline marker that no other record implies. Kinds so far: `planted_break`, `runner_restart`, `interrupt` (with `reason`), `prompt_goal`, `prompt_continue`, `toolserver_restart` |
+| `marker` | `label`, `kind`: a moment worth a timeline marker that no other record implies. Kinds so far: `planted_break`, `runner_restart`, `interrupt` (with `reason`; `wake` when the agent was woken for an urgent notice), `prompt_goal`, `prompt_continue`, `prompt_wake`, `toolserver_restart` |
 | `run_ended` | `reason`, `turns`, `total_tokens` |
 
 ### Written by the grader
