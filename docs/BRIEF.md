@@ -39,7 +39,7 @@ Two research agents ran about 170 searches (academic, products, open source, hac
 
 ## Hosts
 
-- **Factorio** (first host). Mods are Lua, loaded from the mods folder; RCON and `helpers.write_file` give a channel between mod and harness (verify reload without restart). FLE is the human-built ceiling for vanilla tasks, so a modpack strengthens novelty. Runs natively on John's Windows PC. Open: vanilla vs modpack, Space Age on or off, milestones.
+- **Factorio** (first host). Mods are Lua, loaded from the mods folder; RCON and `helpers.write_file` give a channel between mod and harness (verify reload without restart). FLE is the human-built ceiling for vanilla tasks, so a modpack strengthens novelty. Runs natively on John's Windows PC. Starts vanilla with the goal of blue science; a modpack can come later.
 - **Minecraft** (later host). Interesting case is modded: modded GUIs and state have no prebuilt agent interface. Mineflayer serves as the human-built ceiling for vanilla tasks. Open: version, mod loader, modpack, hook loading (restart vs hot reload), milestones.
 - **Odoo.** Real-world anchor. Modules are plain Python, runs in Docker, official API is an accuracy oracle. In Hyphenate's sandbox list. (Verify) Community may lack full Accounting and the bank reconciliation screen; community add-ons may fill the gap; ERPNext is the fallback.
 - **Kerbal Space Program 1.** Flashiest host. Plugins are compiled C# loaded at startup, no live console, so each hook iteration needs a restart. Real-time physics forces the agent to write its own autopilot. kRPC is the human-built ceiling. KSP 1 only (KSP 2's studio was shut down).
@@ -118,6 +118,7 @@ The harness itself is the product. Each sponsor track is one demo of it.
 ## Decisions already made
 
 - ~~Minecraft replaces Factorio.~~ Reversed: **Factorio is the first host** (installed via Steam). Minecraft and KSP are later hosts.
+- Factorio starts **vanilla** (base game, no Space Age, no mods except the agent's own). **Goal: reach blue science**, meaning the first chemical science pack is produced. The grader checks Factorio's production statistics over RCON.
 - One agent runs at a time, never two simultaneously. **Codex goes first**; Claude Code uses the same tool server for a later run.
 - The user-possible-actions rule is policy only: stated to the agent and logged, not enforced.
 - Extension loading starts from a small per-host config; a docs-only discovery run on a fresh host comes later.
