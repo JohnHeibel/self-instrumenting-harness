@@ -43,7 +43,7 @@ FOOTER_CHARS = 800
 MAX_QUEUED = 8
 IDLE_NOTE_AFTER_S = 90          # hands idle this long: say so on the agent's tool results
 ONEOFF_SETTLE_S = 15            # the host's activity reports lag by up to this long
-REVIEW_EVERY_S = 2 * 3600      # suggest a tool review this often when no milestone has come
+REVIEW_EVERY_S = 3600          # suggest a tool review this long after the last one (milestones also bring one)
 REVIEW_ASK = ("Against the brief's foundation (get anywhere, get anything, change many things at once, see an "
               "area) and its rules on repeats (actions and questions), which of your tools is weakest, failed or "
               "cost the most? Improve that one before pushing on. (costs has more per tool.)")
