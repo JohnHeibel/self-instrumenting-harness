@@ -129,8 +129,13 @@ function TokensPerActionChart({ lev, geo, hover, setHover }: { lev: LeverageData
       )}
       {pts.slice(1).map((b, i) => {
         const a = pts[i]
+        if (a.estimated !== b.estimated) {  // requested (estimated) and performed (measured) actions are different things: break the line
+          const mx = (cx(a) + cx(b)) / 2
+          return <g key={i} stroke="var(--muted-hi)" strokeWidth={1.4}><title>Estimates (requested actions, incl. walking) end here; measured counts (performed actions) begin</title>
+            <line x1={mx - 2} x2={mx - 2} y1={PAD.t + 8} y2={base - 4} strokeDasharray="1 3" /><line x1={mx + 2} x2={mx + 2} y1={PAD.t + 8} y2={base - 4} strokeDasharray="1 3" /></g>
+        }
         return <line key={i} x1={cx(a)} y1={y(a.tpa!)} x2={cx(b)} y2={y(b.tpa!)} stroke="var(--verde)" strokeWidth={2.4} strokeLinecap="round"
-                     strokeDasharray={a.estimated || b.estimated ? '4 3' : undefined} />
+                     strokeDasharray={a.estimated ? '4 3' : undefined} />
       })}
       {pts.map((b, i) => b !== last && (
         <circle key={i} cx={cx(b)} cy={y(b.tpa!)} r={hover === lev.bins.indexOf(b) ? 4.5 : 3}
@@ -174,10 +179,11 @@ export function Leverage({ run, at }: { run: Run; at: number }) {
       <h2>
         <span>Leverage</span>
         <span className="lev-note">
-          <span>30-minute bins</span>
-          {lev.anyEstimated && <span><i className="sw est" />estimated (asked for, not done)</span>}
+          <span>30-min bins</span>
+          {lev.anyEstimated && <span><i className="sw est" />estimated: requested actions incl. walking</span>}
+          {lev.anyEstimated && <span><i className="sw meas" />measured: performed actions</span>}
           {lev.pre && <span><i className="sw pre" />before tracking: {lev.pre.actions.toLocaleString('en-US')} actions, as an average</span>}
-          {tpaRange(lev).log && <span>tokens per action on a log scale</span>}
+          {tpaRange(lev).log && <span>log scale</span>}
         </span>
       </h2>
       <div className="lev-grid">

@@ -273,3 +273,7 @@ button:focus-visible { outline: 2px solid var(--lapis); outline-offset: 2px; }
 .feed .fhead { display: flex; align-items: baseline; gap: 18px; padding-bottom: 5px; border-bottom: 1px solid #33363b; }
 .feed .fhead h2 { flex: none; }
 .feed .fhead .pin { margin: 0; padding: 0; border: 0; flex: 1; min-width: 0; }
+.lev-note .sw.meas { border: 0; background: var(--verde); width: 12px; height: 8px; }
+.lev .lev-note, .lev .lev-note span { white-space: nowrap; }
+.lev .lev-note { gap: 12px; }
+.lev h2 > span:first-child { margin-right: 12px; }
