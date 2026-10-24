@@ -12,3 +12,7 @@ dist/
 build/
 .idea/
 .vscode/
+
+# Run artifacts and machine-local settings
+runs/
+.claude/settings.local.json

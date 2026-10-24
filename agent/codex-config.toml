@@ -1,0 +1,18 @@
+# Codex config inside the agent container. Why each setting: docs/research/agent-tools.md
+
+# The container is the sandbox, so Codex's own sandbox and approval prompts are off.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[features]
+# Off by default and marked under development: lets hooks loaded mid-session appear as tools.
+mcp_tool_list_changed = true
+
+[mcp_servers.harness]
+url = "http://host.docker.internal:8765/mcp"
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+# Un-annotated tools otherwise count as destructive and are denied when approvals are off.
+default_tools_approval_mode = "approve"
+# Show harness tools as top-level tools: not behind tool_search, not inside code mode.
+omit_tools_from = ["deferred", "code_mode"]

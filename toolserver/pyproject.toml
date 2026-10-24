@@ -1,0 +1,23 @@
+[project]
+name = "toolserver"
+version = "0.1.0"
+description = "Harness tool server: the agent's only interface to the host, over MCP streamable HTTP."
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.30,<2",
+    "mss>=9",
+    "pillow>=10",
+]
+
+[project.scripts]
+toolserver = "toolserver.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "anyio>=4"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

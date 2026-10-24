@@ -1,0 +1,67 @@
+"""Append-only JSONL event log. Schema: docs/interfaces/event-log.md."""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterator
+
+SCHEMA_VERSION = 1
+
+
+class _Result:
+    """Filled in by a tool while it runs; written when the call ends."""
+
+    def __init__(self) -> None:
+        self.kind = "none"
+        self.nbytes = 0
+        self.extra: dict[str, Any] = {}
+
+    def set(self, kind: str, nbytes: int, **extra: Any) -> None:
+        self.kind, self.nbytes, self.extra = kind, nbytes, extra
+
+
+class EventLog:
+    def __init__(self, path: Path, run_id: str) -> None:
+        self.path = path
+        self.run_id = run_id
+        self._seq = 0
+        self._lock = threading.Lock()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write(self, type_: str, **fields: Any) -> None:
+        with self._lock:
+            self._seq += 1
+            record = {
+                "v": SCHEMA_VERSION,
+                "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                "run_id": self.run_id,
+                "seq": self._seq,
+                "type": type_,
+                **fields,
+            }
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    @contextmanager
+    def call(self, tool: str, channel: str, args: dict[str, Any], **fields: Any) -> Iterator[_Result]:
+        """Log one tool call: ok or error, duration, and what it returned."""
+        result = _Result()
+        t0 = time.perf_counter()
+        try:
+            yield result
+        except Exception as e:
+            self.write("tool_call", tool=tool, channel=channel, args=args, ok=False,
+                       error=f"{type(e).__name__}: {e}", duration_ms=_ms(t0), **fields)
+            raise
+        self.write("tool_call", tool=tool, channel=channel, args=args, ok=True, error=None,
+                   duration_ms=_ms(t0), result_kind=result.kind, result_bytes=result.nbytes,
+                   **result.extra, **fields)
+
+
+def _ms(t0: float) -> int:
+    return round((time.perf_counter() - t0) * 1000)
