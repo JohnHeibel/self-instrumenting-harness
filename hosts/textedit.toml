@@ -1,0 +1,21 @@
+# Host config for macOS TextEdit. Not a target for runs: a host that is plainly not a
+# game, for the tool server's tests and the live input check on a Mac (AGENTS.md: generality rule).
+#
+#   uv run --project toolserver python toolserver/scripts/live_input_check.py \
+#       --host-config hosts/textedit.toml --type "hello from the harness"
+# Open a new TextEdit document first. The tool server's process needs Screen Recording
+# and Accessibility permission (System Settings > Privacy & Security).
+
+[host]
+name = "textedit"
+window_title = ""
+process = "TextEdit"
+# Save and open panels are separate windows: capture them all.
+capture = "process"
+up_check = "window"
+
+[extensions]
+reload_timeout_s = 30
+
+[extensions.reload]
+none = []

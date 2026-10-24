@@ -9,6 +9,7 @@ from the host config (`capture.Target`), and the descriptions the agent reads sa
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -130,13 +131,17 @@ def register(mcp: FastMCP, log: EventLog, target: Target, max_screenshot_width: 
 
 
 class _LazyBackend:
-    """Creates the Win32 backend on first use, so the server starts on any OS (tests,
-    the Mac) and the input tools fail with a clear message there instead."""
+    """Creates this OS's input backend on first use (Win32 or macOS), so the server starts
+    anywhere and the input tools fail with a clear message where input isn't supported."""
 
     def __init__(self) -> None:
-        self._b: Win32Backend | None = None
+        self._b = None
 
     def __getattr__(self, name: str):
         if self._b is None:
-            self._b = Win32Backend()
+            if sys.platform == "darwin":
+                from .macos import MacBackend
+                self._b = MacBackend()
+            else:
+                self._b = Win32Backend()
         return getattr(self._b, name)

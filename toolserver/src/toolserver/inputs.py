@@ -59,6 +59,7 @@ _KEYS: dict[str, tuple[int, bool]] = {
     "numpad+": (0x4E, False), "numpad.": (0x53, False), "numpad/": (0x35, True),
     "numpadenter": (0x1C, True),
     "f11": (0x57, False), "f12": (0x58, False),
+    "cmd": (0x5B, True),  # the Windows key; Command on macOS
 }
 for _i in range(10):
     _KEYS[f"f{_i + 1}"] = (0x3B + _i, False)
@@ -72,11 +73,14 @@ _ALIASES = {"escape": "esc", "return": "enter", "control": "ctrl", "lctrl": "ctr
             "minus": "-", "equals": "=", "plus": "=", "comma": ",", "period": ".", "slash": "/",
             "backslash": "\\", "semicolon": ";", "quote": "'", "backtick": "`", "grave": "`",
             "tilde": "`", "arrowup": "up", "arrowdown": "down", "arrowleft": "left",
-            "arrowright": "right"}
-MODIFIERS = {"ctrl", "shift", "alt", "rctrl", "rshift", "ralt"}
+            "arrowright": "right", "command": "cmd", "meta": "cmd", "super": "cmd", "win": "cmd",
+            "lwin": "cmd", "windows": "cmd", "option": "alt", "opt": "alt"}
+MODIFIERS = {"ctrl", "shift", "alt", "rctrl", "rshift", "ralt", "cmd"}
 # Combos that would switch away from the host or close it.
 _BLOCKED = {frozenset({"alt", "f4"}), frozenset({"alt", "tab"}), frozenset({"ctrl", "esc"}),
-            frozenset({"alt", "esc"})}
+            frozenset({"alt", "esc"}),
+            # macOS: quit, switch app, hide, minimize
+            frozenset({"cmd", "q"}), frozenset({"cmd", "tab"}), frozenset({"cmd", "h"}), frozenset({"cmd", "m"})}
 
 MAX_HOLD_MS = 10_000
 MAX_TYPE_CHARS = 2000
@@ -112,13 +116,15 @@ def parse_keys(keys: str) -> list[tuple[str, int, bool]]:
         name = _ALIASES.get(p, p)
         if name not in _KEYS:
             raise InputError(f"unknown key {p!r} in {keys!r}. Use names like a, 1, f5, space, enter, "
-                             "escape, tab, backspace, delete, up, ctrl, shift, alt, joined with +")
+                             "escape, tab, backspace, delete, up, ctrl, shift, alt, cmd (macOS), joined with +")
         out.append((name, *_KEYS[name]))
     names = [n for n, _, _ in out]
     if len(set(names)) != len(names):
         raise InputError(f"a key appears twice in {keys!r}")
     if frozenset(n.lstrip("r") if n in MODIFIERS else n for n in names) in _BLOCKED:
         raise InputError(f"{keys!r} is not allowed: it would switch away from or close the program")
+    if "cmd" in names and sys.platform == "win32":
+        raise InputError("the Windows key is not allowed: it opens the operating system's menus, not the program's")
     return out
 
 

@@ -84,7 +84,7 @@ def screenshot(target: Target, max_width: int, thumb_width: int = 640) -> Shot:
     from PIL import Image
 
     try:
-        region = locate(target) if sys.platform == "win32" else None
+        region = locate(target) if sys.platform in ("win32", "darwin") else None
     except NotFound:
         region = None
     with mss.MSS() as sct:
@@ -113,6 +113,9 @@ def screenshot(target: Target, max_width: int, thumb_width: int = 640) -> Shot:
 
 def locate(target: Target) -> Region:
     """The host's region now, per the capture mode. Raises NotFound."""
+    if sys.platform == "darwin":
+        from .macos import locate as locate_macos
+        return locate_macos(target)
     if target.mode == "monitor":
         hwnd = find_hwnd(target.title, target.process) if (target.title or target.process) else None
         m = ctypes.windll.user32.GetSystemMetrics
