@@ -28,7 +28,12 @@ function Get-HostSettings {
     $appData = [Environment]::GetEnvironmentVariable('APPDATA')
     $local = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
     $s = [ordered]@{
-        Exe         = Get-EnvOr 'FACTORIO_EXE' "$pf86\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"
+        # server: headless server is a separate, non-Steam install (zip from factorio.com), the Steam copy is only the client.
+        # host:   the Steam game hosts the save itself (Steam Launch Options: --host <save>), RCON comes from config.ini.
+        Mode        = Get-EnvOr 'FACTORIO_MODE' 'server'
+        Exe         = Get-EnvOr 'FACTORIO_SERVER_EXE' 'C:\factorio-headless\bin\x64\factorio.exe'
+        SteamUrl    = Get-EnvOr 'FACTORIO_STEAM_URL' 'steam://rungameid/427520'
+        UserData    = Get-EnvOr 'FACTORIO_USER_DATA' "$appData\Factorio"
         ModDir      = Get-EnvOr 'FACTORIO_MOD_DIR' "$appData\Factorio\mods"
         HarnessDir  = Get-EnvOr 'FACTORIO_HARNESS_DIR' "$local\factorio-harness"
         RconPort    = [int](Get-EnvOr 'FACTORIO_RCON_PORT' '27015')
@@ -45,8 +50,9 @@ function Assert-Settings($S, [bool]$NeedExe) {
     if ([string]::IsNullOrEmpty($S.Password)) {
         Stop-WithError 2 'FACTORIO_RCON_PASSWORD is not set. Set it (user environment variable, same value for the grader) and restart the tool server.'
     }
-    if ($NeedExe -and -not (Test-Path -LiteralPath $S.Exe)) {
-        Stop-WithError 2 "Factorio executable not found at '$($S.Exe)'. Set FACTORIO_EXE to the full path of factorio.exe."
+    if ($S.Mode -notin @('server', 'host')) { Stop-WithError 2 "FACTORIO_MODE must be 'server' or 'host', got '$($S.Mode)'." }
+    if ($NeedExe -and $S.Mode -eq 'server' -and -not (Test-Path -LiteralPath $S.Exe)) {
+        Stop-WithError 2 "Headless server executable not found at '$($S.Exe)'. Unzip the headless build there or set FACTORIO_SERVER_EXE (or use FACTORIO_MODE=host)."
     }
 }
 
@@ -147,4 +153,23 @@ function Invoke-Rcon([string]$Server, [int]$Port, [string]$Password, [string]$Co
 function Get-LatestSave([string]$SavesDir) {
     if (-not (Test-Path -LiteralPath $SavesDir)) { return $null }
     return Get-ChildItem -LiteralPath $SavesDir -Filter *.zip -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
+
+# ---------------------------------------------------------------- config.ini (host mode)
+# Sets key=value inside [section], replacing an existing or commented-out line, else adding it. Only edit while the game is stopped:
+# a running game can overwrite external changes to config.ini when it saves its settings.
+function Set-IniValue([string]$Path, [string]$Section, [string]$Key, [string]$Value) {
+    $lines = New-Object System.Collections.Generic.List[string]
+    if (Test-Path -LiteralPath $Path) { foreach ($l in (Get-Content -LiteralPath $Path)) { $lines.Add([string]$l) } }
+    $inSection = $false; $done = $false; $sectionAt = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $t = $lines[$i].Trim()
+        if ($t -match '^\[(.+)\]$') { $inSection = ($Matches[1] -eq $Section); if ($inSection) { $sectionAt = $i }; continue }
+        if ($inSection -and $t -match ('^;?\s*' + [regex]::Escape($Key) + '\s*=')) { $lines[$i] = "$Key=$Value"; $done = $true; break }
+    }
+    if (-not $done) {
+        if ($sectionAt -ge 0) { $lines.Insert($sectionAt + 1, "$Key=$Value") }
+        else { $lines.Add("[$Section]"); $lines.Add("$Key=$Value") }
+    }
+    Set-Content -LiteralPath $Path -Value $lines -Encoding ASCII
 }

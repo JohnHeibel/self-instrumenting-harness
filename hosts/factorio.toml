@@ -17,8 +17,8 @@ reload_timeout_s = 300
 # agent can pick up control-stage changes itself through the game's own menus.
 none = []
 # "restart": UNTESTED, written from docs (hosts/factorio/README.md); john-pc verifies. Saves over RCON,
-# stops the headless server and the GUI client, restarts the server from the latest save with RCON
-# on, and relaunches the client with --mp-connect. Needs FACTORIO_RCON_PASSWORD in the tool server's
+# stops the game, starts it again from the latest save with RCON on, always launching the window
+# through Steam (steam://rungameid/427520; arguments live in Steam's Launch Options, set once). Needs FACTORIO_RCON_PASSWORD in the tool server's
 # environment. The path is relative, so the tool server must run from the repo root. Data-stage
 # changes need this full restart; control-stage changes may get by with a lighter one (README).
 restart = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "hosts/factorio/restart.ps1"]
