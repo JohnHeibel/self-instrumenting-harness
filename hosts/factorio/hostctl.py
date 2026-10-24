@@ -13,7 +13,8 @@
   make-start-save
             build hosts/factorio/saves/start.zip once per machine: a new map, joined once so the
             freeplay intro has played and been skipped (Tab, then Escape on the client window).
-            prepare copies it into each new run. Needs the toolserver package (for the keys):
+            prepare copies it into each new run. --start-save NAME picks another file there and
+            --map-gen-settings FILE shapes the map (map-gen/no-enemies.json: no biter bases). Needs the toolserver package (for the keys):
               uv run --project runner python hosts/factorio/hostctl.py make-start-save --run-dir runs/start-save
 
 Layout under <run>/host/ (never mounted into the agent's container):
@@ -70,6 +71,12 @@ class Host:
         self.seed = args.seed
         self.final = getattr(args, "final", False)
         self.no_grader = getattr(args, "no_grader", False)
+        self.start_save = getattr(args, "start_save", "start.zip")
+        self.map_gen = getattr(args, "map_gen_settings", None)
+
+    def _create_args(self, save: Path) -> list[str]:
+        return (["--create", str(save)] + (["--map-gen-seed", str(self.seed)] if self.seed else [])
+                + (["--map-gen-settings", str(Path(self.map_gen).resolve())] if self.map_gen else []))
 
     # Paths ------------------------------------------------------------------------
 
@@ -123,11 +130,10 @@ class Host:
         (self.dir / "server-settings.json").write_text(json.dumps(settings, indent=2))
         if create and not list((self.server / "saves").glob("*.zip")):
             save = self.server / "saves" / "start.zip"
-            if (SAVES / "start.zip").exists() and not self.seed:
-                shutil.copy2(SAVES / "start.zip", save)
-                return f"prepared {self.dir} from {SAVES / 'start.zip'}"
-            args = ["--create", str(save)] + (["--map-gen-seed", str(self.seed)] if self.seed else [])
-            self._run_exe(args, self.server, timeout=180)
+            if (SAVES / self.start_save).exists() and not self.seed and not self.map_gen:
+                shutil.copy2(SAVES / self.start_save, save)
+                return f"prepared {self.dir} from {SAVES / self.start_save}"
+            self._run_exe(self._create_args(save), self.server, timeout=180)
             if not save.exists():
                 raise HostError(f"--create did not write {save}; see {self.server / 'factorio-current.log'}")
         return f"prepared {self.dir}"
@@ -239,8 +245,7 @@ class Host:
             raise HostError(f"{self.run_dir} is in use; make-start-save needs a fresh --run-dir")
         self.prepare(create=False)
         save = self.server / "saves" / "start.zip"
-        self._run_exe(["--create", str(save)] + (["--map-gen-seed", str(self.seed)] if self.seed else []),
-                      self.server, timeout=180)
+        self._run_exe(self._create_args(save), self.server, timeout=180)
         self.start()
         try:
             time.sleep(5)                                   # the intro is playing
@@ -255,8 +260,8 @@ class Host:
         finally:
             self.stop()
         SAVES.mkdir(exist_ok=True)
-        shutil.copy2(save, SAVES / "start.zip")
-        return f"wrote {SAVES / 'start.zip'}; check {self.run_dir / 'after-intro.png'} shows the normal game view"
+        shutil.copy2(save, SAVES / self.start_save)
+        return f"wrote {SAVES / self.start_save}; check {self.run_dir / 'after-intro.png'} shows the normal game view"
 
     # Helpers ----------------------------------------------------------------------
 
@@ -385,6 +390,10 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0, help="map seed for the starting save (0: random)")
     ap.add_argument("--final", action="store_true", help="stop: the run is over, so stop the grader too")
     ap.add_argument("--no-grader", action="store_true", help="start: without the grader mod and process")
+    ap.add_argument("--start-save", default="start.zip",
+                    help="prepare/make-start-save: which starting save in hosts/factorio/saves/ to use or write")
+    ap.add_argument("--map-gen-settings", help="prepare/make-start-save: a map-gen-settings JSON file for a new "
+                    "map, e.g. hosts/factorio/map-gen/no-enemies.json")
     args = ap.parse_args()
     host = Host(args)
     try:
