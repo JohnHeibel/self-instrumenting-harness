@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FeedItem, HookView, Milestone, Run, TRec } from '../data/model'
+import type { FeedItem, HookView, Milestone, Run, Tone, TRec } from '../data/model'
+import type { Spectator } from '../data/source'
 import { big, hms, span } from '../util'
 
 /** Wall-clock hold times, so nothing flashes by at timelapse speed. */
@@ -8,28 +9,85 @@ const READ_HOLD_MS = 3_000
 /** An event counts as "just happened" for this long in run time. */
 const RECENT = 10 * 60_000
 
-export function Header({ run, at }: { run: Run; at: number }) {
+export function Header({ run, at, now, onJump }: { run: Run; at: number; now: number; onJump: () => void }) {
   const c = run.counts(at)
   return (
     <header className="head">
       <div className="brand">Sisyphus<em lang="grc">Σίσυφος</em><span>{run.title}</span></div>
-      {run.live && <span className="pill live" title="New records appear as the run writes them">
-        <i className="livedot" />{at >= run.t1 - 2000 ? 'Live' : 'Live run · behind'}</span>}
+      <div className="badges">
+        <LiveBadge run={run} at={at} now={now} onJump={onJump} />
+        <FairPlay run={run} at={at} />
+      </div>
       <dl className="stats">
         <div><dt>Tool calls</dt><dd>{c.calls.toLocaleString()}</dd></div>
         <div className="fail"><dt>Failed</dt><dd>{c.failed}</dd></div>
         <div><dt>Tokens</dt><dd>{big(run.tokens(at))}</dd></div>
-        <div><dt>Hooks built</dt><dd>{run.hooks(at).length}</dd></div>
+        <div><dt>Hooks built</dt><dd>{run.toolsBuilt(at)}</dd></div>
       </dl>
       <div className="clock" aria-label="Run time">{hms(at - run.t0)}</div>
     </header>
   )
 }
 
+/** Where the view is relative to the run: following it live, behind it, idle, or replaying a finished run. */
+export function LiveBadge({ run, at, now, onJump }: { run: Run; at: number; now: number; onJump: () => void }) {
+  const behind = run.t1 - at
+  if (run.ended) return <span className="pill" title="This run has ended; you are replaying it"><i className="dot" />Run ended · replay</span>
+  const live = run.isLive(now)
+  if (!live) return (
+    <span className="pill idle" title="No run_ended record, but nothing has been written for two minutes">
+      <i className="dot" />Idle · last record {span(now - run.t1)} ago
+      {behind > 2000 && <button className="jump" onClick={onJump}>Jump to latest</button>}
+    </span>
+  )
+  if (behind <= 2000) return <span className="pill live" title="Following the newest records as they are written"><i className="livedot" />Live</span>
+  return (
+    <span className="pill behind" title="Replaying earlier in a run that is still going">
+      <i className="dot" />Behind by {span(behind)}
+      <button className="jump" onClick={onJump}>Jump to live</button>
+    </span>
+  )
+}
+
+const signalName = (s: string) => s.replace(/_/g, ' ')
+const show = (v: unknown) => (v == null || v === '' ? '' : typeof v === 'string' ? v : JSON.stringify(v))
+
+/** Evidence of fair play: calm while no signal has fired, porphyry once one has. Details on hover or focus. */
+export function FairPlay({ run, at }: { run: Run; at: number }) {
+  const f = run.integrity(at)
+  const label = { fair: 'Played fair', broken: 'Fair play broken', unverified: 'Fair play unverified', unmonitored: 'Fair play not monitored' }[f.status]
+  const t0 = run.t0
+  return (
+    <span className={`pill fair ${f.status}`} tabIndex={0} aria-label={label}>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        {f.status === 'broken'
+          ? <path d="M3 3 L13 13 M13 3 L3 13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          : <path d="M3 8.5 L6.5 12 L13 4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />}
+      </svg>
+      {label}
+      <span className="pop" role="tooltip">
+        <b>Fair-play checks</b>
+        {f.signals.length === 0 && <span className="row dim">{f.status === 'unmonitored' ? 'The run has no grader, so nothing is checked.' : 'No signal has fired. The grader watches the host for outside help (console commands, cheat modes) and found none.'}</span>}
+        {f.signals.map(s => (
+          <span key={s.signal} className={`row ${s.active ? (s.signal === 'grader_unavailable' ? 'warn' : 'bad') : 'ok'}`}>
+            <i />
+            <span><em>{signalName(s.signal)}</em> · {s.active ? `on since ${hms(s.since - t0)}` : s.everActive ? `was on, off since ${hms(s.since - t0)}` : 'off'}
+              {show(s.detail) && <small>{show(s.detail)}</small>}
+              {show(s.evidence) && <small className="ev">{show(s.evidence)}</small>}</span>
+          </span>
+        ))}
+        {f.grader && <span className={`row ${f.grader.ok ? 'ok' : 'warn'}`}><i /><span>
+          <em>grader</em> · {f.grader.ok ? 'can reach the host' : `cannot reach the host since ${hms(f.grader.since - t0)}`}
+          {f.grader.detail && <small>{f.grader.detail}</small>}</span></span>}
+      </span>
+    </span>
+  )
+}
+
 export function Milestones({ items }: { items: Milestone[] }) {
   const current = items.findIndex(m => m.t === undefined)
   return (
-    <ol className="strip" aria-label="Milestones">
+    <ol className={`strip ${items.length > 18 ? 'xs' : items.length > 11 ? 'sm' : ''}`} aria-label="Milestones">
       {items.map((m, i) => (
         <li key={m.id} className={m.t !== undefined ? 'done' : i === current ? 'current' : ''} title={m.evidence ?? 'not reached yet'}>
           <span>{m.name}</span>
@@ -95,11 +153,28 @@ export function Mind({ run, at, playing, opening }: { run: Run; at: number; play
         <div className="mtitle">{r.title}</div>
         <p className="thought">{r.text.slice(0, n)}{n < r.text.length && <i className="caret" />}</p>
       </> : <p className="thought dim">{opening ? 'Waiting for the agent’s first thought.' : 'No reasoning summary yet.'}</p>}
+      <Usage run={run} at={at} />
     </section>
   )
 }
 
-type Notice = { key: string; t: number; kind: 'new' | 'rewrite' | 'break' | 'repair'; title: string; body: string }
+/** The newest model request: what it read and wrote, and how full its context was. */
+function Usage({ run, at }: { run: Run; at: number }) {
+  const u = run.usage(at)
+  if (!u) return null
+  const cached = u.input ? Math.round((u.cached / u.input) * 100) : 0
+  const fill = u.contextWindow ? Math.min(100, Math.round((u.input / u.contextWindow) * 100)) : undefined
+  return (
+    <div className="usage" title="From the runner's usage record after each model request">
+      <span>request {u.requests.toLocaleString()}</span>
+      <span>{big(u.input)} in{u.input ? ` · ${cached}% cached` : ''}</span>
+      <span>{big(u.output + u.reasoning)} out</span>
+      {fill !== undefined && <span className="ctx">context {fill}%<i><b style={{ width: `${fill}%` }} /></i></span>}
+    </div>
+  )
+}
+
+type Notice = { key: string; t: number; kind: 'new' | 'rewrite' | 'break' | 'repair' | 'restart' | 'interrupt' | 'violation'; title: string; body: string }
 
 function recentNotices(run: Run, at: number): Notice[] {
   const out: Notice[] = []
@@ -109,10 +184,13 @@ function recentNotices(run: Run, at: number): Notice[] {
   for (const r of run.upTo('hook_status', at)) if (r.status !== 'ok' && at - r.t < RECENT)
     out.push({ key: `S${r.t}${r.hook}`, t: r.t, kind: r.status === 'broken' ? 'break' : 'repair',
       title: `${r.hook} ${r.status === 'broken' ? 'broke' : 'was repaired'}`, body: r.detail ?? '' })
+  for (const m of run.markers) if (m.t <= at && at - m.t < RECENT && (m.kind === 'restart' || m.kind === 'interrupt' || m.kind === 'violation'))
+    out.push({ key: `M${m.t}${m.label}`, t: m.t, kind: m.kind, title: m.kind === 'violation' ? `Fair play: ${m.label}` : m.label, body: m.detail ?? '' })
   return out.sort((a, b) => a.t - b.t)
 }
 
-const NOTICE_LABEL = { new: 'New hook', rewrite: 'Rewrite', break: 'Break', repair: 'Repair' }
+const NOTICE_LABEL = { new: 'New hook', rewrite: 'Rewrite', break: 'Break', repair: 'Repair', restart: 'Restart', interrupt: 'Interrupted', violation: 'Fair play' }
+const PLAIN_BODY = ['break', 'repair', 'restart', 'interrupt', 'violation']
 
 /** Hook events, one after another, each held for a fixed wall-clock time. A break never hides the rewrite that follows it. */
 export function Event({ run, at }: { run: Run; at: number }) {
@@ -142,18 +220,36 @@ export function Event({ run, at }: { run: Run; at: number }) {
     <section className={`event ${a ? a.kind : 'idle'}`} aria-live="polite">
       {a && <>
         <div className="etag">{NOTICE_LABEL[a.kind]}{st.queue.length > 0 && <small> · {st.queue.length} more</small>}</div>
-        <div className="etext"><b>{a.title}</b>{a.body && <span> {a.kind === 'break' || a.kind === 'repair' ? a.body : `“${a.body}”`}</span>}</div>
+        <div className="etext"><b>{a.title}</b>{a.body && <span> {PLAIN_BODY.includes(a.kind) ? a.body : `“${a.body}”`}</span>}</div>
       </>}
     </section>
   )
 }
 
-/** The newest screenshot with its age. Before the first one, an engraved column holds the place. */
-export function Screen({ run, at, artifactUrl }: { run: Run; at: number; artifactUrl: (p: string) => string }) {
+/** The last image shown stays up while the next one is still loading. */
+function useSticky(url: string | undefined): string | undefined {
+  const last = useRef<string>(undefined)
+  if (url) last.current = url
+  return url ?? last.current
+}
+
+/** Spectator frames older than this stand in for a stale agent screenshot only up to the point they are themselves stale. */
+const STALE_SHOT_MS = 30_000
+
+/** What the agent last saw, with its age. When it hasn't looked for a while and the view is live, the spectator
+ *  frame (the host window, which the agent never gets) shows the host as it is now, with the agent's last look inset.
+ *  Before the first screenshot, an engraved column holds the place. */
+export function Screen({ run, at, now, following, spectator, imageUrl }: {
+  run: Run; at: number; now: number; following: boolean; spectator: Spectator | null; imageUrl: (r: TRec) => string | undefined
+}) {
   const shot = run.screenshot(at)
+  const shotUrl = useSticky(shot ? imageUrl(shot) : undefined)
+  const age = shot ? (following ? now : at) - shot.t : Infinity
+  const spec = following && spectator && age > STALE_SHOT_MS ? spectator : null
+  const specUrl = useSticky(spectator?.url)
   return (
     <figure className="screen">
-      {shot ? <img src={artifactUrl(shot.artifact)} alt="What the agent last saw" /> : (
+      {spec ? <img src={specUrl} alt="The host window as a spectator sees it" /> : shot && shotUrl ? <img src={shotUrl} alt="What the agent last saw" /> : (
         <div className="empty">
           <svg viewBox="0 0 120 200" width="150" aria-hidden="true">
             <g fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round">
@@ -163,10 +259,18 @@ export function Screen({ run, at, artifactUrl }: { run: Run; at: number; artifac
               <rect x="30" y="166" width="60" height="7" /><rect x="22" y="173" width="76" height="9" /><rect x="14" y="182" width="92" height="9" />
             </g>
           </svg>
-          <span>Waiting for the agent to look at the host</span>
+          <span>{shot ? 'Loading the screenshot…' : 'Waiting for the agent to look at the host'}</span>
         </div>
       )}
-      {shot && <figcaption>Last screenshot it looked at · {span(at - shot.t)} ago</figcaption>}
+      {spec
+        ? <figcaption className="spectator">Spectator view · the host window, {span(now - spec.t)} old · the agent can't see this</figcaption>
+        : shot && <figcaption>Last screenshot it looked at · {span(age)} ago</figcaption>}
+      {spec && shotUrl && (
+        <div className="inset">
+          <img src={shotUrl} alt="What the agent last saw" />
+          <span>What the agent last saw · {span(age)} ago</span>
+        </div>
+      )}
     </figure>
   )
 }
@@ -217,7 +321,7 @@ export function HookLibrary({ hooks, onOpen }: { hooks: HookView[]; onOpen: (nam
           const v = h.versions[h.versions.length - 1]
           return (
             <li key={h.name} style={{ paddingLeft: depth * 16 }}>
-              <button onClick={() => onOpen(h.name)} title={`Open ${h.name}: source and version history`}>
+              <button onClick={() => onOpen(h.name)} title={`Open ${h.name}: source and version history${h.extension ? ` · from extension ${h.extension}` : ''}`}>
                 <span className="name">{depth > 0 ? '└ ' : ''}{h.name}</span>
                 {h.status === 'broken' && <span className="st broken">broken</span>}
                 {h.status === 'repaired' && <span className="st repaired">repaired</span>}
@@ -238,14 +342,17 @@ const TAG: Record<FeedItem['kind'], [string, string]> = {
   docs: ['docs', 'var(--muted-hi)'], extension: ['build', 'var(--lapis)'], meta: ['meta', 'var(--muted)'],
   say: ['says', 'var(--text)'], milestone: ['done', 'var(--ochre)'], marker: ['event', 'var(--porphyry)'],
   goal: ['goal', 'var(--muted-hi)'], fail: ['failed', 'var(--porphyry)'], status: ['hook', 'var(--porphyry)'],
+  host: ['cmd', 'var(--ochre)'], grader: ['grader', 'var(--muted-hi)'], fair: ['fair', 'var(--porphyry)'],
+  check: ['check', 'var(--muted)'], turn: ['turn', 'var(--ochre)'],
 }
+const TONE: Record<Tone, string> = { good: 'var(--verde)', bad: 'var(--porphyry)', warn: 'var(--ochre)', info: 'var(--lapis)', muted: 'var(--muted)' }
 
 /** Plain-language feed. Failures are marked in the line, and the count and latest one are pinned above it. */
 export function Feed({ run, at, items }: { run: Run; at: number; items: FeedItem[] }) {
   const t0 = run.t0
   const calls = run.upTo('tool_call', at)
   let failed = 0, last: TRec | undefined
-  for (const c of calls) if (!c.ok) { failed++; last = c }
+  for (const c of calls) if (!c.ok && c.via !== 'health_check') { failed++; last = c }
   return (
     <section className="feed">
       <h2>What it is doing</h2>
@@ -260,7 +367,7 @@ export function Feed({ run, at, items }: { run: Run; at: number; items: FeedItem
           return (
             <div key={i} className={`line ${it.kind}`} title={it.text}>
               <span className="ts">{hms(it.t - t0)}</span>
-              <span className="tag" style={{ color }}>{label}</span>
+              <span className="tag" style={{ color: it.tone ? TONE[it.tone] : color }}>{label}</span>
               <span className="msg">{it.text}{it.count > 1 && <em> ×{it.count}</em>}</span>
             </div>
           )

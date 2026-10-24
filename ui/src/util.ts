@@ -1,3 +1,8 @@
+import { useEffect, useState } from 'react'
+
+/** Replay speeds, in run seconds per real second. */
+export const SPEEDS = [60, 300, 600, 1800]
+
 export const two = (n: number) => String(Math.floor(n)).padStart(2, '0')
 
 /** Elapsed run time as h:mm:ss. */
@@ -39,4 +44,31 @@ export function diffLines(before: string, after: string): DiffLine[] {
   while (i < n) out.push({ op: '-', text: a[i++] })
   while (j < m) out.push({ op: '+', text: b[j++] })
   return out
+}
+
+/** Share of change from the first value to the latest, comparing the mean of the first few with the mean of the last few. */
+export function trend(values: number[]): { pct: number } | undefined {
+  if (values.length < 2) return undefined
+  const k = Math.min(3, Math.floor(values.length / 2))
+  const mean = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length
+  const first = mean(values.slice(0, k)), last = mean(values.slice(-k))
+  return first > 0 ? { pct: (last - first) / first } : undefined
+}
+
+/** Least-squares line through (i, v): returns the fitted value at x = 0 and x = n - 1. */
+export function fitLine(values: number[]): [number, number] | undefined {
+  const n = values.length
+  if (n < 3) return undefined
+  const mx = (n - 1) / 2, my = values.reduce((s, v) => s + v, 0) / n
+  let sxy = 0, sxx = 0
+  values.forEach((v, i) => { sxy += (i - mx) * (v - my); sxx += (i - mx) ** 2 })
+  const b = sxy / sxx, a = my - b * mx
+  return [a, a + b * (n - 1)]
+}
+
+/** Re-renders every `ms`, so ages ("2m ago", "behind by 12m") keep counting while nothing else changes. */
+export function useNow(ms = 1000): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), ms); return () => clearInterval(id) }, [ms])
+  return now
 }

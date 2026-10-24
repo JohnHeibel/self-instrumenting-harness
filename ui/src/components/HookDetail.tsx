@@ -14,8 +14,9 @@ export function HookDetail({ hook, run, onClose }: { hook: HookView; run: Run; o
           <span className="name">{hook.name}</span>
           <span className="lang">{v.language}</span>
           <span className="lang">{v.kind === 'in_host' ? 'runs inside the host program' : 'helper outside the host program'}</span>
-          {v.dependsOn.length > 0 && <span style={{ color: 'var(--text-muted)' }}>built on {v.dependsOn.join(', ')}</span>}
-          <span style={{ color: 'var(--text-muted)' }}>· {hook.calls} calls</span>
+          {(v.extension || hook.extension) && <span style={{ color: 'var(--muted)' }}>extension {v.extension || hook.extension}</span>}
+          {v.dependsOn.length > 0 && <span style={{ color: 'var(--muted)' }}>built on {v.dependsOn.join(', ')}</span>}
+          <span style={{ color: 'var(--muted)' }}>· {hook.calls} calls</span>
           <button className="btn close" onClick={onClose}>Close</button>
         </div>
         <div>
@@ -29,6 +30,7 @@ export function HookDetail({ hook, run, onClose }: { hook: HookView; run: Run; o
             {prev && <span>showing changes from v{prev.version}</span>}
           </div>
           <div className="reason" style={{ marginTop: 12 }}>“{v.reason}”</div>
+          {v.sourceRef && <div className="sref">Archived in the run as {v.sourceRef}{hook.checks > 0 && ` · ${hook.checks} health check${hook.checks === 1 ? '' : 's'}`}</div>}
         </div>
         <pre className="code">
           {v.files.map(f => {

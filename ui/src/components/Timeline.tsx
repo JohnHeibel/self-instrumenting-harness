@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Marker, Run } from '../data/model'
-import { span } from '../util'
-
-export const SPEEDS = [60, 300, 600, 1800]
+import { KEY_KINDS, type Marker, type Run } from '../data/model'
+import { SPEEDS, span } from '../util'
 
 // Canvas pixels. One chart: the slope is real progress (milestones reached) over time.
 const W = 1840, X0 = 24, X1 = 1816, BASE = 156, PEAK = 50, R = 14
@@ -21,6 +19,20 @@ function place<T extends { x: number }>(items: T[], widthOf: (i: T) => number, r
     if (row < 0) row = ends.indexOf(Math.min(...ends))
     ends[row] = b
     return { item, x: item.x, row, anchor, w }
+  })
+}
+
+/** Milestone labels sit above the slope; each takes the lowest tier where its box clears the ones already placed. */
+function placeMilestones<T extends { x: number; y: number; label: string }>(items: T[]): Placed<T>[] {
+  const boxes: { x0: number; x1: number; y: number }[] = []
+  return items.map(item => {
+    const w = item.label.length * 9.2
+    const x0 = item.x - w / 2 - 6, x1 = item.x + w / 2 + 6
+    let row = 0
+    const yOfRow = (r: number) => item.y - 16 - r * 22
+    while (row < 6 && boxes.some(b => b.x1 > x0 && b.x0 < x1 && Math.abs(b.y - yOfRow(row)) < 20)) row++
+    boxes.push({ x0, x1, y: yOfRow(row) })
+    return { item, x: Math.min(W - 8 - w / 2, Math.max(8 + w / 2, item.x)), row, anchor: 'middle' as const, w }
   })
 }
 
@@ -48,8 +60,8 @@ function slopeAt(ss: Seg[], x: number): Pt & { ang: number } {
   return { ...p, ang: Math.atan2(q.y - o.y, q.x - o.x) }
 }
 
-export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
-  run: Run; at: number; playing: boolean; speed: number
+export function Timeline({ run, at, playing, speed, live, onJump, onSeek, onPlay, onSpeed }: {
+  run: Run; at: number; playing: boolean; speed: number; live: boolean; onJump: () => void
   onSeek: (t: number) => void; onPlay: (p: boolean) => void; onSpeed: (s: number) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -73,10 +85,14 @@ export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
     const onSlope = (m: Marker) => ({ ...m, x: fx(m.t), y: slopeAt(ss, fx(m.t)).y })
     const hooks = run.markers.filter(m => m.kind === 'hook').map(m => ({ ...m, x: fx(m.t) }))
     const brk = run.markers.filter(m => m.kind === 'break' || m.kind === 'repair').map(onSlope)
+    const events = run.markers.filter(m => m.kind === 'restart' || m.kind === 'interrupt' || m.kind === 'prompt' || m.kind === 'violation').map(m => ({ ...m, x: fx(m.t) }))
+    // The summit is where the newest milestone list ends. Where an announcement raised it, a line shows the old summit.
+    const total = Math.max(1, run.milestonesDefined.length)
+    const grew = run.growth.map(gr => ({ ...gr, x: fx(gr.t), y: BASE - (gr.from / total) * LEVEL }))
     return {
       ss, d, area: `${d}L${X1},${BASE}L${X0},${BASE}Z`,
-      ms: place(msP, m => m.label.length * 9.2, 2, true), hooks: place(hooks, m => m.label.length * 8.4, 3),
-      brk: place(brk, m => m.label.length * 8.4, 3),
+      ms: placeMilestones(msP), hooks: place(hooks, m => m.label.length * 8.4, 3),
+      brk: place(brk, m => Math.min(34, m.label.length) * 8.4, 3), events, grew,
       fails: run.of('tool_call').filter(c => !c.ok).map(c => c.t),
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -110,21 +126,23 @@ export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
 
   const hours = Array.from({ length: Math.floor(dur / 3_600_000) + 1 }, (_, h) => h).filter(h => h % 2 === 0)
   const step = (dir: 1 | -1) => {
-    const ms = run.markers.filter(m => m.kind !== 'compaction')
+    const ms = run.markers.filter(m => KEY_KINDS.includes(m.kind))
     const next = dir > 0 ? ms.find(m => m.t > at + 1000) : [...ms].reverse().find(m => m.t < at - 60_000)
     if (next) onSeek(next.t + 2000)
   }
-  const reached = run.markers.filter(m => m.kind === 'milestone' && m.t <= at).length
+  const announced = run.milestones(at)
+  const reached = announced.filter(m => m.t !== undefined).length
 
   return (
     <section className="timeline">
       <div className="thead">
         <div>
-          <h2>The climb <span>{reached} of {run.milestonesDefined.length} milestones · {span(dur)} run</span></h2>
+          <h2>The climb <span>{reached} of {announced.length} milestones · {span(dur)} run</span></h2>
           <p>The slope rises with each milestone the agent reaches. The boulder marks where the run is now. Click or drag to jump.</p>
         </div>
         <div className="controls">
           <button onClick={() => step(-1)} title="Previous key moment">◀ Prev moment</button>
+          {live && at < run.t1 - 2000 && <button className="golive" onClick={onJump} title="Follow the newest moment again">Jump to live ▶|</button>}
           <button className="play" onClick={() => onPlay(!playing)}>{playing ? 'Pause' : 'Play'}</button>
           <button onClick={() => step(1)} title="Next key moment">Next moment ▶</button>
           <span className="speeds" role="group" aria-label="Playback speed">
@@ -165,7 +183,7 @@ export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
           {g.ms.map(p => (
             <g key={p.item.t} opacity={dim(p.item.t)} onMouseDown={seekTo(p.item.t)} className="hit">
               <title>{span(p.item.t - run.t0)} · {p.item.label}</title>
-              <rect x={p.x - 6} y={p.item.y - 6} width={12} height={12} transform={`rotate(45 ${p.x} ${p.item.y})`}
+              <rect x={p.item.x - 6} y={p.item.y - 6} width={12} height={12} transform={`rotate(45 ${p.item.x} ${p.item.y})`}
                     fill={p.item.t <= at ? '#ece9e1' : '#2c2f34'} stroke="#ece9e1" strokeWidth={1.5} />
               <text x={p.x} y={p.item.y - 16 - p.row * 22} textAnchor="middle" className="t-ms">{p.item.label}</text>
             </g>
@@ -174,13 +192,39 @@ export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
           {/* breaks and repairs: notches cut into the slope, labelled inside the stone */}
           {g.brk.map(p => {
             const hue = p.item.kind === 'repair' ? 'var(--verde)' : 'var(--porphyry)'
+            const label = p.item.label.length > 34 ? p.item.label.slice(0, 33) + '…' : p.item.label
             const ly = p.item.y + 28 + p.row * 18
             return (
               <g key={p.item.t + p.item.label} opacity={dim(p.item.t)} onMouseDown={seekTo(p.item.t)} className="hit">
-                <title>{span(p.item.t - run.t0)} · {p.item.label}</title>
+                <title>{span(p.item.t - run.t0)} · {p.item.label}{p.item.detail ? ` · ${p.item.detail}` : ''}</title>
                 <line x1={p.x} x2={p.x} y1={p.item.y} y2={ly - 12} stroke={hue} strokeWidth={1.5} />
                 <path d={`M${p.x - 8},${p.item.y - 2} L${p.x + 8},${p.item.y - 2} L${p.x},${p.item.y + 12} Z`} fill={hue} />
-                <text x={p.anchor === 'start' ? p.x + 4 : p.x - 4} y={ly} textAnchor={p.anchor === 'start' ? 'start' : 'end'} className="t-brk" style={{ fill: hue }}>{p.item.label}</text>
+                <text x={p.anchor === 'start' ? p.x + 4 : p.x - 4} y={ly} textAnchor={p.anchor === 'start' ? 'start' : 'end'} className="t-brk" style={{ fill: hue }}>{label}</text>
+              </g>
+            )
+          })}
+
+          {/* where the milestone list grew: the old summit stays as a dashed line */}
+          {g.grew.map(gr => (
+            <g key={gr.t} opacity={dim(gr.t)} onMouseDown={seekTo(gr.t)} className="hit">
+              <title>{span(gr.t - run.t0)} · milestones grew from {gr.from} to {gr.to}: {gr.names.join(', ')}</title>
+              <line x1={gr.x} x2={X1} y1={gr.y} y2={gr.y} stroke="var(--ochre)" strokeDasharray="3 5" opacity={0.55} />
+              <path d={`M${gr.x},${gr.y - 9} L${gr.x},${gr.y + 9} M${gr.x - 5},${gr.y - 4} L${gr.x},${gr.y - 9} L${gr.x + 5},${gr.y - 4}`} fill="none" stroke="var(--ochre)" strokeWidth={1.6} />
+              <text x={gr.x + 8} y={gr.y + 15} className="t-brk" style={{ fill: 'var(--ochre)' }}>+{gr.to - gr.from} milestones</text>
+            </g>
+          ))}
+
+          {/* run events: restarts, interruptions and prompts, as short stems on the base line */}
+          {g.events.map(e => {
+            const hue = e.kind === 'interrupt' ? 'var(--ochre)' : e.kind === 'prompt' ? 'var(--stone-hi)' : e.kind === 'violation' ? 'var(--porphyry)' : 'var(--muted-hi)'
+            return (
+              <g key={e.t + e.label} opacity={dim(e.t)} onMouseDown={seekTo(e.t)} className="hit">
+                <title>{span(e.t - run.t0)} · {e.kind === 'violation' ? 'Fair play: ' : ''}{e.label}{e.detail ? ` · ${e.detail}` : ''}</title>
+                <line x1={e.x} x2={e.x} y1={BASE - 30} y2={BASE} stroke={hue} strokeWidth={1.2} strokeDasharray="2 2" />
+                {e.kind === 'restart' && <circle cx={e.x} cy={BASE - 33} r={4} fill="none" stroke={hue} strokeWidth={1.6} />}
+                {e.kind === 'interrupt' && <path d={`M${e.x - 5},${BASE - 28} L${e.x + 5},${BASE - 28} L${e.x},${BASE - 38} Z`} fill={hue} />}
+                {e.kind === 'violation' && <path d={`M${e.x},${BASE - 43} L${e.x + 6},${BASE - 36} L${e.x},${BASE - 29} L${e.x - 6},${BASE - 36} Z`} fill={hue} />}
+                {e.kind === 'prompt' && <rect x={e.x - 3.5} y={BASE - 37} width={7} height={7} fill="none" stroke={hue} strokeWidth={1.4} />}
               </g>
             )
           })}
@@ -213,6 +257,10 @@ export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
           <span><i style={{ background: 'var(--porphyry)' }} />Break</span>
           <span><i style={{ background: 'var(--verde)' }} />Repair</span>
           <span><i style={{ background: 'var(--porphyry)', width: 3 }} />Failed call</span>
+          <span><i style={{ border: '1.5px solid var(--muted-hi)', borderRadius: '50%', background: 'none' }} />Restart</span>
+          <span><i style={{ background: 'var(--ochre)', clipPath: 'polygon(50% 0, 100% 100%, 0 100%)' }} />Interrupt</span>
+          <span><i style={{ border: '1.5px solid var(--stone-hi)', background: 'none' }} />Prompt</span>
+          <span><i style={{ background: 'var(--porphyry)', transform: 'rotate(45deg)' }} />Fair-play violation</span>
         </div>
         <div className="mist" aria-hidden="true"><i /><i /></div>
       </div>
