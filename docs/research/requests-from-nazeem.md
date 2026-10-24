@@ -64,3 +64,8 @@ Evidence: mc-overnight-01's `mc_exec` declared `timeout_s: 1200`; its backend (b
 Change: `HostConfig.max_tool_timeout_s` (default 90, `[extensions] max_tool_timeout_s`, or `toolserver --max-tool-timeout N`) clamps
 each extension tool's declared `timeout_s` at manifest parse time (so `run_script` sees the clamped value too); a timeout now reads
 "<tool> timed out after N s; check its backend is running". Test: `toolserver/tests/test_tool_timeout_cap.py`. Takes effect at tool server restart.
+
+## 2026-10-24 (critic, cycle 3: Bash bypasses the log) prompts/brief.md
+Evidence (mc-overnight-01, 02:10-02:21): in 12 min the model made 35 requests; the tool server logged 9 calls. The agent built `skills/sk.py` and drives its
+in-host bridge from Bash, so none of that is in events.jsonl: hook share reads 0%, reuse is unmeasurable, and the rules ("every call to your extensions is recorded and reviewed") cannot be checked.
+Change: one bullet in the brief's Skill library section: reach the in-program part through registered tools or `run_script`, not ad-hoc shell. Request: consider also a runner-side counter of Bash calls (the stream has them) as a `marker` or `agent_state`, so coverage can include them; `tools/critic/analyze.py` now prints the model-side tool mix from runner.jsonl.

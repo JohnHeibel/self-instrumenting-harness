@@ -58,6 +58,7 @@ Each step you take (every tool call, every shell command) re-reads your whole co
 
 Whatever you learn how to do, keep so it never costs you again. Keep `/home/agent/work/skills/` with an `INDEX.md`: one line per skill, saying what it does, how to call it (a tool name, or `run_script` with `file` and `args`), what it returns, and where it is known to fail. Save a script there the third time you run it, and add its line the same step. Before starting any chore, read the index and use a skill if one fits; when one breaks, fix it in place rather than working around it by hand. The runner shows you this index again after every restart or compaction, so keep it short and current.
 
+- **Reach your in-program part through registered tools, not around them.** Calls from a shell command straight to your bridge are invisible to the log, so they count as neither tool use nor reuse, and cannot be reviewed against the rules. Put the call behind a tool of your extension (or `run_script`, which calls your tools) and use that.
 - **Every call to something you built needs a short timeout** (seconds, not minutes) and a clear error such as "bridge not responding", so a dead bridge costs one quick failure, not minutes of waiting.
 - **Starting your own in-program part** (typing a command, pressing keys) is a chore like any other: script it once, with a check that it came up, and call that.
 

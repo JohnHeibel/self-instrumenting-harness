@@ -16,3 +16,9 @@ Grader: still "no readable world" at 08:56Z; milestones cannot fire until the sa
 Evidence: grader.jsonl has only `grader_status ok=false "no readable world"` since 08:43Z although the save exists; `nbt.load(level.dat)` raised "bad NBT tag 116". Cause: `out[string()] = payload(et)` evaluates the value before the key, so every compound read the payload before the name. No milestone could ever fire (milestones are the key metric).
 Fix: read the name first (graders/minecraft/nbt.py) plus a test with a compound; 7 grader tests pass. The grader is a separate process: restart it (not the runner) to pick the fix up.
 Also: the failure detail hid the parse error; next improvement is to include the exception text in the status.
+
+## 2026-10-24 02:25 PDT, cycle 3
+Evidence: grader works after restart: first_wood and crafting_table fired at 09:13:29Z (about 31 min in; both retroactive, from stats), at 4.27M total / 143k uncached tokens. Window 02:10-02:21: 35 requests, 3.7M tokens (106k/request, context 117k), only 21k uncached; 9 logged harness calls vs 7 Bash; steps median 75 s apart (agent now works through Bash + its own sk.py, calls to the bridge not in events.jsonl).
+Cost: metrics blind spot (hook share 0%, reuse invisible, rules review impossible). Total-token per milestone is dominated by context re-read (100k per request); uncached is the fair measure, so report uncached per milestone.
+Fix: brief bullet to route bridge calls through registered tools or run_script; analyzer shows model-side mix and skill reuse. Skill library exists (skills/INDEX.md), good sign: the continue-prompt injection will pick it up.
+Trend (uncached tokens at milestone): first_wood/crafting_table 143k at t+31 min; baseline for later cycles.
