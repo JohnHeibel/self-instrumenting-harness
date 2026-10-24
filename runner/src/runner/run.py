@@ -36,6 +36,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+from . import hostlog
 from typing import Callable
 
 from toolserver.events import EventLog
@@ -63,6 +65,10 @@ WAKE_PROMPT = (
     "You were interrupted because something you asked to be woken for happened:\n{notices}\n"
     "Your context is intact. Deal with it if it needs you, then carry on with what you were doing.")
 WAKE = "WAKE"   # written by the tool server while urgent notices wait for the agent
+HOST_DOWN_NOTE = (
+    "The program went down while you were working, and the harness restarted it. What it wrote just "
+    "before (recently changed files where it keeps its state and logs):\n{evidence}\n"
+    "If something you did caused this (an extension or a call), fix that before doing it again.")
 DEFAULT_BRIEF = agent.REPO / "prompts" / "brief.md"
 RUN_FILES = "run"   # workspace/run/: BRIEF.md, GOAL.md, HOST.md, rewritten on every runner start
 RATE_LIMIT_MARGIN_S = 60
@@ -140,6 +146,7 @@ class Runner:
         self.mapper: Mapper
         self._last_tick: float | None = None   # active-time clock; None after a (re)start
         self._last_wake = 0.0
+        self._agent_ran = False                # a turn ran in this process (so a host outage is news)
         self._counting = True
 
     # Top level ------------------------------------------------------------------
@@ -275,7 +282,9 @@ class Runner:
 
     def _run_turn(self) -> Outcome:
         assert self.srv
+        self._agent_ran = True
         wake = self.state.extra.pop("pending_wake", None)
+        host_note = self.state.extra.pop("pending_host_note", None) if self.state.goal_sent else None
         if self.state.goal_sent and wake:
             prompt, kind = WAKE_PROMPT.format(notices=wake), "wake"
         elif self.state.goal_sent:
@@ -285,6 +294,8 @@ class Runner:
                 prompt, kind = update + "\n\n" + prompt, "update"
         else:
             prompt, kind = self.first_prompt(), "goal"
+        if host_note:
+            prompt = host_note + "\n\n" + prompt
         res = self.srv.request("turn/start", {"threadId": self.state.thread_id,
                                               "input": [{"type": "text", "text": prompt}]},
                                timeout=self.cfg.request_timeout)
@@ -586,6 +597,8 @@ class Runner:
         if not self.host.start or (last is not None and self.cfg.clock() - last < self.cfg.start_retry):
             return False
         self._set_counting(False)
+        if self._agent_ran:
+            self._keep_host_log()          # before the start: it may rotate or clear the log
         self.mapper.state("host_starting", why)
         ok, what = self._host_cmd(self.host.start, "start", self.host.start_timeout_s)
         self.log.write("marker", label=f"started the host: {what}" if ok else f"could not start the host: {what}",
@@ -594,6 +607,16 @@ class Runner:
         self._save()
         self._set_counting(True)  # the start itself didn't count
         return ok
+
+    def _keep_host_log(self) -> None:
+        """What the program wrote just before it went down, for the agent's next prompt: when the
+        agent's own code brought it down, this is usually the only place that says why."""
+        dirs = [self.run_dir / "host"] + [Path(d) for d in getattr(self.host, "log_dirs", [])]
+        evidence, files = hostlog.evidence(dirs, since=self.cfg.clock() - hostlog.RECENT_S)
+        if evidence:
+            self.state.extra["pending_host_note"] = HOST_DOWN_NOTE.format(evidence=evidence)
+            self.log.write("marker", label=f"kept what the host wrote before going down: {', '.join(files)}",
+                           kind="host_log", files=files)
 
     def _host_cmd(self, argv: list[str], what: str, timeout: float) -> tuple[bool, str]:
         """Output goes to raw/host.log."""

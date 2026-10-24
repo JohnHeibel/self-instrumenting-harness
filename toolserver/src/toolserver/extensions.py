@@ -72,6 +72,8 @@ class HostConfig:
     stop: list[str] = field(default_factory=list)    # run once when the run ends
     start_timeout_s: int = 300
     notes: str = ""                           # told to the agent: where things are on this host
+    log_dirs: list[str] = field(default_factory=list)  # more folders the program writes logs to; the
+                                              # runner always looks in {run_dir}/host (see run.py, host_evidence)
     config_dir: Path | None = None
     install_dir: Path | None = None          # where in-host extension files go
     reload_actions: dict[str, list[str]] = field(default_factory=dict)
@@ -99,6 +101,7 @@ class HostConfig:
             stop=[fill(a) for a in _argv(host.get("stop", []), "stop")],
             start_timeout_s=int(host.get("start_timeout_s", 300)),
             notes=fill(str(host.get("notes", ""))).strip(),
+            log_dirs=[fill(str(d)) for d in host.get("log_dirs", [])],
             config_dir=path.parent,
             install_dir=Path(os.path.expanduser(fill(install))) if install else None,
             reload_actions={k: [fill(a) for a in _argv(v, f"reload.{k}")] for k, v in ext.get("reload", {}).items()},

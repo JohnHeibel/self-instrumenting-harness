@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 
@@ -253,3 +254,25 @@ def test_deadline_mid_turn_ends_without_backing_off(h):
     assert h.runner(script, until=time.time() + 0.5).run() == "deadline"
     assert time.monotonic() - t0 < 10
     assert not [r for r in h.records("agent_state") if r["state"] == "backing_off"]
+
+
+def test_host_down_mid_turn_shows_the_agent_what_the_host_wrote(h):
+    logs = h.run_dir / "host" / "server"
+    logs.mkdir(parents=True)
+    (logs / "prog.log").write_text("\n".join(f"line {i}" for i in range(100))
+                                   + "\nError: mod.lua:9: attempt to index nil\nstack traceback:\n  mod.lua:9\n"
+                                   + "\n".join(f"after {i}" for i in range(30)) + "\n")
+    (logs / "save.bin").write_bytes(b"\x00\x01binary")
+    calls = {"n": 0}
+
+    def check():
+        calls["n"] += 1
+        return (calls["n"] not in (2, 3), "prog")
+
+    toml = f'[host]\nname = "test-host"\nup_check = "always"\nstart = [{json.dumps(sys.executable)}, "-c", "pass"]\n'
+    script = {"processes": [{"turns": [[{"hang": True}], [{"usage": 100}]]}]}
+    assert h.runner(script, host_check=check, budget_tokens=50, host_toml=toml).run() == "budget_tokens"
+    second = prompts(h)[1]
+    assert second.startswith("The program went down") and "mod.lua:9: attempt to index nil" in second, second
+    assert "after 29" in second and "line 3\n" not in second and "binary" not in second
+    assert [m["files"] for m in h.records("marker") if m["kind"] == "host_log"] == [["server/prog.log"]]
