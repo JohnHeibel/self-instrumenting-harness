@@ -135,6 +135,7 @@ export class Run {
   /** First and last record of the runner and tool server: time_use.py's window. */
   private own?: [number, number]
   private fullBins_?: Sums[]
+  private handsMerged_?: Span[]
   private spans_?: { hands: Span[]; tools: Span[]; off: Span[] }
 
   constructor(records: Rec[]) {
@@ -352,6 +353,24 @@ export class Run {
     for (const a of [...tracked, ...(lump ? [lump] : [])]) for (const [k, n] of Object.entries(kindMap(a))) counts.set(k, (counts.get(k) ?? 0) + n)
     const kinds = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k)
     return { bins, binMs: BIN, pre, now, kinds, anyEstimated: bins.some(b => b.estimated) }
+  }
+
+  /** Hands busy in the `windowMs` before `at`, by the same rules as the hands-busy share (costs.py spans: a task holding the
+   *  hands, a foreground script that held them, an acting call made directly), and not while the runner said the agent was
+   *  off. The Sisyphus figure pushes only while this holds. */
+  handsActive(at: number, windowMs = 5000): boolean {
+    if (!this.handsMerged_) {
+      const { hands } = this.timeSpans()
+      const sorted = [...hands].sort((x, y) => x[0] - y[0]), out: Span[] = []
+      for (const [a, b] of sorted) { const l = out[out.length - 1]; if (l && a <= l[1]) l[1] = Math.max(l[1], b); else out.push([a, b]) }
+      this.handsMerged_ = out
+    }
+    const m = this.handsMerged_, a = at - windowMs
+    let lo = 0, hi = m.length  // first span ending after a
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (m[mid][1] <= a) lo = mid + 1; else hi = mid }
+    if (lo >= m.length || m[lo][0] > at) return false
+    const st = this.latest('agent_state', at)
+    return !st || RUNNING_STATES.has(String(st.state))
   }
 
   /** time_use.py's raw sums over [a, b] (b clipped to the last runner/tool-server record). */

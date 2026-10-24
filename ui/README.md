@@ -37,11 +37,11 @@ One 1920×1080 stage, scaled to fit, framed by two line-drawn Doric columns. Fla
 | tools | `Run.kits`: per extension every `hook_loaded` version on the run's time axis, `hook_restored`, calls and last call per hook; kept scripts from `run_script` "kept as scripts/…" summaries, runs from `run_script name=` and `task_started` |
 | now | newest `agent_state`, open background task (`task_started` without `task_ended`), newest `agent_message` |
 
-The single accent (terracotta) marks state changes only: a milestone reached, a tool improved, a death or break.
+The single accent (terracotta) marks state changes only: a milestone reached, a tool improved, a death or break. Type: Marcellus (display), Archivo at a condensed width (labels), Azeret Mono (data). Data panels are cool slate, the goal and Now panels warm stone.
 
 ## Backdrop
 
-`src/Backdrop.tsx` is the only file that names the background animation. To swap it, change its one import and element. The current one is `src/backdrop/sisyphus-v3.js`, a `<sisyphus-backdrop-v3>` web component; `styles.css` (`.figure .backdrop`) crops it to the figure, stone and slope in a panel at the foot of the side column, at full opacity, recoloured to light stone on the page ground. It holds a still pose under reduced motion.
+`src/Backdrop.tsx` is the only file that names the background animation. To swap it, change its one import and element. The current one is `src/backdrop/sisyphus-v3.js`, a `<sisyphus-backdrop-v3>` web component; `styles.css` (`.figure .backdrop`) crops it to the figure, stone and slope in a panel at the foot of the side column, at full opacity, recoloured one quiet step above the page ground. He pushes only while the agent's hands are busy (`Run.handsActive`: a hands span from the costs.py rules in the last 5 s of run time, and the runner not off), and otherwise eases to a standstill. The playback rate (`src/pushRate.ts`) chases 1 or 0 as a critically damped spring: about 3 s over the full range in either direction, easing in and out; a flip mid-ramp turns from the current speed; activity must be gone 0.4 s of wall time before he starts to slow. It follows the view's position, so replay at speed and scrubbing drive it too. He holds still under reduced motion.
 
 ## Fake runs for development
 

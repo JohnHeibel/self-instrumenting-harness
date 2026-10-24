@@ -106,7 +106,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
           <Kits run={run} at={at} onOpen={setOpen} />
           <div className="sidefoot">
             <Actions run={run} at={at} />
-            <div className="box figure"><Backdrop /></div>
+            <div className="figure"><Backdrop active={!(following && !live) && run.handsActive(at)} /></div>
           </div>
         </aside>
         {openHook && <HookDetail hook={openHook} run={run} onClose={() => setOpen(null)} />}
