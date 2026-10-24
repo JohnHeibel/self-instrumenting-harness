@@ -11,6 +11,7 @@ Background research gathered Oct 23–24, 2026, while waiting for the work split
 | [backends-and-primitives.md](backends-and-primitives.md) | Claude Code / Agent SDK, Codex exec vs app-server, Droid exec, computer-use MCP options on Windows/Docker |
 | [live-company-scenario.md](live-company-scenario.md) | **Proposal:** the agent works as the AP/bookkeeping clerk of a simulated company on Business Central (Odoo as fallback), continuously until judging, with exact ground truth from a world simulator |
 | [real-world-applications.md](real-world-applications.md) | Non-game showcase: ERP-Bench on Odoo 19 (recommended), other professional domains ranked, a proposed experiment, an open policy question |
+| [long-horizon-showcase.md](long-horizon-showcase.md) | **Proposal (replaces the two above as the non-game showcase):** the agent works a 24–48 h shift alone as the board operator of the Tennessee Eastman chemical plant behind an Ignition SCADA HMI, building its own hooks and supervisory scripts; verified tep-studio and Ignition Maker facts, published TE costs, measured trip times under instrument and valve faults |
 | [other-hosts-and-sponsors.md](other-hosts-and-sponsors.md) | Odoo + OCA reconcile, Minecraft and KSP reload costs, SpacetimeDB 2.0, Hyphenate |
 
 ## Top findings

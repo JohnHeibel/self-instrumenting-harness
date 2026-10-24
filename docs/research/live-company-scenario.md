@@ -4,6 +4,8 @@ Nazeem's direction (Oct 24): the real-world proof shouldn't be a score on someon
 
 This is the same harness and the same primitives as Factorio. Only the host changes.
 
+**Status (Oct 24): Nazeem rejected this proposal as not hard enough** (along with ERP-Bench as a headline). The current non-game proposal is [long-horizon-showcase.md](long-horizon-showcase.md): a chemical-plant control-room shift. This file is kept for reference.
+
 ## The idea in one line
 
 **The agent is hired as the accounts-payable / bookkeeping clerk at a small simulated company running a customized Odoo, and it works there continuously until judging.**
