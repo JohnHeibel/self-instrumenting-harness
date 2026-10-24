@@ -10,7 +10,7 @@ Sources: `runner.jsonl`, `events.jsonl`, `grader.jsonl`, `PROGRESS.md`, the agen
 2. **Deaths: 18** by the game's own counter (not 17): drowned 6, zombie 5, skeleton 3, spider 1, pillager 1, creeper 1, fall 1. Each death dropped the whole kit.
 3. **What stopped progress:** deaths wiping tools (the iron tools were lost 7 min after they were made), no combat skill (1 kill all night, a pig), no bed so every respawn landed next to water and a pillager outpost, and a slow, stall-prone bridge for the first 2 hours.
 4. **Efficiency:** 84.3M tokens in total, only 0.72M uncached (0.9%), 811 model steps (about 104k tokens each, because every step re-reads the context). The game counted 5,031 player actions: 16.8k total tokens per action, 144 uncached tokens per action, 6.2 actions per step.
-5. **Harness:** 6 restarts to ship fixes without losing work, 4 automatic context handoffs (150k to 218k context down to 38k), 45 nudges (31 supervisor, 14 idle), and 26 commits on `nazeem/minecraft-host`. The agent built a 69-function skill library that carried it through every death and handoff.
+5. **Harness:** 6 restarts to ship fixes without losing work, 4 automatic context handoffs (150k to 218k context down to 38k), 45 nudges (31 supervisor, 14 idle), and 29 commits on `nazeem/minecraft-host`. The agent built a 69-function skill library that carried it through every death and handoff.
 
 ## 2. Milestone timeline
 
@@ -53,7 +53,7 @@ All 18 are in `grader.jsonl` (`agent_died` markers) and in `latest.log`. "Life" 
 | 17 | 07:59 | drowned | 3 min | 0.5M | Respawned at (28,69,-36) next to water |
 | 18 | 08:26 | skeleton | 27 min | 2.9M | Kit; the last life was alive at 09:00 |
 
-Pattern: 8 of 18 deaths came within 3 min of the previous one (respawn near water, mobs or the outpost). Cost per death: the 5 to 15 min needed to find wood, stone and coal again plus the rebuilt tools; 13 deaths lost 2 or more tool tiers. Death 2 (iron tools) and death 16 (iron pickaxe) were the two that cost a milestone-class asset. Dropped items despawn in 5 min; the agent recovered gear at most once.
+Pattern: 8 of 18 deaths came within 3 min of the previous one (respawn near water, mobs or the outpost). Cost per death: the 5 to 15 min needed to find wood, stone and coal again plus the rebuilt tools; Death 2 (iron tools) and death 16 (iron pickaxe) were the two that cost a milestone-class asset. Dropped items despawn in 5 min; the agent recovered gear at most once.
 
 The supervisor log says "drowned x7" and "about 19 deaths"; the game's counter and the grader both say 18, with 6 drownings.
 
@@ -99,9 +99,9 @@ Context regrew at about 0.7 to 0.8k per step. Mean context was 132k before the f
 | Movement | `goto` (69 calls; stuck detector added only after 3 nudges), `tunnel_to` (39), `pillar_up` (31), `bfs_path/walk_path`, `safe_descend/plug_behind`, `swim_out/wet/nearwater` | | `goto` repeatedly stuck for 90 s; `tunnel_to` ignored vertical drops and caused the fall death; `bfs_path` often returned None |
 | Gathering | `chop` (42), `wood_start` (24), `get_blocks` (41), `get_ore` (37), `collect` (40), `mine` (best tool, 8 s cap), `dig`, `hunt` (14) | | `wood_start` and `chop` worked; `get_blocks` does not pick up all drops; `hunt` chases far animals; ore matching hit copper instead of iron once |
 | Crafting and smelting | `craft`, `craft_all` (11), `place_near` (41), `open_table`, `stone_start`, `stone_craft`, `tools_tier`, `smelt` (14), `iron_kit` (5), `new_furnace`, `use_at` | | Worked: crafted 965 items, 48 distinct types |
-| Safety and survival | `guard`, `W()` guards (NIGHT, HOSTILE, DEAD), `is_night`, `shelter` (20 calls), `bunker` (11), `seal_in` (9), `dawn`, `respawn` (15), heartbeat | | Added after deaths. `shelter()` breached into a cave and failed; `bunker/pillar` need dirt in the hotbar; `seal_in` and the NIGHT guard worked, with no death between 05:44 and 07:08 and after the NIGHT guard was added |
+| Safety and survival | `guard`, `W()` guards (NIGHT, HOSTILE, DEAD), `is_night`, `shelter` (20 calls), `bunker` (11), `seal_in` (9), `dawn`, `respawn` (15), heartbeat | | Added after deaths. `shelter()` breached into a cave and failed; `bunker/pillar` need dirt in the hotbar; `seal_in` and the NIGHT guard were used often; deaths continued at night anyway (skeletons at 07:20 and 07:23, 08:26) |
 
-**Missing: a combat skill.** The only attack code is in `hunt` for passive animals. Hostile mobs trigger a flee-or-seal guard (`HOSTILE` when health is under 10 and a hostile is within 8 blocks), never a fight. The game recorded 1 kill (a pig) and 18 deaths, 10 of them to mobs. There is no armor routine either; the agent never crafted or wore the iron armor it could have made.
+**Missing: a combat skill.** The only attack code is in `hunt` for passive animals. Hostile mobs trigger a flee-or-seal guard (`HOSTILE` when health is under 10 and a hostile is within 8 blocks), never a fight. The game recorded 1 kill (a pig) and 18 deaths, 10 of them to mobs. There is no armor routine either: no armor of any kind was crafted (the game's stats show 3 iron pickaxes, 1 iron sword, 1 shovel and a shield, but no helmet, chestplate, leggings or boots).
 
 **Rules the agent wrote for itself** (NOTES.md and INDEX.md):
 - Keep every bridge job under 100 s and poll status within 60 s; one stuck job blocks all calls; kill it with `\killjob`.
@@ -161,7 +161,7 @@ Earlier the same night: 7ac460b and 77b4f8e (Minecraft host, grader, goal), 48e2
 | Context handoff, 6548969 | Compaction past 200k, b9752e2 (`--compact-tokens`) | Both merged in our branch; they compose (compact lower, hand off higher) |
 | `program_actions` from game stats, a0b2789 | Leverage metric 511980d, estimator e0a685b, leverage chart 6f219dd | Merged (4659a72, 5ca129b); same record shape |
 | Skills index and agent's `skills/` library | `run_script` kept scripts, ecce031 | Merged, library text aligned in 5ca129b; the agent still prefers Bash, so kept scripts were not used |
-| NUDGE, idle watch, death host events | Background tasks, wait, notices, wake for urgent notices (4a1a2a8, f81f0a6, dc0def6), "one pair of hands" prompts (f3fa2f8) | **Not yet merged**: 4 commits behind main (all 08:50 and after) |
+| NUDGE, idle watch, death host events | Background tasks, wait, notices, wake for urgent notices (4a1a2a8, f81f0a6, dc0def6), "one pair of hands" prompts (f3fa2f8) | Merged into the branch by 39bc9e6 (morning merge of origin/main); untested with the Claude runner |
 | Starting save control | `hostctl` starting save and map-gen settings (50eac10) | In main, merged at 2fb59d0 |
 
 ## 8. Recommendations for the next run
@@ -170,14 +170,14 @@ Earlier the same night: 7ac460b and 77b4f8e (Minecraft host, grader, goal), 48e2
 2. **Kit discipline:** make a chest and a bed at the first base (3 wool plus 3 planks) so the respawn point is not next to the water pit and outpost; store spare ingots and tools; carry a pickaxe, sword, food and a stack of cobble only. Fetch dropped items within 5 min.
 3. **Mine horizontally** at y 50 to 60 with torches (branch tunnel), not deep pits or big vertical `tunnel_to`; no digging toward water. The fall and 6 drownings came from vertical and aquifer digging.
 4. **Make the early bridge reliable:** the first 2 hours lost time to bridge hangs and one-queue blocking. Ship the `sk.py` plus sliced-job pattern in the host notes, and use the forwarder so bridge calls show up in the metrics.
-5. **Merge John's 4 newer commits** (background tasks, notices, wake for urgent notices, rules instead of polling) so the agent can wait on a job without ending its turn, which should replace the 14 idle nudges and the 8-minute idle watch.
+5. **Use John's background-task features** (merged in 39bc9e6: tasks, notices, wake for urgent notices, rules instead of polling) so the agent can wait on a job without ending its turn, which should replace the 14 idle nudges and the 8-minute idle watch.
 6. **Turn on handoff at 150k** by default (it saved about 70M tokens) and compare it with John's compaction.
 7. **Difficulty:** deaths are most of the story. Dropping to easy would cut mob deaths but changes the benchmark, and the grader flags it (`integrity.difficulty_changed`), so the result would not be comparable. If you do it, run it as a separate labelled variant.
-8. **Fix the metrics:** count skill calls and screenshots from the raw stream until the forwarder is on; add the record of crafted-distinct count to PROGRESS; record exact milestone times from advancements rather than the grader's read time.
+8. **Fix the metrics:** count skill calls and screenshots from the raw stream until the forwarder is on; record exact milestone times from advancements rather than the grader's read time.
 
 ## 9. Decisions for Nazeem
 
-1. Merge John's 4 newer main commits into `nazeem/minecraft-host` now, or after the next run?
+1. Run the next run on the merged branch (39bc9e6, includes John's background tasks) or hold those back for a clean comparison?
 2. Keep normal difficulty for the benchmark, or run an easy-difficulty variant (flagged as different)?
 3. Add a bed, chest and armor step to the goal file, and a combat-skill requirement, before the next run?
 4. Turn the logging forwarder and the 150k handoff on by default?
