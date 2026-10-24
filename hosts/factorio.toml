@@ -1,5 +1,11 @@
 # Host config: the only host-specific input to the harness, and it is data, not code.
 # The agent writes everything else: its mods, and the programs that read them.
+#
+# {run_dir}: this run's directory; {config_dir}: this file's directory; {python}: the harness's
+# Python. Commands run from {config_dir}. hosts/factorio/hostctl.py runs this run's own Factorio:
+# a headless server (RCON on 127.0.0.1) and the Steam client joined to it, both with their own
+# write-data and mods folder under {run_dir}/host/, so the user's own Factorio folder is untouched.
+# Before the first run on a machine, build the starting save (see hostctl.py make-start-save).
 
 [host]
 name = "factorio"
@@ -7,21 +13,30 @@ window_title = "Factorio"
 process = "factorio.exe"
 # Factorio draws its own menus inside one window, so the window is enough.
 capture = "window"
-# The host is up while its window is on screen.
-up_check = "window"
+# Up when the server answers RCON and the client is running.
+up_check = ["{python}", "factorio/hostctl.py", "check", "--run-dir", "{run_dir}"]
+start = ["{python}", "factorio/hostctl.py", "start", "--run-dir", "{run_dir}"]
+stop = ["{python}", "factorio/hostctl.py", "stop", "--run-dir", "{run_dir}"]
+start_timeout_s = 300
+# The server's RCON port, which the agent's sandbox reaches as host.docker.internal.
+agent_ports = [27015]
+notes = """
+The game is a multiplayer server on this machine with you as its only player. Its RCON
+address and password are in /home/agent/work/host/rcon.json (Source RCON protocol). Files a mod
+writes with helpers.write_file land in /home/agent/work/host/script-output/. Lua console commands
+(/c, /sc) disable achievements for the save; commands a mod registers with commands.add_command
+do not. The "restart" reload saves, restarts the server and client (about 15 s) and loads the
+latest save: it picks up both control.lua and data-stage changes. game.reload_script() and
+game.reload_mods() do not load changed mod files on this server.
+"""
 
 [extensions]
-# Where load_extension copies an extension's in_host directory (a Factorio mod folder).
-# Steam on Windows keeps user mods here.
-install_dir = "%APPDATA%/Factorio/mods"
-reload_timeout_s = 180
+# Where load_extension copies an extension's in_host directory: this run's mods folder.
+install_dir = "{run_dir}/host/mods"
+reload_timeout_s = 300
 
 [extensions.reload]
 # Named commands the agent can ask for in extension.json ("reload": "<name>"), run on the host.
-# "none": copy files only. A mod's control.lua runs again whenever a save is loaded, so the
-# agent can pick up control-stage changes itself through the game's own menus.
+# "none": copy files only (the next restart picks them up).
 none = []
-# TODO(nazeem, plumbing test b): fill in once we know what works on this PC. For example, a
-# script that saves, quits and relaunches Factorio into the latest save, with RCON enabled if
-# the agent's helpers use it. Data-stage changes need a full restart.
-# restart = ["powershell", "-File", "hosts/factorio/restart.ps1"]
+restart = ["{python}", "factorio/hostctl.py", "restart", "--run-dir", "{run_dir}"]
