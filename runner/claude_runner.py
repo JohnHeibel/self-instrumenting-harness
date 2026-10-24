@@ -131,6 +131,26 @@ DEATH_NOTE = ("Host event: you died ({cause}). You respawned, and your inventory
               "valuables in your chest before risky trips.")
 
 
+DEATH_LOOP_NOTE = ("You have died {n} times in {m} minutes: this is a death loop, not bad luck. Stop doing what you were "
+                   "doing. Go somewhere safe first (away from where you respawn if mobs wait there: move away at once, "
+                   "block yourself in with whatever blocks you carry, or dig into a hillside and seal it), do nothing "
+                   "risky until it is daylight and you are healthy and fed, and only then re-plan. Note the cause in "
+                   "your NOTES.md.")
+
+
+def recent_deaths(grader_path: Path, window_s: float = 600) -> int:
+    """Deaths the grader logged within `window_s` of the latest one."""
+    from datetime import datetime
+    ts = []
+    try:
+        for ln in grader_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if '"agent_died"' in ln:
+                ts.append(datetime.fromisoformat(json.loads(ln)["ts"].replace("Z", "+00:00")))
+    except (OSError, ValueError, KeyError):
+        return 0
+    return sum(1 for t in ts if (ts[-1] - t).total_seconds() <= window_s) if ts else 0
+
+
 def new_host_events(grader_path: Path, seen: set[str]) -> list[dict]:
     """Grader markers of the kinds that matter right now (a death), not yet reported. Marks them seen."""
     out = []
@@ -550,9 +570,10 @@ class ClaudeRunner:
                 evs = new_host_events(self.run_dir / "grader.jsonl", self.seen_events)
                 if evs:
                     why = "host_event"
-                    self.pending_note += (("\n\n" if self.pending_note else "")
-                                          + "\n\n".join(DEATH_NOTE.format(cause=e.get("cause", "unknown"))
-                                                         for e in evs[-1:]))
+                    n = recent_deaths(self.run_dir / "grader.jsonl")
+                    note = (DEATH_LOOP_NOTE.format(n=n, m=10) + "\n\n" if n >= 3 else "") + \
+                        DEATH_NOTE.format(cause=evs[-1].get("cause", "unknown"))
+                    self.pending_note += ("\n\n" if self.pending_note else "") + note
             if not why and why_handoff:
                 why = "handoff"
             if not why and idle.idle():

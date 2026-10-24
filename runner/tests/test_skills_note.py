@@ -67,3 +67,12 @@ def test_new_host_events(tmp_path):
                  + json.dumps({"type": "milestone", "id": "x"}) + "\n")
     assert [e["cause"] for e in cr.new_host_events(p, seen)] == ["drowned"]
     assert cr.new_host_events(p, seen) == []
+
+
+def test_recent_deaths_counts_a_loop(tmp_path):
+    import json
+    p = tmp_path / "grader.jsonl"
+    rows = [("2026-10-24T10:00:00.000Z"), ("2026-10-24T12:44:01.000Z"), ("2026-10-24T12:44:41.000Z"), ("2026-10-24T12:45:01.000Z")]
+    p.write_text("".join(json.dumps({"type": "marker", "kind": "agent_died", "ts": t}) + "\n" for t in rows))
+    assert cr.recent_deaths(p) == 3
+    assert cr.recent_deaths(tmp_path / "none") == 0
