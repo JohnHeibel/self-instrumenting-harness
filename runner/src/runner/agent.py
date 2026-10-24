@@ -46,6 +46,9 @@ def docker_cmd(run_dir: Path, run_id: str, auth_json: Path, port: int,
            "-v", f"{run_dir / 'workspace'}:/home/agent/work",
            image, "codex", "app-server",
            "-c", f'mcp_servers.harness.url="http://host.docker.internal:{port}/mcp"',
+           # Codex's default MCP tool timeout is 60 s; run_script and the agent's own waiting tools
+           # may run up to 20 min (toolserver scripts.MAX_SCRIPT_S), below the runner's stall timeout.
+           "-c", "mcp_servers.harness.tool_timeout_sec=1500",
            "-c", f'model_reasoning_summary="{reasoning_summary}"']
     if model:
         cmd += ["-c", f'model="{model}"']

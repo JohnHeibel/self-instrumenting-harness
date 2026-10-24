@@ -141,9 +141,14 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
     @mcp.tool(annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                                 idempotentHint=False, openWorldHint=False),
               description=scripts.DOC)
-    async def run_script(code: str, timeout_s: float = 300) -> str:
-        with log.call("run_script", "script", {"code": code, "timeout_s": timeout_s}) as res:
-            ok, text, calls = await scripts.run(ext, code, timeout_s)
+    async def run_script(code: str = "", file: str = "", args: dict | None = None, timeout_s: float = 300) -> str:
+        logged = {k: v for k, v in {"code": code, "file": file, "args": args, "timeout_s": timeout_s}.items() if v}
+        with log.call("run_script", "script", logged) as res:
+            if bool(code) == bool(file):
+                raise ToolError("give either code or file")
+            if file.startswith(("/", "\\")) or ".." in file.replace("\\", "/").split("/"):
+                raise ToolError("file is a path inside your workspace, relative to it")
+            ok, text, calls = await scripts.run(ext, code, timeout_s, file, args)
             for c in calls:   # each inner call is recorded like a direct one, for review and for costs
                 log.write("tool_call", tool=c.get("tool"), channel="hook", args=c.get("args"), ok=c.get("ok"),
                           error=c.get("error"), duration_ms=c.get("ms"), result_kind="text",
