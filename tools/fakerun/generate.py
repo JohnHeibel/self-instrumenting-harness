@@ -7,6 +7,11 @@ the generator itself knows nothing about any particular host. Scenarios: factori
 
     uv run --project toolserver python tools/fakerun/generate.py --out runs/fake-factorio [--scenario factorio] [--seed 7] [--hours 14]
     uv run --project toolserver python tools/fakerun/generate.py --out runs/fake-spreadsheet --scenario spreadsheet
+    uv run --project toolserver python tools/fakerun/generate.py --out runs/fake-rich --rich   # every record type the UI shows
+
+--rich adds what a real run produces and the plain fake leaves out: a milestone list that grows mid-run, an
+improving agent (each milestone takes less time), integrity signals and host commands (one planted violation),
+grader reachability, hook health checks and extensions, restarts, interrupts, prompts and a cut-off turn.
 """
 
 from __future__ import annotations
@@ -31,8 +36,10 @@ class Writer:
         self.f.write(json.dumps(rec) + "\n")
 
 
-def generate(out: Path, seed: int, hours: float, scenario: dict) -> None:
+def generate(out: Path, seed: int, hours: float, scenario: dict, rich: bool = False) -> None:
     rng = random.Random(seed)
+    if rich:
+        scenario = _improving(scenario)
     if out.exists():
         shutil.rmtree(out)
     (out / "shots").mkdir(parents=True)
@@ -45,22 +52,26 @@ def generate(out: Path, seed: int, hours: float, scenario: dict) -> None:
 
     runner(t0, "run_started", agent=scenario.get("agent", "codex"), model=scenario.get("model", "gpt-6.1-sol"), host=scenario["host"], goal=scenario["goal"])
     tools(t0, "server_started", host="127.0.0.1", port=8765)
-    grader(t0, "milestones_defined", milestones=[{"id": m["id"], "name": m["name"]} for m in scenario["milestones"]])
+    all_ms = [{"id": m["id"], "name": m["name"]} for m in scenario["milestones"]]
+    # Rich: the first list leaves out the last two milestones; the grader re-announces the full list mid-run.
+    grader(t0, "milestones_defined", milestones=all_ms[:-2] if rich else all_ms)
 
     # Timed one-off events, merged with the steady stream of tool calls below.
     timeline: list[tuple[datetime, callable]] = []
     for m in scenario["milestones"]:
         timeline.append((at(m["at"]), lambda t, m=m: grader(t, "milestone", id=m["id"], evidence=m["evidence"])))
     for h in scenario["hooks"]:
-        timeline.append((at(h["at"]), lambda t, h=h: _load_hook(tools, t, h, version=1)))
+        timeline.append((at(h["at"]), lambda t, h=h: _load_hook(tools, t, h, version=1, rich=rich)))
     brk = scenario["break"]
     timeline.append((at(brk["at"]), lambda t: runner(t, "marker", label=brk["label"], kind="planted_break")))
     timeline.append((at(brk["at"]) + timedelta(minutes=4), lambda t: tools(
         t, "hook_status", hook=brk["hook"], status="broken", detail=brk["detail"])))
     timeline.append((at(brk["at"]) + timedelta(minutes=19), lambda t: (
         _load_hook(tools, t, {**_hook(scenario, brk["hook"]), "reason": brk["repair_reason"],
-                              "source": brk["repaired_source"]}, version=2),
+                              "source": brk["repaired_source"]}, version=2, rich=rich),
         tools(t, "hook_status", hook=brk["hook"], status="repaired", detail=brk.get("repaired_detail", "health check passes on the new game version")))))
+    if rich:
+        _rich_events(timeline, scenario, at, tools, runner, grader, all_ms)
     for frac, text, serves in scenario["goals"]:
         timeline.append((at(frac), lambda t, x=text, s=serves: runner(t, "goal", text=x, serves=s)))
     for frac, title, text in scenario["reasoning"]:
@@ -119,10 +130,11 @@ def generate(out: Path, seed: int, hours: float, scenario: dict) -> None:
             per = int(rng.uniform(0.8, 1.2) * 180_000 / (1 + 0.18 * len(loaded)))
             total_tokens += per
             runner(t, "usage", input_tokens=per, cached_input_tokens=int(per * 0.7),
-                   output_tokens=per // 30, reasoning_output_tokens=per // 15, total_tokens=total_tokens)
+                   output_tokens=per // 30, reasoning_output_tokens=per // 15, total_tokens=total_tokens,
+                   **({"context_window": 400_000} if rich else {}))
             next_usage = t + timedelta(minutes=5)
             if rng.random() < 0.06:  # a turn ended; the runner sends "continue"
-                runner(t, "turn_completed", turn=turn + 1)
+                runner(t, "turn_completed", turn=turn + 1, **({"status": "completed", "duration_ms": 1_800_000} if rich else {}))
                 turn += 1
                 runner(t + timedelta(seconds=2), "turn_started", turn=turn + 1)
         t += timedelta(seconds=rng.uniform(4, 22))
@@ -135,14 +147,64 @@ def _hook(scenario: dict, name: str) -> dict:
     return next(h for h in scenario["hooks"] if h["name"] == name)
 
 
-def _load_hook(tools: Writer, t: datetime, h: dict, version: int) -> None:
+def _improving(scenario: dict) -> dict:
+    """Space the milestones so each takes 78% as long as the one before: an agent that is getting better."""
+    ms = scenario["milestones"]
+    w = [0.78 ** i for i in range(len(ms))]
+    out, acc = [], 0.0
+    for m, x in zip(ms, w):
+        acc += x / sum(w) * 0.97
+        out.append({**m, "at": round(acc, 4)})
+    return {**scenario, "milestones": out}
+
+
+def _rich_events(timeline: list, scenario: dict, at, tools: Writer, runner: Writer, grader: Writer, all_ms: list) -> None:
+    ms = scenario["milestones"]
+    # The milestone list grows: re-announced in full just before the second-to-last one is reached.
+    timeline.append((at(ms[-3]["at"]) - timedelta(minutes=2), lambda t: grader(t, "milestones_defined", milestones=all_ms)))
+    timeline.append((at(0.0) + timedelta(seconds=10), lambda t: runner(t, "marker", label="goal prompt sent", kind="prompt_goal")))
+    for f in (0.12, 0.31, 0.62):
+        timeline.append((at(f), lambda t: runner(t, "marker", label="continue prompt sent", kind="prompt_continue")))
+    timeline.append((at(0.35), lambda t: (
+        runner(t, "turn_completed", turn=99, status="cut_off", duration_ms=640_000, error=None, turn_total_tokens=0),
+        runner(t, "marker", label="runner restarted", kind="runner_restart"))))
+    timeline.append((at(0.36), lambda t: (tools(t, "server_started", host="127.0.0.1", port=8765),
+                                         runner(t, "marker", label="tool server restarted", kind="toolserver_restart"))))
+    timeline.append((at(0.5), lambda t: runner(t, "marker", label="interrupted: operator nudge", kind="interrupt", reason="operator nudge: use your hooks more")))
+    timeline.append((at(0.81), lambda t: runner(t, "marker", label="container recreated", kind="container_recreated")))
+    # The grader loses the host for a few minutes, then recovers.
+    timeline.append((at(0.30), lambda t: grader(t, "grader_status", ok=False, detail="host did not answer the state query")))
+    timeline.append((at(0.30) + timedelta(minutes=4), lambda t: grader(t, "grader_status", ok=True, detail="")))
+    # The agent's own helper commands reach the host; one outside command is a violation of the rules.
+    cmds = [h["name"] for h in scenario["hooks"] if h["kind"] == "in_host"]
+    for i, f in enumerate((0.1, 0.25, 0.4, 0.55, 0.7)):
+        timeline.append((at(f), lambda t, c=cmds[i % len(cmds)], i=i: grader(
+            t, "host_command", command_id=100 + i, command=c, parameters="", by="rcon", custom=True, tick=60 * 60 * (i + 1))))
+    cheat = scenario.get("cheat", {"command": "set_value", "parameters": "speed 5", "signal": "console_command_used"})
+    timeline.append((at(0.66), lambda t: (
+        grader(t, "host_command", command_id=200, command=cheat["command"], parameters=cheat["parameters"], by="player", custom=False, tick=240000),
+        grader(t, "integrity", signal=cheat["signal"], active=True, detail=f"outside command: {cheat['command']} {cheat['parameters']}",
+               evidence={"command": cheat["command"], "by": "player"}))))
+
+
+def _load_hook(tools: Writer, t: datetime, h: dict, version: int, rich: bool = False) -> None:
     ext = {"lua": "lua", "python": "py", "javascript": "js"}[h["language"]]
     tools(t, "tool_call", tool="load_extension", channel="extension", args={"name": h["name"]}, ok=True, error=None,
           duration_ms=900 if h["kind"] == "in_host" else 120, result_kind="text", result_bytes=80,
           summary=f"loaded {h['name']} v{version}")
+    extra = {}
+    if rich:  # hooks come in extensions; each version is archived; load_extension then runs a health check
+        extension = f"ext_{h['name'].split('_')[-1]}"
+        extra = {"extension": extension, "source_ref": f"extensions/{extension}/v{version}"}
     tools(t, "hook_loaded", hook=h["name"], version=version, reason=h["reason"], language=h["language"],
           kind=h["kind"], depends_on=h.get("depends_on", []),
-          files=[{"path": f"{h['name']}/{'control' if ext == 'lua' else h['name']}.{ext}", "content": h["source"]}])
+          files=[{"path": f"{h['name']}/{'control' if ext == 'lua' else h['name']}.{ext}", "content": h["source"]}], **extra)
+    if rich:
+        t2 = t
+        tools(t2, "tool_call", tool=h["name"], channel="hook", args={}, ok=True, error=None, duration_ms=80, result_kind="json",
+              result_bytes=120, via="health_check", hook={"name": h["name"], "version": version, "extension": extra["extension"]},
+              summary="health check")
+        tools(t2, "hook_status", hook=h["name"], status="ok", detail="health check passed")
 
 
 def _shot(path: Path, progress: float, rng: random.Random) -> None:
@@ -400,8 +462,9 @@ if __name__ == "__main__":
     ap.add_argument("--out", type=Path, default=None, help="default: runs/fake-<scenario>")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--hours", type=float, default=None, help="default: 14 for factorio, 24 for spreadsheet")
+    ap.add_argument("--rich", action="store_true", help="add every record type the UI shows (see the top of this file)")
     a = ap.parse_args()
-    out = a.out or Path(f"runs/fake-{a.scenario}")
+    out = a.out or Path(f"runs/fake-{a.scenario}{'-rich' if a.rich else ''}")
     hours = a.hours if a.hours is not None else {"factorio": 14, "spreadsheet": 24}[a.scenario]
-    generate(out, a.seed, hours, SCENARIOS[a.scenario])
+    generate(out, a.seed, hours, SCENARIOS[a.scenario], rich=a.rich)
     print(f"wrote {out}")
