@@ -33,3 +33,7 @@ Note: `state.extra["brief"]` is frozen at run start, so brief edits only reach t
 Evidence: after the 02:4x nudge the agent switched to long waits (Monitor/sleep 100-590 s, `sk.wait(100)`); last 15 min: 42 requests at 138k tokens, 24k uncached, context 150k and growing about 2-3k per step, so a compaction is likely within the hour (skills index + NOTES.md are ready for it). Still 0 logged hook calls; all game control goes through Bash -> sk.py -> bridge.
 Fix: `costs` now shows per-milestone minutes, requests and uncached tokens, so the agent sees whether it is getting faster. UPDATE_NOTE (non-interrupting) and NUDGE (interrupting) documented as complementary.
 Watch next: behaviour across the compaction; whether the 90 s hook cap bites (agent uses sk.py, so it does not).
+
+## 2026-10-24 03:00 PDT, cycle 6 (observation)
+Evidence: no new milestone for 30 min after crafted_10 (09:21Z); agent mining iron in a dark cave (live frame shows inventory open, dark screen), 1 raw iron after about 25 min. Skill functions are growing in prelude.py (wood_start, stone_start, get_ore, tunnel_to) and INDEX.md is kept, which is the intended behaviour.
+Fix (Minecraft-only, goals/minecraft.md): efficiency hints (torches, branch tunnel at y=16, batch smelting). Frozen at run start, so it needs delivery via NUDGE/UPDATE_NOTE; text for main is in the message sent this cycle.
