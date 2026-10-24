@@ -1,0 +1,24 @@
+[project]
+name = "runner"
+version = "0.1.0"
+description = "Drives one long Codex session through `codex app-server` and owns the run directory."
+requires-python = ">=3.11"
+dependencies = [
+    "toolserver",
+]
+
+[project.scripts]
+runner = "runner.run:main"
+
+[tool.uv.sources]
+toolserver = { path = "../toolserver", editable = true }
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
