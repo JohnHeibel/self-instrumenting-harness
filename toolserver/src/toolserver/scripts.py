@@ -27,12 +27,25 @@ _spec = json.load(sys.stdin)
 _root = os.getcwd()
 class ToolFailed(Exception):
     pass
-def call(name, args=None, **kw):
-    """Call one of your tools by name; returns its parsed JSON result (or text). Raises ToolFailed."""
-    if name not in _spec["tools"]:
-        raise ToolFailed(f"no tool named {name!r}; yours: {sorted(_spec['tools'])}")
-    t = _spec["tools"][name]
+def call(name, args=None, /, **kw):
+    """Call one of your tools by name; returns its parsed JSON result (or text). Raises ToolFailed.
+    Positional-only, so a tool may itself take arguments called `name` or `args`."""
     a = dict(args or {}, **kw)
+    if name not in _spec["tools"]:
+        if name not in _spec["builtins"]:
+            raise ToolFailed(f"no tool named {name!r}; callable here: {sorted(_spec['tools']) + _spec['builtins']}")
+        import urllib.request
+        req = urllib.request.Request(_spec["harness_url"], data=json.dumps({"name": name, "args": a}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=1500) as r:
+            res = json.loads(r.read())
+        if not res.get("ok"):
+            raise ToolFailed(f"{name} failed: {res.get('error')}")
+        try:
+            return json.loads(res["text"])
+        except ValueError:
+            return res["text"]
+    t = _spec["tools"][name]
     t0 = time.monotonic()
     try:
         p = subprocess.run(t["run"], cwd=os.path.join(_root, t["dir"]), input=json.dumps(a), capture_output=True,
@@ -86,6 +99,8 @@ on what an earlier call returned) should be one run_script call, decided once.
         main(**args) and its return value is printed as JSON.
 Inside the script:
   call("tool_name", arg=value, ...)  -> that tool's parsed JSON result (or text); raises ToolFailed
+  Your extension tools and the harness tools (input tools, set_goal, costs, read_docs, list_hooks)
+  can be called; not screenshot, load_extension or run_script.
 Your workspace root is importable, so keep reusable steps as modules and import them. Save scripts you
 will run again, and delete ones you won't. Write steps as "make sure X holds" (check, then act), so a
 rerun after a fix is safe, and verify the outcome inside the script.
@@ -95,15 +110,16 @@ many tool calls it made. timeout_s: up to 1200; give every loop a count or a dea
 when progress stalls."""
 
 
-async def run(ext: "Extensions", code: str, timeout_s: float, file: str = "",
-              args: dict | None = None) -> tuple[bool, str, list[dict]]:
+async def run(ext: "Extensions", code: str, timeout_s: float, file: str = "", args: dict | None = None,
+              harness_url: str = "", builtins: list[str] | None = None) -> tuple[bool, str, list[dict]]:
     """Returns (ok, text for the agent, inner calls)."""
     from .extensions import MAX_RESULT_CHARS, _tail
     tools = {t.name: {"run": t.run, "dir": l.manifest.dir_rel, "timeout_s": t.timeout_s}
              for l in ext.loaded.values() for t in l.manifest.tools}
     timeout_s = max(1.0, min(float(timeout_s), MAX_SCRIPT_S))
     t0 = time.monotonic()
-    spec = {"code": code, "file": file, "args": args or {}, "tools": tools}
+    spec = {"code": code, "file": file, "args": args or {}, "tools": tools,
+            "harness_url": harness_url, "builtins": sorted(builtins or [])}
     rc, out, err = await ext.executor.run([ext.executor_python, "-c", RUNNER], "", json.dumps(spec), timeout_s)
     calls, errors, rest = [], [], []
     for line in err.splitlines():
@@ -117,7 +133,7 @@ async def run(ext: "Extensions", code: str, timeout_s: float, file: str = "",
             errors.append(line[len(ERR):])
             continue
         rest.append(line)
-    out = out.strip()
+    out = out.replace("\r\n", "\n").strip()
     if len(out) > MAX_RESULT_CHARS:
         out = out[:MAX_RESULT_CHARS] + f"\n… [{len(out) - MAX_RESULT_CHARS} more characters cut]"
     took = f"{time.monotonic() - t0:.1f} s, {len(calls)} tool calls"

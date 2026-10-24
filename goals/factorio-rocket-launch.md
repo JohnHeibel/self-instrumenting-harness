@@ -6,6 +6,8 @@ The program is **Factorio**, in a freeplay game where you are the only player. Y
 
 **Done when** a rocket has launched. Until then, keep scaling production; the bottleneck later is throughput, so tools that build and fix whole production lines in one call pay off more and more.
 
+**Automated means fed by machines.** A production line is automated only when its raw materials arrive without your hands: mining drills to furnaces to assemblers, linked by belts and inserters (chests are fine as buffers between machines). Filling a chest or a machine by hand to get things started is allowed, but a line you keep supplying by hand is not automated and doesn't count. The grader checks each automated milestone's supply chain back to mining drills (or pumps, for fluids).
+
 **Progress** is measured by these steps, in order: first assembler built, red science automated, green science automated, petroleum gas, plastic, advanced circuits, engine units, blue science, production science, utility science, rocket silo, first rocket part, rocket launched. **Tokens** are everything you spend. Building tools that let you take each step in fewer calls is the point of this run.
 
 **Your mod may act for your character, within a player's limits.** Commands your own mod registers (`commands.add_command`, called over RCON) may read anything and may act through your character the way a player could, through a player's controls. For example:
