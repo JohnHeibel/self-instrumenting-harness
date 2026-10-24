@@ -422,30 +422,6 @@ def test_a_long_failure_keeps_its_start_and_end():
     assert tm._ends("short error", "t7") == "short error"
 
 
-def test_large_results_from_an_agent_tool_get_one_suggestion(tmp_path):
-    from toolserver import tasks as tm
-
-    class Log:
-        def __init__(self):
-            self.rows = []
-
-        def write(self, kind, **kw):
-            self.rows.append(kind)
-
-    log = Log()
-    board = tm.Board(log, tmp_path)
-    w = tm.Work(None, log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
-    for _ in range(tm.BIG_RESULT_CALLS - 1):
-        w.note_result("my_read", 30_000)
-    assert not board.items                          # too few calls yet
-    w.note_result("small_tool", 200)
-    w.note_result("my_read", 30_000)
-    w.note_result("my_read", 30_000)
-    texts = [n.text for n in board.items]
-    assert len(texts) == 1 and "my_read" in texts[0] and "summary by default" in texts[0]
-    assert log.rows.count("big_results") == 1
-
-
 def test_a_tool_review_is_suggested_at_new_milestones_and_after_a_long_gap(tmp_path):
     import json
     from toolserver import tasks as tm
@@ -474,32 +450,45 @@ def test_a_tool_review_is_suggested_at_new_milestones_and_after_a_long_gap(tmp_p
     assert len(board.items) == 2 and "since the last milestone or tool review" in board.items[1].text
 
 
-def test_one_off_scripts_that_only_look_lead_to_a_views_suggestion(tmp_path):
+def test_the_review_carries_what_happened_since_the_last_one(tmp_path):
     import json
     from datetime import datetime, timezone
     from toolserver import tasks as tm
 
     class Log:
-        def write(self, *a, **kw):
-            pass
+        def __init__(self):
+            self.rows = []
+
+        def write(self, kind, **kw):
+            self.rows.append((kind, kw))
 
     def busy(ts):
         with (tmp_path / "grader.jsonl").open("a") as f:
             f.write(json.dumps({"ts": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
                                 "type": "program_actions", "count": 1}) + "\n")
 
-    board = tm.Board(Log(), tmp_path)
-    w = tm.Work(None, Log(), tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    log = Log()
+    board = tm.Board(log, tmp_path)
+    w = tm.Work(None, log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
     t0 = 1_800_000_000.0
     busy(t0 - 100)                                   # the host counts actions
     busy(t0 + 3)                                     # something was done during the first script
-    for i in range(tm.VIEW_NUDGE_FIRST + 1):        # scripts that reach the program directly: no harness calls
+    for i in range(6):                               # scripts that reach the program directly: no harness calls
         w.note_oneoff(t0 + 100 * i, t0 + 100 * i + 5, None)
     w.note_oneoff(t0 + 900, t0 + 905, True)          # acted through the harness: not a look
     w.note_oneoff(t0 + 906, t0 + 908, None)          # just ended: the host may not have reported yet
     w._judge_oneoffs(now=t0 + 910)                   # the first script did something; the next five only looked
-    assert w.looks == tm.VIEW_NUDGE_FIRST and len(board.items) == 1 and len(w.oneoffs) == 1
-    w._prog["checked"] = 0
-    w._judge_oneoffs(now=t0 + 2000)
-    assert w.looks == tm.VIEW_NUDGE_FIRST + 1 and len(board.items) == 1   # next suggestion only after 10 more
-    assert "only looked" in board.items[0].text and "keep=" in board.items[0].text
+    assert w.since["looks"] == 5 and len(w.oneoffs) == 1
+    w.note_result("my_read", 30_000)
+    w.note_result("small_tool", 200)
+    w.since["tasks"] = 4
+    key = ("build", "blocked at # by tree")
+    w.since["failures"][key], w.since["examples"][key] = 3, "blocked at 3,4 by tree (build)"
+    assert not board.items                           # nothing is posted between reviews
+    w.review_check(now=w.last_review + tm.REVIEW_EVERY_S + 1)
+    text = board.items[-1].text
+    assert "only looked at the program: 5" in text
+    assert "3x blocked at 3,4 by tree (build)" in text and "4 ended, 3 failed" in text
+    assert "my_read 30.0k" in text and "small_tool" not in text
+    assert w.since["looks"] == 0 and w.since["tasks"] == 0      # starts over after each review
+    assert [kw["facts"] for k, kw in log.rows if k == "tool_review_suggested"][0][0].startswith("tasks:")

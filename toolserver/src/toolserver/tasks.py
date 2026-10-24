@@ -42,14 +42,11 @@ QUIET = {"", "none", "null", "false", "0", "[]", "{}", '""'}
 FOOTER_CHARS = 800
 MAX_QUEUED = 8
 IDLE_NOTE_AFTER_S = 90          # hands idle this long: say so on the agent's tool results
-BIG_RESULT_CALLS, BIG_RESULT_CHARS = 5, 10_000   # one of the agent's tools averaging this much over this many calls
-VIEW_NUDGE_FIRST, VIEW_NUDGE_EVERY = 5, 10   # one-off read-only scripts before suggesting views, then again
 ONEOFF_SETTLE_S = 15            # the host's activity reports lag by up to this long
 REVIEW_EVERY_S = 2 * 3600      # suggest a tool review this often when no milestone has come
-REVIEW_TEXT = ("{why} A good moment to review your own tools: against the brief's foundation (get anywhere, "
-               "get anything, change many things at once, see an area), which is weakest, or which failed or "
-               "cost the most since the last review (costs shows calls, failures and result size per tool)? "
-               "Improve that one before pushing on.")
+REVIEW_ASK = ("Against the brief's foundation (get anywhere, get anything, change many things at once, see an "
+              "area) and its rules on repeats (actions and questions), which of your tools is weakest, failed or "
+              "cost the most? Improve that one before pushing on. (costs has more per tool.)")
 IDLE_NOTE_EVERY_S = 180         # ...at most this often
 STALL_REPEAT = 10               # a task holding the hands made the same acting call this many times...
 STALL_NO_ACT_S = 120            # ...or has made no acting call for this long: tell the agent, once each
@@ -209,6 +206,10 @@ class Board:
             p.unlink(missing_ok=True)
 
 
+def _fresh_since() -> dict:
+    return {"tasks": 0, "failures": {}, "examples": {}, "looks": 0, "results": {}}
+
+
 def _ends(text: str, tid: str, head: int = 170, tail: int = 130) -> str:
     """A long failure cut to its start and end, where the error and the reason usually are."""
     text = " ".join(text.split())
@@ -305,11 +306,9 @@ class Work:
         self.rules: dict[str, Rule] = {}
         self._n = 0
         self._rules_path = run_dir / "rules.json"
-        self.results: dict[str, list[int]] = {}       # agent's own tool -> [direct calls, result chars]
-        self.big_told: set[str] = set()
+        self.since = _fresh_since()                   # what happened since the last tool review
         self.last_review = time.time()
         self.oneoffs: list[tuple[float, float, bool | None]] = []
-        self.looks, self.looks_next = 0, VIEW_NUDGE_FIRST
         hands.on_release = self.pump
 
     def can_act(self, who: str | None) -> bool:
@@ -462,11 +461,14 @@ class Work:
         self.log.write("task_ended", task=t.id, name=t.name, status=t.status, duration_ms=round(r.seconds * 1000),
                        calls=len(r.calls), summary=summary)
         again = ""
+        self.since["tasks"] += 1
         if t.status == "failed":
             masked = re.sub(r"[0-9a-f]{8,}", "#", summary)           # ids, hashes
             # positions, ticks, counts; and only the start, where the error is (state dumps after it vary)
             key = (t.name, re.sub(r"-?\d+(\.\d+)?", "#", masked)[:REPEAT_KEY_CHARS])
             self.failures[key] = n = self.failures.get(key, 0) + 1
+            self.since["failures"][key] = self.since["failures"].get(key, 0) + 1
+            self.since["examples"][key] = f"{summary} ({t.name})"
             if n >= 2:
                 again = (f" This is the {n}{'nd' if n == 2 else 'rd' if n == 3 else 'th'} time {t.name} failed with "
                          f"this same error: running it again unchanged won't help. Look at why (read the state "
@@ -610,18 +612,9 @@ class Work:
         return st["counted"], st["last"]
 
     def note_result(self, tool: str, chars: int) -> None:
-        """A result of one of the agent's own tools, returned straight into its context: once such a tool's
-        results run large on average, suggest it return less (results re-read on every later step)."""
-        c = self.results.setdefault(tool, [0, 0])
+        """A result of one of the agent's own tools, returned straight into its context (for the review)."""
+        c = self.since["results"].setdefault(tool, [0, 0])
         c[0], c[1] = c[0] + 1, c[1] + chars
-        avg = c[1] / c[0]
-        if c[0] >= BIG_RESULT_CALLS and avg >= BIG_RESULT_CHARS and tool not in self.big_told:
-            self.big_told.add(tool)
-            self.log.write("big_results", tool=tool, calls=c[0], avg_chars=round(avg))
-            self.board.post("harness", f"Your tool {tool} has returned {avg / 1000:.0f}k characters on average over "
-                            f"{c[0]} calls, and every result stays in your context. Give it a summary by default "
-                            f"(what's wrong first, counts, what changed) with filters or a detail level for the rest, "
-                            f"or call it inside run_script and return only what you need.")
 
     def note_oneoff(self, t0: float, t1: float, acted: bool | None) -> None:
         """A one-off foreground script ran from t0 to t1. acted: whether any of its calls through the harness
@@ -629,8 +622,8 @@ class Work:
         self.oneoffs.append((t0, t1, acted))
 
     def _judge_oneoffs(self, now: float) -> None:
-        """Count one-off scripts that only looked (no acting call, and the program saw nobody do anything
-        meanwhile); every so often suggest keeping repeated questions as views."""
+        """Count one-off scripts that only looked: no acting call, and the program saw nobody do anything
+        meanwhile (for the review)."""
         counted, _ = self.program_activity()
         times = self._prog.get("times", [])
         keep = []
@@ -644,18 +637,12 @@ class Work:
                 looked = not any(t0 <= ts <= t1 + ONEOFF_SETTLE_S for ts in times)
             else:
                 looked = acted is False               # only harness calls to go by, and all of them read
-            self.looks += looked
+            self.since["looks"] += looked
         self.oneoffs = keep
-        if self.looks >= self.looks_next:
-            self.looks_next = self.looks + VIEW_NUDGE_EVERY
-            self.log.write("views_suggested", one_off_reads=self.looks)
-            self.board.post("harness", f"You have written {self.looks} one-off scripts that only looked at the "
-                            f"program. If you keep answering the same questions, keep them as views (run_script "
-                            f"with keep=) and build one view that runs them and shows only what needs your "
-                            f"attention (see \"Repeated questions become views\" in the brief).")
 
     def review_check(self, now: float | None = None) -> None:
-        """Suggest a review of the agent's tools at each milestone, or every REVIEW_EVERY_S without one."""
+        """At each milestone, or every REVIEW_EVERY_S without one, ask the agent to review its own tools,
+        with what happened since the last review: the facts, and the agent decides what to fix."""
         now = now or time.time()
         self._judge_oneoffs(now)
         new = self._prog.pop("new_milestones", [])
@@ -665,9 +652,29 @@ class Work:
             why = f"It has been {(now - self.last_review) / 3600:.0f} h since the last milestone or tool review."
         else:
             return
-        self.last_review = now
-        self.log.write("tool_review_suggested", why=why)
-        self.board.post("harness", REVIEW_TEXT.format(why=why))
+        facts = self._review_facts()
+        self.last_review, self.since = now, _fresh_since()
+        self.log.write("tool_review_suggested", why=why, facts=facts)
+        lines = "".join(f"\n- {f}" for f in facts) or "\n- (nothing recorded)"
+        self.board.post("harness", f"{why} Time to review your own tools. Since the last review:{lines}\n"
+                        f"{REVIEW_ASK}")
+
+    def _review_facts(self) -> list[str]:
+        s, facts = self.since, []
+        if s["tasks"]:
+            line = f"tasks: {s['tasks']} ended, {sum(s['failures'].values())} failed"
+            top = sorted(s["failures"].items(), key=lambda kv: -kv[1])[:3]
+            if top:
+                line += "; most often: " + "; ".join(f"{n}x {s['examples'][k][:110]}" for k, n in top)
+            facts.append(line)
+        if s["looks"]:
+            facts.append(f"one-off scripts that only looked at the program: {s['looks']}")
+        big = sorted(((c[1] / c[0], t, c[0]) for t, c in s["results"].items()
+                      if c[0] and c[1] / c[0] >= 2000), reverse=True)[:2]
+        if big:
+            facts.append("results of your own tools returned straight to you: " +
+                         ", ".join(f"{t} {avg / 1000:.1f}k characters on average over {n} calls" for avg, t, n in big))
+        return facts
 
     def _stalled(self, t: Task, kind: str, text: str) -> None:
         self.log.write("task_stalled", task=t.id, name=t.name, kind=kind, acts=t.acts, calls=t.calls,
