@@ -75,3 +75,25 @@ def test_report_shows_program_actions_per_step_from_any_log(tmp_path):
 def test_report_without_program_counts_says_nothing_about_them(tmp_path):
     _write(tmp_path / "grader.jsonl", [{"ts": "2026-01-01T11:26:00Z", "type": "milestone", "id": "x"}])
     assert "Done in the program" not in report(tmp_path, 60, now=NOW)
+
+
+def test_time_use_splits_hands_tools_and_idle(tmp_path):
+    from toolserver.costs import time_use
+    _write(tmp_path / "events.jsonl", [
+        {"ts": "2026-01-01T11:00:00Z", "type": "task_started", "task": "t1", "hands": True},
+        {"ts": "2026-01-01T11:10:00Z", "type": "task_ended", "task": "t1"},          # 10 min hands
+        {"ts": "2026-01-01T11:20:00Z", "type": "tool_call", "tool": "read_docs", "channel": "docs",
+         "duration_ms": 300_000},                                                     # 5 min tools only
+        {"ts": "2026-01-01T11:30:00Z", "type": "tool_call", "tool": "probe", "channel": "hook",
+         "duration_ms": 60_000, "hook": {"acts": False}},                             # 1 min reading
+        {"ts": "2026-01-01T11:40:00Z", "type": "tool_call", "tool": "probe", "channel": "hook",
+         "duration_ms": 60_000, "via": "task:t9"},                                    # inside a task: skipped
+    ])
+    _write(tmp_path / "runner.jsonl", [
+        {"ts": "2026-01-01T11:00:00Z", "type": "agent_state", "state": "thinking"},
+        {"ts": "2026-01-01T11:50:00Z", "type": "agent_state", "state": "paused"},     # last 10 min off
+    ])
+    a, b = NOW.timestamp() - 3600, NOW.timestamp()
+    u = time_use(tmp_path, a, b)
+    assert [round(u[k] / 60) for k in ("hands", "tools", "idle", "off")] == [10, 6, 34, 10], u
+    assert "hands busy 20%" in report(tmp_path, 60, now=NOW)

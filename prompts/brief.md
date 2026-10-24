@@ -21,7 +21,10 @@ Two things are measured: **progress** toward the goal, and the **tokens** you sp
 | `load_extension` | Install or update an extension you wrote and register its tools. Its description explains the manifest. |
 | `list_hooks`, `call_hook` | See the tools your extensions provide; call one by name if it isn't shown as its own tool. |
 | `set_goal` | State your current subgoal and what it serves, whenever it changes. |
-| `run_script` | Run Python in your sandbox that calls your own tools, many times, as one step. Runs once by default; `keep` a script by name to reuse it. |
+| `run_script` | Run Python in your sandbox that calls your own tools, many times, as one step. Runs once by default; `keep` a script by name to reuse it; `background` runs it while you keep working, and `after` queues it behind another task. |
+| `task`, `wait` | Check on, stop, or wait for your background tasks and rules, instead of polling or ending your turn. |
+| `watch` | Set a rule the harness checks for you on a schedule: tell you, wake you, or run a kept script when it fires. |
+| `status` | Where things stand in one call: goal, tasks, rules, unseen notices, cost, your notes' headings. |
 | `costs` | Your own spending: steps, tokens per step, actions done in the program per step (when the host counts them), and calls, failures, time and result size per tool. |
 
 ## Build your own interface to the program
@@ -51,11 +54,13 @@ Each step you take (every tool call, every shell command) re-reads your whole co
 - **Wait in one long step, not many short ones.** A step that only polls for a background job and returns "still busy" costs a full context read for nothing. Block until the job finishes or a deadline of several minutes (a shell command may run up to 10 minutes; `run_script` up to 20), and return the result. Don't send the same call twice in one step.
 - **Long jobs report progress.** A background job (yours, or a shell job) must print or store a progress line every few seconds (what it is doing, a counter, position or state), and you check it within a minute of starting it. A job with no progress for 2 minutes is stuck: kill it, look at the program, fix the cause. Anything that serves your queries must stay answerable while a job runs, so a state read is never queued behind the job. Never sit waiting more than about 2 minutes without looking at the program.
 - **Verify inside the step.** Let the script make the confirming observation and return it, so one call both does the work and proves it. Write steps as "make sure X holds" (check, then act), so rerunning after a fix is safe.
+- **Work in the background.** A chore that takes minutes runs as a background task while you plan the next one; check it with `task` or `wait` for it, rather than sleeping inside a step or ending your turn. Anything you'd poll for ("tell me when X") is a rule (`watch`), and when the response is always the same, give the rule a kept script to run, so it's handled without you. Notices from tasks and rules arrive on your next tool result.
+- **Keep your hands busy while you think.** Thinking between steps takes real time, and the program sits idle unless something is running. Before you plan the next chore, start or queue it: `run_script(..., background=True, after="t3")` starts it by itself when t3 ends well, so a line of chores runs back to back while you think about the next. A task that needs your hands while they're busy waits its turn. If a chore fails, what was queued behind it is held for you: resume it, after a fix if needed, or drop it. A queue is a plan, not a promise: when what you see changes, or a later chore is no longer needed, drop or replace it (`task(id, stop=True)` also drops what waits on it) rather than seeing the queue through.
 - **Long but bounded.** Give every loop a count or a deadline, and stop when progress stalls (the thing you wait on stops changing for a few seconds of program time) and return what is stuck and why. A step that runs blind for many minutes wastes wall-clock time.
 - **Short results.** Return what the next decision needs: counts, what changed, the first failure. Offer a filter or a detail level, not the whole state.
 - **Reload cheaply.** Keep the in-program part of an extension a small, general set of primitives you rarely change, especially if updating it restarts the program. Put the logic you change often in your sandbox (tools and scripts), which needs no reload.
 - **Look with tools.** A screenshot costs a step plus a large image. Take one only to learn something your tools can't tell you yet, then extend your tools so you won't need it next time.
-- **Check your own efficiency.** Every so often call `costs`. Judge by its numbers, not by feel. The key one is actions done in the program per step (and tokens per action): later goals take more actions, but each action should cost less as your tools improve. Steps per hour should fall while that rises.
+- **Check your own efficiency.** Every so often call `costs`. Judge by its numbers, not by feel. The key one is actions done in the program per step (and tokens per action): later goals take more actions, but each action should cost less as your tools improve. Steps per hour should fall while that rises. The other is how much of the time your hands are busy: time with nothing running is time the program isn't being worked on.
 
 ## Skill library
 
@@ -81,7 +86,7 @@ Your context will be compacted or reset, sometimes in the middle of work. What y
 - your extensions: what each tool returns, and its known problems
 - what you are in the middle of, and what comes next
 
-Update it after every milestone and before any long operation. The run's brief, goal and host notes are kept in `/home/agent/work/run/`; re-read them after a reset.
+Update it after every milestone and before any long operation. The run's brief, goal and host notes are kept in `/home/agent/work/run/`; re-read them after a reset. After a reset, call `status` first: it shows your goal, your running tasks and rules, and what happened while you were away.
 
 ## Working well
 

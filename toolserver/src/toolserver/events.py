@@ -34,6 +34,9 @@ class _Result:
 
 # Set while a run_script script calls a built-in tool, so its record says via="script".
 VIA: contextvars.ContextVar[str | None] = contextvars.ContextVar("via", default=None)
+# Who is calling, for the hands lock (tasks.Hands): None for the agent's own calls, "script" for a
+# foreground script, a task id ("t3") for a background task, "rule:<name>" for a rule's check.
+WHO: contextvars.ContextVar[str | None] = contextvars.ContextVar("who", default=None)
 
 
 class EventLog:

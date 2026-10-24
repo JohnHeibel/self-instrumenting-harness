@@ -15,7 +15,7 @@ manifest, `extension.json` in its workspace:
         "input_schema": {"type": "object", "properties": {...}},     # optional
         "run": ["python3", "tools/status.py"],                      # runs in the agent's sandbox
         "where": "sandbox",                          # optional; reserved for host-side helpers later
-        "timeout_s": 30, "read_only": true, "depends_on": ["..."]
+        "timeout_s": 30, "read_only": true, "depends_on": ["..."]   # read_only: default false (it acts)
       }],
       "health_check": {"tool": "get_status", "args": {}}            # optional
     }
@@ -45,7 +45,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.fastmcp.tools.base import Tool
 
 from .docs import parse_sources
-from .events import EventLog
+from .events import WHO, EventLog
 
 NAME = re.compile(r"[a-z][a-z0-9_]{2,47}")
 INSTALL_AS = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
@@ -162,8 +162,15 @@ class ContainerExecutor:
         self.container, self.workdir = container, workdir
 
     async def run(self, argv, cwd, stdin, timeout_s):
+        return await _exec(self._argv(argv, cwd), None, stdin, timeout_s)
+
+    async def spawn(self, argv, cwd):
+        """Start a process and return it (stdin, stdout and stderr are pipes); for long-running scripts."""
+        return await _spawn(self._argv(argv, cwd), None)
+
+    def _argv(self, argv, cwd):
         wd = f"{self.workdir}/{cwd}".rstrip("/")
-        return await _exec(["docker", "exec", "-i", "-w", wd, self.container, *argv], None, stdin, timeout_s)
+        return ["docker", "exec", "-i", "-w", wd, self.container, *argv]
 
 
 class LocalExecutor:
@@ -176,6 +183,15 @@ class LocalExecutor:
 
     async def run(self, argv, cwd, stdin, timeout_s):
         return await _exec(argv, self.workspace / cwd, stdin, timeout_s)
+
+    async def spawn(self, argv, cwd):
+        return await _spawn(argv, self.workspace / cwd)
+
+
+async def _spawn(argv: list[str], cwd: Path | None):
+    return await asyncio.create_subprocess_exec(*argv, cwd=cwd, stdin=asyncio.subprocess.PIPE,
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                limit=1 << 20)
 
 
 async def _exec(argv: list[str], cwd: Path | None, stdin: str, timeout_s: float) -> tuple[int, str, str]:
@@ -276,7 +292,7 @@ def parse_manifest(workspace: Path, manifest_rel: str, host: HostConfig, builtin
         if not problems or all(not p.startswith(where) for p in problems):
             tools.append(ToolSpec(name=tname, description=desc, run=run, input_schema={"type": "object", **schema},
                                   timeout_s=max(1.0, min(float(t.get("timeout_s", 30)), host.max_tool_timeout_s)),
-                                  read_only=bool(t.get("read_only", True)),
+                                  read_only=bool(t.get("read_only", False)),
                                   depends_on=[d for d in t.get("depends_on", []) if isinstance(d, str)]))
     hc = m.get("health_check")
     if hc is not None and (not isinstance(hc, dict) or hc.get("tool") not in seen):
@@ -316,6 +332,7 @@ class Extensions:
         self.workspace, self.executor, self.archive_dir, self.builtin = workspace, executor, archive_dir, builtin
         self.loaded: dict[str, Loaded] = {}          # extension name -> what is live
         self.owner: dict[str, str] = {}               # tool name -> extension name
+        self.hands = None                             # tasks.Hands, set by the server
         self._lock = asyncio.Lock()
         self._restore_active()
 
@@ -380,10 +397,12 @@ class Extensions:
         loaded = self.loaded[ext]
         spec = next(t for t in loaded.manifest.tools if t.name == name)
         missing = [k for k in spec.input_schema.get("required", []) if k not in args]
-        hook = {"name": name, "version": loaded.version, "extension": ext}
+        hook = {"name": name, "version": loaded.version, "extension": ext, "acts": not spec.read_only}
         with self.log.call(name, "hook", args, via=via, hook=hook) as res:
             if missing:
                 raise ToolError(f"{name}: missing required argument(s) {missing}")
+            if not spec.read_only and self.hands is not None:
+                self.hands.check(WHO.get())    # an acting tool needs your hands (tasks.Hands)
             code, out, err = await self.executor.run(spec.run, loaded.manifest.dir_rel, json.dumps(args), spec.timeout_s)
             if code == -1 and err.startswith("timed out"):
                 raise ToolError(f"{name} timed out after {spec.timeout_s:g} s; check its backend is running "
@@ -402,7 +421,11 @@ class Extensions:
 
     def hook_info(self, name: str) -> dict | None:
         ext = self.owner.get(name)
-        return {"name": name, "version": self.loaded[ext].version, "extension": ext} if ext else None
+        if not ext:
+            return None
+        spec = next((t for t in self.loaded[ext].manifest.tools if t.name == name), None)
+        return {"name": name, "version": self.loaded[ext].version, "extension": ext,
+                "acts": not (spec and spec.read_only)}
 
     def describe(self) -> list[dict]:
         return [{"tool": t.name, "extension": name, "version": l.version, "description": t.description,
