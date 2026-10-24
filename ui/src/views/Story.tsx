@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Run } from '../data/model'
 import { HookDetail } from '../components/HookDetail'
-import { Event, Feed, Goal, Header, HookLibrary, Mind, ReadLine, Screen } from '../components/panels'
+import { CostChart, CoverageChart } from '../components/charts'
+import { Relief } from '../components/Relief'
+import { Event, Feed, Goal, Header, HookLibrary, Milestones, Mind, ReadLine, Screen } from '../components/panels'
 import { SPEEDS, Timeline } from '../components/Timeline'
 
 /** Replay of a whole run: scrub, play at timelapse speed, jump between key moments, open any hook. */
@@ -69,21 +71,27 @@ export function Story({ run, artifactUrl }: { run: Run; artifactUrl: (p: string)
   return (
     <div className="stage-fit">
       <div className="canvas" style={{ transform: `scale(${scale})` }}>
+        <Relief />
         <Header run={run} at={at} />
-        <div className="upper">
-          <div className="story">
+        <Milestones items={run.milestones(at)} />
+        <div className="main">
+          <div className="left">
+            <div className="screenwrap">
+              <Screen run={run} at={at} artifactUrl={artifactUrl} />
+              <div className="over top"><ReadLine run={run} at={at} /></div>
+              <div className="over bottom"><Event run={run} at={at} /></div>
+            </div>
+            <div className="charts">
+              <CoverageChart run={run} at={at} />
+              <CostChart run={run} at={at} />
+            </div>
+          </div>
+          <div className="right">
             <Goal run={run} at={at} opening={opening} />
             <Mind run={run} at={at} playing={playing} opening={opening} />
-            <Event run={run} at={at} />
-          </div>
-          <div className="look">
-            <Screen run={run} at={at} artifactUrl={artifactUrl} />
-            <ReadLine run={run} at={at} />
-          </div>
-          <aside className="side">
             <HookLibrary hooks={hooks} onOpen={setOpen} />
             <Feed run={run} at={at} items={run.feed(at, 4)} />
-          </aside>
+          </div>
         </div>
         <Timeline run={run} at={at} playing={playing} speed={speed}
                   onSeek={t => setAt(Math.max(run.t0, Math.min(run.t1, t)))} onPlay={setPlaying} onSpeed={setSpeed} />

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FeedItem, HookView, Run, TRec } from '../data/model'
+import type { FeedItem, HookView, Milestone, Run, TRec } from '../data/model'
 import { big, hms, span } from '../util'
 
 /** Wall-clock hold times, so nothing flashes by at timelapse speed. */
@@ -12,7 +12,7 @@ export function Header({ run, at }: { run: Run; at: number }) {
   const c = run.counts(at)
   return (
     <header className="head">
-      <div className="brand">Self-instrumenting harness<span>{run.title}</span></div>
+      <div className="brand">Sisyphus<em lang="grc">Σίσυφος</em><span>{run.title}</span></div>
       <dl className="stats">
         <div><dt>Tool calls</dt><dd>{c.calls.toLocaleString()}</dd></div>
         <div className="fail"><dt>Failed</dt><dd>{c.failed}</dd></div>
@@ -21,6 +21,19 @@ export function Header({ run, at }: { run: Run; at: number }) {
       </dl>
       <div className="clock" aria-label="Run time">{hms(at - run.t0)}</div>
     </header>
+  )
+}
+
+export function Milestones({ items }: { items: Milestone[] }) {
+  const current = items.findIndex(m => m.t === undefined)
+  return (
+    <ol className="strip" aria-label="Milestones">
+      {items.map((m, i) => (
+        <li key={m.id} className={m.t !== undefined ? 'done' : i === current ? 'current' : ''} title={m.evidence ?? 'not reached yet'}>
+          <span>{m.name}</span>
+        </li>
+      ))}
+    </ol>
   )
 }
 
@@ -40,8 +53,8 @@ export function Goal({ run, at, opening }: { run: Run; at: number; opening: bool
 }
 
 const STATE_HUE: Record<string, string> = {
-  thinking: 'var(--c-hook)', acting: 'var(--c-repair)', waiting: 'var(--c-milestone)', compacting: 'var(--c-milestone)',
-  host_down: 'var(--c-break)', backing_off: 'var(--c-break)', paused: 'var(--muted)', ended: 'var(--muted)',
+  thinking: 'var(--lapis)', acting: 'var(--verde)', waiting: 'var(--ochre)', compacting: 'var(--ochre)',
+  host_down: 'var(--porphyry)', backing_off: 'var(--porphyry)', paused: 'var(--muted)', ended: 'var(--muted)',
 }
 
 /** State plus the newest reasoning. Typed out only when it arrives during playback; after a seek it is shown whole. */
@@ -133,15 +146,25 @@ export function Event({ run, at }: { run: Run; at: number }) {
   )
 }
 
-/** The newest screenshot with its age. */
+/** The newest screenshot with its age. Before the first one, an engraved column holds the place. */
 export function Screen({ run, at, artifactUrl }: { run: Run; at: number; artifactUrl: (p: string) => string }) {
   const shot = run.screenshot(at)
   return (
     <figure className="screen">
-      <div className="frame">
-        {shot ? <img src={artifactUrl(shot.artifact)} alt="What the agent last saw" /> : <div className="empty">No screenshot yet</div>}
-      </div>
-      <figcaption>{shot ? `Last screenshot it looked at · ${span(at - shot.t)} ago` : 'Screenshots appear as the agent looks at the host'}</figcaption>
+      {shot ? <img src={artifactUrl(shot.artifact)} alt="What the agent last saw" /> : (
+        <div className="empty">
+          <svg viewBox="0 0 120 200" width="150" aria-hidden="true">
+            <g fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round">
+              <rect x="22" y="14" width="76" height="9" /><path d="M30 23 Q60 34 90 23" /><rect x="34" y="34" width="52" height="4" />
+              <path d="M38 38 L42 166 M86 38 L82 166" />
+              {[48, 56, 64, 72].map(x => <path key={x} d={`M${x - 2} 40 L${x + (x - 60) * 0.05} 164`} />)}
+              <rect x="30" y="166" width="60" height="7" /><rect x="22" y="173" width="76" height="9" /><rect x="14" y="182" width="92" height="9" />
+            </g>
+          </svg>
+          <span>Waiting for the agent to look at the host</span>
+        </div>
+      )}
+      {shot && <figcaption>Last screenshot it looked at · {span(at - shot.t)} ago</figcaption>}
     </figure>
   )
 }
@@ -209,10 +232,10 @@ export function HookLibrary({ hooks, onOpen }: { hooks: HookView[]; onOpen: (nam
 }
 
 const TAG: Record<FeedItem['kind'], [string, string]> = {
-  hook: ['hook', 'var(--c-hook)'], screenshot: ['look', 'var(--muted-hi)'], input: ['input', 'var(--muted-hi)'],
-  docs: ['docs', 'var(--muted-hi)'], extension: ['build', 'var(--c-hook)'], meta: ['meta', 'var(--muted)'],
-  say: ['says', 'var(--text)'], milestone: ['done', 'var(--c-milestone)'], marker: ['event', 'var(--c-break)'],
-  goal: ['goal', 'var(--muted-hi)'], fail: ['failed', 'var(--c-fail)'], status: ['hook', 'var(--c-break)'],
+  hook: ['hook', 'var(--lapis)'], screenshot: ['look', 'var(--muted-hi)'], input: ['input', 'var(--muted-hi)'],
+  docs: ['docs', 'var(--muted-hi)'], extension: ['build', 'var(--lapis)'], meta: ['meta', 'var(--muted)'],
+  say: ['says', 'var(--text)'], milestone: ['done', 'var(--ochre)'], marker: ['event', 'var(--porphyry)'],
+  goal: ['goal', 'var(--muted-hi)'], fail: ['failed', 'var(--porphyry)'], status: ['hook', 'var(--porphyry)'],
 }
 
 /** Plain-language feed. Failures are marked in the line, and the count and latest one are pinned above it. */

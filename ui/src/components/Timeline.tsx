@@ -1,22 +1,22 @@
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Marker, Run } from '../data/model'
-import { big, span } from '../util'
+import { span } from '../util'
 
 export const SPEEDS = [60, 300, 600, 1800]
 
-// Geometry in canvas pixels. The plot is one chart: every lane shares the same time axis.
-const W = 1800, H = 480, X0 = 190, X1 = 1790
-const Y = { ms: 76, hook: 164, brk: 252, fail: 282, cov: [304, 372] as const, tok: [394, 458] as const, axis: 474 }
+// Canvas pixels. One chart: the slope is real progress (milestones reached) over time.
+const W = 1840, X0 = 24, X1 = 1816, BASE = 156, PEAK = 50, R = 14
+const LEVEL = BASE - PEAK
 
-type Placed<T> = { item: T; x: number; row: number; anchor: 'start' | 'end'; w: number }
+type Placed<T> = { item: T; x: number; row: number; anchor: 'start' | 'end' | 'middle'; w: number }
 
 /** Greedy label rows: each label goes on the first row where it clears the previous one. */
-function place<T extends { x: number }>(items: T[], widthOf: (i: T) => number, rows: number): Placed<T>[] {
+function place<T extends { x: number }>(items: T[], widthOf: (i: T) => number, rows: number, centered = false): Placed<T>[] {
   const ends = Array<number>(rows).fill(-1e9)
   return items.map(item => {
     const w = widthOf(item)
-    const anchor = item.x + w > W - 8 ? 'end' as const : 'start' as const
-    const [a, b] = anchor === 'start' ? [item.x - 4, item.x + w + 14] : [item.x - w - 14, item.x + 4]
+    const anchor = centered ? 'middle' as const : item.x + w > W - 8 ? 'end' as const : 'start' as const
+    const [a, b] = anchor === 'middle' ? [item.x - w / 2, item.x + w / 2 + 10] : anchor === 'start' ? [item.x - 4, item.x + w + 14] : [item.x - w - 14, item.x + 4]
     let row = ends.findIndex(e => e <= a)
     if (row < 0) row = ends.indexOf(Math.min(...ends))
     ends[row] = b
@@ -24,8 +24,28 @@ function place<T extends { x: number }>(items: T[], widthOf: (i: T) => number, r
   })
 }
 
-const HUE = {
-  milestone: 'var(--c-milestone)', hook: 'var(--c-hook)', break: 'var(--c-break)', repair: 'var(--c-repair)', fail: 'var(--c-fail)',
+type Pt = { x: number; y: number }
+type Seg = { a: Pt; b: Pt; c1: Pt; c2: Pt }
+const K = 0.42  // how long each rise eases in and out
+
+/** Cubic segments through the progress points. Monotone, so the slope never overshoots the data. */
+function segs(pts: Pt[]): Seg[] {
+  return pts.slice(1).map((b, i) => {
+    const a = pts[i], dx = (b.x - a.x) * K
+    return { a, b, c1: { x: a.x + dx, y: a.y }, c2: { x: b.x - dx, y: b.y } }
+  })
+}
+const bez = (s: Seg, u: number): Pt => {
+  const m = 1 - u
+  const f = (a: number, b: number, c: number, d: number) => m * m * m * a + 3 * m * m * u * b + 3 * m * u * u * c + u * u * u * d
+  return { x: f(s.a.x, s.c1.x, s.c2.x, s.b.x), y: f(s.a.y, s.c1.y, s.c2.y, s.b.y) }
+}
+function slopeAt(ss: Seg[], x: number): Pt & { ang: number } {
+  const s = ss.find(q => x <= q.b.x) ?? ss[ss.length - 1]
+  let lo = 0, hi = 1
+  for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (bez(s, mid).x < x) lo = mid; else hi = mid }
+  const p = bez(s, hi), q = bez(s, Math.min(1, hi + 0.01)), o = bez(s, Math.max(0, hi - 0.01))
+  return { ...p, ang: Math.atan2(q.y - o.y, q.x - o.x) }
 }
 
 export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
@@ -40,38 +60,53 @@ export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
     const x = (clientX - r.left) / (r.width / ref.current!.offsetWidth)  // the canvas is CSS-scaled to fit the window
     return run.t0 + Math.max(0, Math.min(1, (x - X0) / (X1 - X0))) * dur
   }
-  const dim = (t: number) => (t <= at ? 1 : 0.4)
+  const dim = (t: number) => (t <= at ? 1 : 0.45)
   const seekTo = (t: number) => (e: React.MouseEvent) => { e.stopPropagation(); onSeek(t + 2000) }
+  const yOf = (n: number) => BASE - (n / Math.max(1, run.milestonesDefined.length)) * LEVEL
 
-  const lanes = useMemo(() => {
-    const ms = run.markers.filter(m => m.kind === 'milestone').map(m => ({ ...m, x: fx(m.t) }))
+  const g = useMemo(() => {
+    const ms = run.markers.filter(m => m.kind === 'milestone')
+    const pts: Pt[] = [{ x: X0, y: BASE }, ...ms.map((m, i) => ({ x: fx(m.t), y: yOf(i + 1) })), { x: X1, y: yOf(ms.length) }]
+    const ss = segs(pts)
+    const d = ss.map((s, i) => `${i ? '' : `M${s.a.x},${s.a.y}`}C${s.c1.x},${s.c1.y} ${s.c2.x},${s.c2.y} ${s.b.x},${s.b.y}`).join('')
+    const msP = ms.map((m, i) => ({ ...m, x: fx(m.t), y: yOf(i + 1) }))
+    const onSlope = (m: Marker) => ({ ...m, x: fx(m.t), y: slopeAt(ss, fx(m.t)).y })
     const hooks = run.markers.filter(m => m.kind === 'hook').map(m => ({ ...m, x: fx(m.t) }))
-    const brk = run.markers.filter(m => m.kind === 'break' || m.kind === 'repair').map(m => ({ ...m, x: fx(m.t) }))
-    const fails = run.of('tool_call').filter(c => !c.ok).map(c => c.t)
+    const brk = run.markers.filter(m => m.kind === 'break' || m.kind === 'repair').map(onSlope)
     return {
-      ms: place(ms, m => m.label.length * 10.4, 2),
-      hooks: place(hooks, m => m.label.length * 9.2, 3),
-      brk: place(brk, m => m.label.length * 8.8, 3),
-      fails,
+      ss, d, area: `${d}L${X1},${BASE}L${X0},${BASE}Z`,
+      ms: place(msP, m => m.label.length * 9.2, 2, true), hooks: place(hooks, m => m.label.length * 8.4, 3),
+      brk: place(brk, m => m.label.length * 8.4, 3),
+      fails: run.of('tool_call').filter(c => !c.ok).map(c => c.t),
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run])
-  const finalCost = useMemo(() => run.costPerMilestone(run.t1), [run])
-  const cost = run.costPerMilestone(at)
-  const maxTok = Math.max(1, ...finalCost.map(b => b.tokens))
-  const reached = run.markers.filter(m => m.kind === 'milestone')
-  const barSpan = (i: number) => {
-    const a = i === 0 ? run.t0 : reached[i - 1]?.t ?? run.t0
-    const b = reached[i]?.t ?? at
-    return [fx(a), fx(Math.max(a, b))] as const
-  }
-  const barY = (v: number) => Y.tok[1] - (v / maxTok) * (Y.tok[1] - Y.tok[0] - 16)
 
-  const pts = run.coverage(at)
-  const covY = (s: number) => Y.cov[1] - s * (Y.cov[1] - Y.cov[0])
-  const covPath = pts.map((p, i) => `${i ? 'L' : 'M'}${fx(p.t).toFixed(1)},${covY(p.share).toFixed(1)}`).join('')
-  const covNow = pts[pts.length - 1]
-  const lastCost = [...cost].reverse().find(b => b.done)
+  // The myth, in the data: the boulder slips back while a hook is broken, and eases forward once it is repaired.
+  const lastBR = [...run.markers].reverse().find(m => (m.kind === 'break' || m.kind === 'repair') && m.t <= at)
+  const target = lastBR?.kind === 'break' ? 1 : 0
+  const [slip, setSlip] = useState(0)
+  const slipRef = useRef(0)
+  useEffect(() => {
+    const calm = matchMedia('(prefers-reduced-motion: reduce)').matches
+    let raf = 0, last = performance.now()
+    const step = (now: number) => {
+      const dt = Math.min(0.1, (now - last) / 1000); last = now
+      const s = slipRef.current, n = calm ? target : s + (target - s) * (1 - Math.exp(-dt * (target ? 7 : 2.4)))
+      slipRef.current = Math.abs(n - target) < 0.003 ? target : n
+      setSlip(slipRef.current)
+      if (slipRef.current !== target) raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [target])
+
+  const px = fx(at)
+  const bx = Math.max(X0, px - slip * 34)
+  const bp = slopeAt(g.ss, bx)
+  const bc = { x: bp.x - Math.sin(bp.ang) * R, y: bp.y - Math.cos(bp.ang) * R }
+  const spin = (bx / R) * (180 / Math.PI)  // it rolls by exactly the distance it travels
+  const sh = { x: bp.x - Math.cos(bp.ang) * 16, y: bp.y - Math.sin(bp.ang) * 16 + 1 }
 
   const hours = Array.from({ length: Math.floor(dur / 3_600_000) + 1 }, (_, h) => h).filter(h => h % 2 === 0)
   const step = (dir: 1 | -1) => {
@@ -79,15 +114,14 @@ export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
     const next = dir > 0 ? ms.find(m => m.t > at + 1000) : [...ms].reverse().find(m => m.t < at - 60_000)
     if (next) onSeek(next.t + 2000)
   }
-  const px = fx(at)
-  const stem = (p: Placed<Marker & { x: number }>, base: number, rule: number) => base + p.row * 18 + 3 > rule ? rule : base + p.row * 18 + 3
+  const reached = run.markers.filter(m => m.kind === 'milestone' && m.t <= at).length
 
   return (
     <section className="timeline">
       <div className="thead">
         <div>
-          <h2>The whole run, start to finish <span>{span(dur)}</span></h2>
-          <p>Each mark is something that happened, placed at the moment it happened. Click or drag anywhere to jump there.</p>
+          <h2>The climb <span>{reached} of {run.milestonesDefined.length} milestones · {span(dur)} run</span></h2>
+          <p>The slope rises with each milestone the agent reaches. The boulder marks where the run is now. Click or drag to jump.</p>
         </div>
         <div className="controls">
           <button onClick={() => step(-1)} title="Previous key moment">◀ Prev moment</button>
@@ -98,101 +132,89 @@ export function Timeline({ run, at, playing, speed, onSeek, onPlay, onSpeed }: {
           </span>
         </div>
       </div>
-      <div className="plot" ref={ref}
+      <div className={`plot ${playing ? 'playing' : ''}`} ref={ref}
            onMouseDown={e => {
              onSeek(tAt(e.clientX))
              const move = (ev: MouseEvent) => onSeek(tAt(ev.clientX))
              const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up) }
              addEventListener('mousemove', move); addEventListener('mouseup', up)
            }}>
-        <div className="gut" style={{ top: 18 }}><b><i style={{ background: HUE.milestone }} />Milestones</b><span>Steps toward the goal</span></div>
-        <div className="gut" style={{ top: 100 }}><b><i style={{ background: HUE.hook }} />Hooks written</b><span>Tools the agent built for itself</span></div>
-        <div className="gut" style={{ top: 188 }}><b><i style={{ background: HUE.break }} /><i style={{ background: HUE.repair }} />Breaks and repairs</b><span>A hook stops working, then is fixed</span></div>
-        <div className="gut" style={{ top: 270 }}><b><i style={{ background: HUE.fail }} />Failed calls</b></div>
-        <div className="gut" style={{ top: 304 }}>
-          <b><i style={{ background: HUE.hook }} />Coverage, latest</b>
-          <em>{covNow ? Math.round(covNow.share * 100) : 0}%</em>
-          <span>of observations via own hooks, not screenshots</span>
-        </div>
-        <div className="gut" style={{ top: 396 }}>
-          <b><i style={{ background: 'var(--muted-hi)' }} />Tokens per milestone</b>
-          <em>{lastCost ? big(lastCost.tokens) : '–'}</em>
-          <span>for the last milestone</span>
-        </div>
-        <svg width={W} height={H} role="img" aria-label="Annotated timeline of the run">
-          {hours.map(h => <line key={h} x1={fx(run.t0 + h * 3_600_000)} x2={fx(run.t0 + h * 3_600_000)} y1={0} y2={Y.axis - 10} stroke="var(--rule-soft)" />)}
+        <svg width={W} height={224} role="img" aria-label="Progress of the run as a slope, with milestones, hooks, breaks and repairs">
+          <defs>
+            <linearGradient id="rock" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0" stopColor="#6a6e75" /><stop offset="1" stopColor="#2c2f34" />
+            </linearGradient>
+            <radialGradient id="boulder" cx="0.35" cy="0.3" r="0.8">
+              <stop offset="0" stopColor="#e4e2dc" /><stop offset="0.55" stopColor="#a4a8ad" /><stop offset="1" stopColor="#5b5f65" />
+            </radialGradient>
+            <clipPath id="past"><rect x={0} y={0} width={Math.max(0, px)} height={224} /></clipPath>
+          </defs>
 
-          {/* playhead */}
-          <line x1={px} x2={px} y1={4} y2={Y.axis - 10} stroke="var(--text)" strokeWidth={2} />
-          <path d={`M${px - 7},0 H${px + 7} L${px},9 Z`} fill="var(--text)" />
+          {/* the mountain: a ghost of the whole run, lit up to the playhead */}
+          <path d={g.area} fill="url(#rock)" opacity={0.3} />
+          <path d={g.d} fill="none" stroke="#8e939a" strokeWidth={1.5} opacity={0.55} />
+          <g clipPath="url(#past)">
+            <path d={g.area} fill="url(#rock)" />
+            <path d={g.d} fill="none" stroke="#d9d8d3" strokeWidth={2} />
+          </g>
+          <line x1={X0} x2={X1} y1={BASE} y2={BASE} stroke="var(--stone-hi)" opacity={0.5} />
 
-          {/* milestones */}
-          <line x1={X0} x2={X1} y1={Y.ms} y2={Y.ms} stroke="var(--rule)" />
-          {lanes.ms.map(p => (
+          {g.fails.map(t => <line key={t} x1={fx(t)} x2={fx(t)} y1={BASE - 11} y2={BASE - 1} stroke="var(--porphyry)" strokeWidth={2} opacity={dim(t)} />)}
+
+          {/* milestones: small carved tablets on the slope */}
+          {g.ms.map(p => (
             <g key={p.item.t} opacity={dim(p.item.t)} onMouseDown={seekTo(p.item.t)} className="hit">
               <title>{span(p.item.t - run.t0)} · {p.item.label}</title>
-              <line x1={p.x} x2={p.x} y1={22 + p.row * 26 + 5} y2={Y.ms} stroke={HUE.milestone} strokeWidth={1.5} />
-              <rect x={p.x - 6} y={Y.ms - 6} width={12} height={12} transform={`rotate(45 ${p.x} ${Y.ms})`} fill={HUE.milestone} />
-              <text x={p.anchor === 'start' ? p.x - 3 : p.x + 3} y={22 + p.row * 26} textAnchor={p.anchor} className="t-ms">{p.item.label}</text>
+              <rect x={p.x - 6} y={p.item.y - 6} width={12} height={12} transform={`rotate(45 ${p.x} ${p.item.y})`}
+                    fill={p.item.t <= at ? '#ece9e1' : '#2c2f34'} stroke="#ece9e1" strokeWidth={1.5} />
+              <text x={p.x} y={p.item.y - 16 - p.row * 22} textAnchor="middle" className="t-ms">{p.item.label}</text>
             </g>
           ))}
 
-          {/* hooks */}
-          <line x1={X0} x2={X1} y1={Y.hook} y2={Y.hook} stroke="var(--rule)" />
-          {lanes.hooks.map(p => (
-            <g key={p.item.t + p.item.label} opacity={dim(p.item.t)} onMouseDown={seekTo(p.item.t)} className="hit">
-              <title>{span(p.item.t - run.t0)} · {p.item.label}</title>
-              <line x1={p.x} x2={p.x} y1={110 + p.row * 18 + 3} y2={Y.hook} stroke={HUE.hook} strokeWidth={1.5} />
-              <rect x={p.x - 4} y={Y.hook - 4} width={8} height={8} fill={HUE.hook} />
-              <text x={p.anchor === 'start' ? p.x - 3 : p.x + 3} y={110 + p.row * 18} textAnchor={p.anchor} className="t-hook">{p.item.label}</text>
-            </g>
-          ))}
-
-          {/* breaks and repairs */}
-          <line x1={X0} x2={X1} y1={Y.brk} y2={Y.brk} stroke="var(--rule)" />
-          {lanes.brk.map(p => {
-            const hue = p.item.kind === 'repair' ? HUE.repair : HUE.break
-            const base = 192
+          {/* breaks and repairs: notches cut into the slope, labelled inside the stone */}
+          {g.brk.map(p => {
+            const hue = p.item.kind === 'repair' ? 'var(--verde)' : 'var(--porphyry)'
+            const ly = p.item.y + 28 + p.row * 18
             return (
               <g key={p.item.t + p.item.label} opacity={dim(p.item.t)} onMouseDown={seekTo(p.item.t)} className="hit">
                 <title>{span(p.item.t - run.t0)} · {p.item.label}</title>
-                <line x1={p.x} x2={p.x} y1={stem(p, base, Y.brk)} y2={Y.brk} stroke={hue} strokeWidth={2} />
-                <circle cx={p.x} cy={Y.brk} r={6} fill={hue} />
-                <text x={p.anchor === 'start' ? p.x - 3 : p.x + 3} y={base + p.row * 18} textAnchor={p.anchor} className="t-brk" fill={hue}>{p.item.label}</text>
+                <line x1={p.x} x2={p.x} y1={p.item.y} y2={ly - 12} stroke={hue} strokeWidth={1.5} />
+                <path d={`M${p.x - 8},${p.item.y - 2} L${p.x + 8},${p.item.y - 2} L${p.x},${p.item.y + 12} Z`} fill={hue} />
+                <text x={p.anchor === 'start' ? p.x + 4 : p.x - 4} y={ly} textAnchor={p.anchor === 'start' ? 'start' : 'end'} className="t-brk" style={{ fill: hue }}>{p.item.label}</text>
               </g>
             )
           })}
 
-          {/* failed calls */}
-          <line x1={X0} x2={X1} y1={Y.fail} y2={Y.fail} stroke="var(--rule)" />
-          {lanes.fails.map(t => <line key={t} x1={fx(t)} x2={fx(t)} y1={Y.fail - 16} y2={Y.fail} stroke={HUE.fail} strokeWidth={2} opacity={dim(t)} />)}
-
-          {/* coverage */}
-          {[0, 0.5, 1].map(s => <g key={s}>
-            <line x1={X0} x2={X1} y1={covY(s)} y2={covY(s)} stroke={s === 0 ? 'var(--rule)' : 'var(--rule-soft)'} />
-            <text x={X0 - 8} y={covY(s) + 4} textAnchor="end" className="t-axis">{s * 100}%</text>
-          </g>)}
-          <path d={covPath} fill="none" stroke={HUE.hook} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
-          {covNow && <circle cx={fx(covNow.t)} cy={covY(covNow.share)} r={5} fill={HUE.hook} />}
-
-          {/* tokens per milestone, each bar spans the time it took */}
-          <line x1={X0} x2={X1} y1={Y.tok[1]} y2={Y.tok[1]} stroke="var(--rule)" />
-          {finalCost.map((b, i) => {
-            const [a, z] = barSpan(i)
-            const [fa, fz] = [fx(i === 0 ? run.t0 : reached[i - 1]?.t ?? run.t0), fx(reached[i]?.t ?? run.t1)]
-            const now = cost[i]
-            return <g key={b.id}>
-              <rect x={fa + 2} y={barY(b.tokens)} width={Math.max(0, fz - fa - 4)} height={Y.tok[1] - barY(b.tokens)} fill="var(--muted-hi)" opacity={0.14} />
-              {now && <rect x={a + 2} y={barY(now.tokens)} width={Math.max(0, z - a - 4)} height={Y.tok[1] - barY(now.tokens)}
-                            fill="var(--muted-hi)" opacity={now.done ? 0.85 : 0.5} />}
-              {now?.done && z - a > 56 && <text x={(a + z) / 2} y={barY(now.tokens) - 5} textAnchor="middle" className="t-axis hi">{big(now.tokens)}</text>}
+          {/* hooks written: lapis ticks under the base, named */}
+          {g.hooks.map(p => (
+            <g key={p.item.t + p.item.label} opacity={dim(p.item.t)} onMouseDown={seekTo(p.item.t)} className="hit">
+              <title>{span(p.item.t - run.t0)} · {p.item.label}</title>
+              <line x1={p.x} x2={p.x} y1={BASE} y2={174 + p.row * 16 - 11} stroke="var(--lapis)" strokeWidth={1.5} />
+              <rect x={p.x - 3} y={BASE} width={6} height={9} fill="var(--lapis)" />
+              <text x={p.anchor === 'start' ? p.x - 3 : p.x + 3} y={174 + p.row * 16} textAnchor={p.anchor === 'start' ? 'start' : 'end'} className="t-hook">{p.item.label}</text>
             </g>
-          })}
+          ))}
 
-          {/* time axis */}
-          {hours.map(h => <text key={h} x={fx(run.t0 + h * 3_600_000)} y={Y.axis + 6} textAnchor="middle" className="t-axis">{h}h</text>)}
+          {hours.map(h => <text key={h} x={fx(run.t0 + h * 3_600_000)} y={218} textAnchor="middle" className="t-axis">{h}h</text>)}
 
+          {/* the boulder, with a push shadow behind it */}
+          <line x1={bx} x2={bx} y1={bc.y + R} y2={BASE} stroke="#d9d8d3" strokeDasharray="2 4" opacity={0.35} />
+          <ellipse cx={sh.x} cy={sh.y} rx={20} ry={3.4} fill="#000" opacity={0.4} transform={`rotate(${(bp.ang * 180) / Math.PI} ${sh.x} ${sh.y})`} />
+          <g transform={`translate(${bc.x} ${bc.y})`}>
+            <circle r={R + 0.5} fill="url(#boulder)" stroke="#2a2c30" strokeWidth={1} />
+            <g transform={`rotate(${spin})`} fill="none" stroke="#2f3236" strokeWidth={1.2} strokeLinecap="round" opacity={0.75}>
+              <path d="M-8,-3 L-2,-1 L1,-8" /><path d="M2,2 L7,5 M-1,-1 L2,2" /><path d="M-6,6 L-3,3" />
+            </g>
+          </g>
         </svg>
+        <div className="legend" aria-hidden="true">
+          <span><i style={{ background: '#ece9e1', transform: 'rotate(45deg)' }} />Milestone</span>
+          <span><i style={{ background: 'var(--lapis)' }} />Hook written</span>
+          <span><i style={{ background: 'var(--porphyry)' }} />Break</span>
+          <span><i style={{ background: 'var(--verde)' }} />Repair</span>
+          <span><i style={{ background: 'var(--porphyry)', width: 3 }} />Failed call</span>
+        </div>
+        <div className="mist" aria-hidden="true"><i /><i /></div>
       </div>
     </section>
   )
