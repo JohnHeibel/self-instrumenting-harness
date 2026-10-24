@@ -1,12 +1,49 @@
-# Goal: reach the Nether on peaceful difficulty, learn as much as you can, and build tools that make the next step cheaper
+# Goal: a diamond pickaxe first, then the Nether, on peaceful difficulty; learn as much as you can, and build tools that make the next step cheaper
 
-The program is **Minecraft: Java Edition 1.21.1** with NeoForge and the Minescript mod, in a **survival, peaceful-difficulty singleplayer world** (name `sisyphus-mc2`, cheats off) that is already open. You are the only player. You start with nothing in your inventory. Peaceful is the expected setting: do not change it, and do not touch the game mode.
+The program is **Minecraft: Java Edition 1.21.1** with NeoForge and the Minescript mod, in a **survival, peaceful-difficulty singleplayer world** (name `sisyphus-mc5`, cheats off) that is already open. You are the only player. You start with nothing in your inventory. Peaceful is the expected setting: do not change it, and do not touch the game mode.
 
 Your workspace starts empty. Every skill, hook and script you use you write in this run: the point is to see how well you learn, cache and reuse procedures from scratch. Learning a procedure once and then calling it in one step is the main thing that is judged.
 
+## Phase 1: Seed primitives (before anything else)
+
+Quality over quantity: the aim is not many tools but a small, coherent, layered system whose basic moves are so robust they never cause trouble late in the run. Before adding a tool, ask whether an existing one should absorb it; consolidate overlapping tools; harden what you have until it is boring and reliable.
+
+The brief's seed primitives, in Minecraft terms. Build these four tools first, with the brief's safeguard layer under them, each returning a receipt (what it did, how far, what changed, where and why it stopped). Keep the in-game part a small, stable set of primitives that catch their own errors; the routes, plans and retries live in your sandbox. Each tool must pass its tests below before Phase 2. Run the tests as real play (they yield wood, stone, iron and a base), so the game is never idle while you build.
+
+### The two highest-value seed primitives here: pathfinding and not drowning
+
+Most lost time and every death so far in these worlds came from movement: walking into water, getting stuck, and digging into flooded caves. Build these two first and make them excellent; almost every later chore (trees, ore, the base, obsidian, the portal) is a trip.
+
+- **Pathfinding.** Plan a route over the block grid before moving, not by walking toward the target and reacting. Treat each block as walkable or not (solid floor, two blocks of headroom, not water, lava, fire or a drop over 3), allow step-ups, jumps and short drops, and fall back to placing a block (bridge or pillar) or breaking one (dig through) when no plain route exists. Plan long trips in segments (waypoints every 16 to 32 blocks), re-plan when the world differs from the plan, detect being stuck (no progress for a few seconds) and try another route before giving up, and return a receipt (where it got to, why it stopped). Remember named places (base, portal, ore spots) and route back to them. Prefer routes that stay out of water entirely.
+- **Attention not to drown.** A safeguard that is always on, inside every movement, mining and building job, not only when you think about it. Detect it early from what you can read (head inside water, the air supply falling, standing in water deeper than 1, a block about to be broken with water behind it), and when it fires, stop the job, swim up and to the nearest dry, standing spot, and wait until the air supply is full before resuming. Path around water and treat water as costly; never break a block that has water or lava behind or above it; when mining near aquifers, check each block before breaking it. Test it by walking into deep water, digging toward water, and being underwater at the start of a job.
+
+Record both, their safeguards and their tests in SEED.md first.
+
+**Safety lives in the lowest layer.** The in-game movement and mining primitives themselves refuse to step onto or next to lava or fire, over a drop of more than 3, or into deep water, and refuse to break a block that has lava or water beside, behind or above it. Check the neighbours of every block you would dig or stand in, not only the block itself: digging beside a lava pool opens it onto you. Every higher tool inherits these refusals; a planner or shortcut can never bypass them. Keep a hazard map (lava, water, drops, death sites) and route around it; never walk back into a spot that just hurt you until you have made it safe.
+
+**Hazard tests are the gate.** Before Phase 2, set up each hazard case for real at a safe distance (lava beside the path, lava behind a block you would dig, deep water, a drop over 3) and show the primitives refuse or recover. Keep them as tests and rerun them after every change to movement or mining.
+
+
+- **Get anywhere:** go to coordinates, the nearest block of a type, or an entity. Handles jumps, steps, pillaring up, bridging gaps, leaving water, and digging through when blocked; checks every slice for lava, drops and drowning. Tests: a point 150+ blocks away over rough terrain; across a lake or river; up a cliff; down into a cave and back out; a target inside solid ground; back to a remembered base.
+- **Get anything:** have N of an item, from inventory, a chest, or by gathering, crafting and smelting its whole recipe tree (mining what is needed, placing and using a crafting table and furnace). Tests: a stone pickaxe from an empty inventory; 16 torches; iron ingots when no iron is known yet; an item already in a chest.
+- **Change many things at once:** place an arrangement from a written plan (a list of relative blocks), fetching what is missing, then check the result against the plan and report the differences. Tests: a 5x5 floor; a walled 3x3 room with a door; a staircase down 10 blocks. The portal frame later uses it.
+- **See an area:** one call returns a compact view of the surroundings: terrain heights, notable blocks, ores and hazards within a radius, and a structure's diff against its plan. Tests: find the nearest trees, water, lava and exposed ore; check a structure you built.
+
+Record every test (tool, test, pass or fail, receipt summary) in `/home/agent/work/SEED.md` and keep it current whenever a tool changes.
+
+**Gate:** Phase 2 starts only when every test passes. After that, any chore that takes more than one call is a candidate to fold into the seed primitives.
+
+## Phase 2: a diamond pickaxe (the first big milestone)
+
+Starts when the Phase 1 gate is passed. Your first big milestone is a **diamond pickaxe**: objective steps 1 to 3 below (stone, iron and a bucket, diamonds, the pickaxe). Put everything into reaching it with the seed primitives before anything Nether-related.
+
+## Phase 3: the Nether path
+
+Starts once you hold a diamond pickaxe: objective steps 4 to 8. Use the seed primitives for every chore here.
+
 ## What peaceful changes
 
-Hostile mobs (zombies, skeletons, creepers, spiders, and in the Nether ghasts, blazes and the like) do not spawn, and hunger does not run down. Health regenerates by itself. So you can work on the surface at night and do not need armor, a sword or a shelter. Still fatal: **lava, drowning, falling (more than 3 blocks hurts, more than about 20 kills), fire, suffocation in blocks, and the void**. Run 1 (normal difficulty) died 18 times, 6 of them by drowning in caves and 1 by a long fall; the water, lava and fall guards stay in every movement and mining tool. In a fortress or bastion, look before you step: peaceful does not make the terrain safe.
+Hostile mobs (zombies, skeletons, creepers, spiders, and in the Nether ghasts, blazes and the like) do not spawn, and hunger does not run down. Health regenerates by itself. So you can work on the surface at night and do not need armor, a sword or a shelter. Still fatal: **lava, drowning, falling (more than 3 blocks hurts, more than about 20 kills), fire, suffocation in blocks, and the void**. Drowning in caves and long falls are the usual killers, so the water, lava and fall guards stay in every movement and mining tool. In a fortress or bastion, look before you step: peaceful does not make the terrain safe.
 
 ## Objective, in order
 
@@ -15,13 +52,13 @@ The measured path (judged from the world's own files; see Progress):
 1. Wood, crafting table, stone tools, furnace, a storage chest, 10 distinct items crafted.
 2. Iron: iron ingot, iron tools, **bucket**.
 3. **Diamonds**, then a **diamond pickaxe** (3 diamonds and 2 sticks). Diamonds are rarest between about y=-59 and y=-50; mine **horizontally** along a level tunnel, with torches, and do not dig straight down.
-4. **Obsidian**, at least **10** (a portal frame needs 10 blocks, 4 wide and 5 tall, corners not needed). Two ways: mine it with the diamond pickaxe from where water meets a lava source (pour water from the bucket over a lava pool; a still lava source turns to obsidian, flowing lava to cobblestone), or cast it: place the frame's shape out of lava source blocks over water. Either way, only with a bucket, water and the blocks you carry. Work out your own safe procedure, then keep it as a skill.
+4. **Obsidian**, at least **10** (a portal frame needs 10 blocks, 4 wide and 5 tall, corners not needed): mine it with the diamond pickaxe where water meets a lava source, or cast it from lava source blocks over water. Only with a bucket, water and the blocks you carry. Work out your own safe procedure, then keep it as a skill.
 5. **Flint and steel** (an iron ingot and a flint; flint drops from gravel).
 6. Build the portal, **light it**, **enter the Nether**.
 7. In the Nether: **netherrack**, **nether quartz**, **glowstone dust**, find a **nether fortress** and a **bastion remnant**. Stretch: ancient debris (diamond pickaxe, y 8 to 22), 25 and 50 distinct items crafted.
 8. **Return safely to the Overworld** through the portal, with what you collected.
 
-Breadth also counts: the number of distinct items you have crafted is measured. Bank it early near the base (peaceful makes it safe): write one skill that crafts a whole list from the logs, cobblestone, coal, sticks and iron you hold, in one call, and reports which new items it produced.
+Breadth also counts: distinct items crafted are measured. Bank it early near the base, where nothing can kill you, with one call that crafts a whole list from what you hold and reports the new items.
 
 ## Progress
 
@@ -34,43 +71,23 @@ Same rules as before. Hooks and scripts may read anything the client knows. What
 Not allowed, and flagged or voiding the run: chat or console commands that change the game (`/give`, `/tp`, `/gamemode`, `/difficulty`, `/time`, `/setblock`, `/summon`, and the like), turning on cheats or opening the world to LAN, editing the world, save or game files, spawning or duplicating items or entities, teleporting, instant mining or crafting, reaching beyond a player's reach, and changing the game mode or difficulty (including in the Options menu). Minescript's own commands (`\jobs`, `\killjob`, your scripts) are fine. A grader reads the world files and logs for cheats, the game mode, the difficulty and commands used; your extensions' code and calls are recorded and reviewed.
 
 ## Start here
-
-1. Read `/home/agent/work/run/HOST.md` for how Minescript works. Write a small bridge script for the game (see the host notes) and an extension that wraps it, load it with `load_extension`, and call the game only through your registered tools or `run_script` so the calls are logged. Give every call a short timeout.
-2. Create `/home/agent/work/BACKLOG.md` and `/home/agent/work/skills/INDEX.md` in your first steps (formats below), and keep both current. The runner puts the top of BACKLOG.md and the skills index in front of you after every restart, reset or stall.
+1. Read `/home/agent/work/run/HOST.md` for how Minescript works and what the host allows. Call the game only through your registered tools or `run_script`, so calls are logged.
+2. Create `/home/agent/work/BACKLOG.md` and `/home/agent/work/skills/INDEX.md` in your first steps, and keep both current. The runner shows you the top of BACKLOG.md and the index after every restart, reset or stall.
 3. Start the first chore the moment its tool exists, and start the next before you think about the one after.
 
 ## Keep your hands busy: the backlog
 
-The program is only progressing while something is acting on it. Thinking, reading notes and writing code all leave the game idle, and in run 1 most wall-clock time went to gaps between steps. So there is always a plan written down and always something running.
+- **BACKLOG.md** is an ordered list of chores, each a kept script or tool call with its `args`, what done looks like, and what to do if it fails. Sections: `## Running`, `## Queue`, `## Decisions` (branches decided in advance), `## Done` (with a line of what you learned). Under about 60 lines.
+- **Keep the queue full.** Long chores run in the background with the next queued behind them; before you plan anything, the queue holds at least two chores. Never poll or wait idle: wait on tasks, and plan, write tools and update notes while a task runs.
+- **Decisions ahead of time.** A kept dispatcher (an `autopilot`) reads a queue file you edit, runs the next item, stops and says why at the first hazard (low health, lava or water ahead, a drop over 3, a missing item).
+- **After a reset:** call `status`, read BACKLOG.md, NOTES.md and the skills index, then start the first item not already running. Do not re-plan from scratch.
 
-- **BACKLOG.md** is an ordered list of chores, each one a kept script (or tool call) with its `args`, what done looks like, and what to do if it fails. Three sections: `## Running` (task ids and what they are), `## Queue` (the next chores in order, each already started or ready to start), `## Decisions` (branches decided in advance: "if the cave floods, then...", "when 3 diamonds are in hand, then craft the pickaxe, then go for obsidian"). Keep it short, under about 60 lines; move finished items to `## Done` with a line of what you learned.
-- **Use the harness queue.** A long chore (a walk, a mining run, smelting, a crafting sequence, a trip to the chest) runs as `run_script(..., background=True)`; queue the next one behind it with `after="tN"` so a line of chores runs back to back while you plan. Before you plan anything, make sure the queue holds at least two chores. If something fails, what is queued behind it is held: fix it, then `task(id, resume=True)`, or drop it.
-- **Never poll and never wait idle.** Wait with `wait(on=[...])` (it returns early on a notice) or set a rule with `watch` for what you would otherwise check. Planning, writing the next tool and updating notes happen while a task runs. A task that needs the hands waits its turn, so you can line up work that touches the game even while something else is acting.
-- **Decisions ahead of time.** When a chore ends, the next one should already be running. Turn the common branches into a kept dispatcher script (an `autopilot`): it reads a queue file you edit (for example `state/queue.json`: script, args, precondition, on-failure), runs the next item, checks safety each slice, writes a heartbeat, and calls `notify()` when it stops or needs you. Run it as a background task so it keeps the hands busy between your steps; edit the file while it runs. It stops and says why at the first hazard (low health, lava or water ahead, a drop over 3, an item it lacks).
-- **After a reset or restart:** call `status` first, then read BACKLOG.md, NOTES.md and the skills index, then start the first item that is not already running. Do not re-plan from scratch. Write a status note at the top of NOTES.md before any long operation and at every milestone.
+## Habits that pay off
 
-## Build reusable tools, in this order of leverage
-
-Cache every procedure you do twice, and script it at the third repeat. Each of these is a general tool with parameters, kept as a skill and listed in the index, not a one-off:
-
-- **State**: a heartbeat (position, dimension, health, hotbar, key inventory counts) written every slice to `state/heartbeat.json`; nearby blocks and entities; the open screen and container contents.
-- **Movement and pathing**: walk to a point (with a stuck detector that gives up with a reason), climb with stairs, bridge a gap, cross water safely, pillar up, mine a staircase down in short safe steps. Every step looks ahead, below and beside for water, lava, a drop over 3 and a fall.
-- **Horizontal mining**: a level tunnel of a given length, with torches at intervals and ore pick-up on the sides, checking each block and the block beyond it for water or lava before breaking it (a dug block can release an aquifer). Vein mining of exposed ore. Run 1 died in vertical shafts, so branch-mine horizontally at the right y (iron around y=16 or exposed on hillsides, diamonds near y=-58).
-- **Inventory and kit management**: count items; make room; keep a *kit* (pickaxe, spare tools, bucket, blocks, torches, food) and put everything else in the base chest before a trip; fetch from the chest by name. Do not carry diamonds and ingots into risky ground you do not need them in.
-- **Crafting by recipe**: one `craft(item, n)` that works out the sub-recipes from what you hold, uses the 2x2 or table grid, and returns what was made. Smelting by batch (a furnace takes 10 s per item; start it, do something else, collect).
-- **Base and storage**: a base with a table, furnace, chests and a bed at one spot, and tools that go home, deposit, restock and come back.
-- **Fluids and obsidian**: pick up and place water and lava with the bucket safely; make obsidian; build the portal frame from a list of block positions; light it.
-- **Nether travel**: move in the Nether on netherrack with a block-bridging walker, never walking toward an unseen drop or lava; mark the portal's coordinates and the way home in the heartbeat.
-
-## Lessons from the earlier run (how to learn, not code to copy)
-
-- **Kit discipline.** Every death dropped the whole kit and cost a rebuild; the iron tools were lost seven minutes after they were made. Keep spare tools and valuables in the base chest and carry only what the next job uses.
-- **Mine horizontally.** Vertical shafts and big `tunnel_to` drops caused the fall death and several drownings. Check the block ahead and the ones around it for water or lava every slice.
+- **Kit discipline.** A death drops everything you carry. Keep spare tools and valuables in the base chest and carry only what the next job uses.
+- **Mine horizontally.** Vertical shafts end in falls and flooded caves. Check the block ahead and the ones around it for water or lava every slice.
 - **Bank breadth early.** Craft your way to 25 distinct items right after the first stone and iron, where nothing can kill you.
-- **Start with context handoff on** (the runner does it): keep NOTES.md and the skills index good enough that a fresh session can carry on. Skills carried the last run through four resets.
-- **A long job reports progress** every few seconds, has a count or deadline, writes a heartbeat, and returns a short reason when it stops. A wedged job on a one-queue bridge blocked every read for minutes: keep reads answerable while a job runs.
-- **Wait inside a step, not in many short polls**; and use background tasks so the waiting is also work.
-- **Look with tools, not screenshots.** A screenshot costs a step and a large image. Take one to learn something your tools cannot tell you yet, then extend the tools.
+- **A long job reports progress** every few seconds, has a count or deadline, writes a heartbeat, and returns a short reason when it stops. Keep reads answerable while a job runs.
 
 ## The Nether trip
 

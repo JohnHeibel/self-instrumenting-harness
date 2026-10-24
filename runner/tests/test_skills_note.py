@@ -95,3 +95,19 @@ def test_backlog_note(tmp_path):
     assert "mine_iron" in n and "status" in n and "BACKLOG.md" in n
     (tmp_path / "BACKLOG.md").write_text("x" * 9000)
     assert len(cr.backlog_note(tmp_path)) < cr.BACKLOG_CAP + 600
+
+
+def test_time_note_shows_budget_left():
+    assert cr.time_note(None) == ""
+    note = cr.time_note(10_000 + 3600 + 5 * 60, now=10_000)
+    assert "1h 05m left" in note and "UTC" in note
+    assert "0h 00m left" in cr.time_note(100, now=500)
+
+
+def test_backlog_note_points_at_first_item_and_caps(tmp_path):
+    assert cr.backlog_note(tmp_path) == ""
+    (tmp_path / "BACKLOG.md").write_text("1. mine iron\n")
+    note = cr.backlog_note(tmp_path)
+    assert "mine iron" in note and "BACKLOG.md" in note
+    (tmp_path / "BACKLOG.md").write_text("x" * 10000)
+    assert "backlog cut" in cr.backlog_note(tmp_path)
