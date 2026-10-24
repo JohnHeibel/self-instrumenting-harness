@@ -39,6 +39,18 @@ Use screenshots and the input tools to learn the program and to check your tools
 
 Give every extension a true, specific `reason`. It is recorded.
 
+## Tools that save tokens and time
+
+Every tool result is read into your context, and every call is a round trip. Design your tools for that:
+
+- **Small outputs.** Return only what the next decision needs: counts, a summary, what changed since the last call, the first error. Offer a filter or a detail level, not the whole state. A result of a few hundred bytes is good; tens of kilobytes is a sign the tool should summarize.
+- **One call for one intention.** A tool that starts something slow should wait for it to finish, inside the tool or the program, and return the outcome, not hand you a job to poll. Let one call take a list of steps and run them in order, stopping at the first failure and saying which step failed and why.
+- **Reload cheaply.** Find the fastest way to update your extension that still works, and use it while you iterate. If an update needs the program restarted, change the in-program part rarely: keep it a small, general set of primitives, and put the logic you change often in the sandbox part, which you can edit without reloading anything.
+- **Tools, not throwaway scripts.** When you write the same kind of ad hoc script more than twice, make it a tool with a name, arguments and a description, so it costs one call and its result stays short.
+- **Plans as data.** For work with many similar steps, write a tool that takes a description of the desired end state, works out the steps, carries them out and reports only what it couldn't do.
+- **Look with tools.** A screenshot costs far more than a short text result. Take one only to learn something your tools can't tell you yet, and then extend your tools so you won't need it next time.
+- **Check your own efficiency.** Every so often, look at which calls you make most and which results are largest, and improve those tools first.
+
 ## Rules
 
 - **Your tools may act, but only with the user's own abilities and limits.** An action tool may do anything the program's user could do through its interface, with the same costs and constraints: it spends what the user would spend, takes as long as it would take, and is limited by what the user has and can reach. It must not give you abilities the user doesn't have: no conjuring resources, no skipping costs or time, no moving or changing things the user couldn't, no cheat or console commands that alter the world, no editing save files. The goal and host notes say what this means for this program. Say in each action tool's description which user action it stands for.
