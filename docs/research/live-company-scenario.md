@@ -23,6 +23,20 @@ A "world" process plays everyone else: vendors, customers, the bank, the boss. I
   - The "moment"? It catches a fraudulent bank change, and repairs itself after an upgrade.
   - Hyphenate says judges may try their own scenario. Here, **a judge can drop their own invoice or email into the inbox** and watch it get handled live.
 
+## Which software the company runs (closed-source allowed)
+
+Nazeem: it doesn't have to be open source, it just has to be good. Ranked:
+
+| Option | Real-world weight | Extension system (what the agent writes) | How we'd run it | Fit |
+|---|---|---|---|---|
+| **Microsoft Dynamics 365 Business Central** (SMB ERP: finance, AP/AR, purchasing, inventory) | 50k+ customers per Microsoft (Directions EMEA 2025); 55k+ claimed at Directions NA 2026 (secondary source). Overtook NetSuite by customer count. | **AL extensions**: pages, codeunits, event subscribers, and custom **API pages**. The agent literally publishes its own API into the ERP. BC moved all customization to extensions precisely so upgrades don't break them. That *is* our repair story. | Local **Windows Docker container** via `BcContainerHelper` (v6.1.11, Feb 2026), free locally with the demo/partner license (not for production). Ships with the **CRONUS** demo company's realistic data. Runs on John's Windows PC (Win 11 → ltsc2022 image). Compile and publish an extension in the container. | **Top pick.** Microsoft track ("Built for the Real World"), Hyphenate (office of the CFO), and the AP clerk story, all at once. Risks: Windows containers are heavy (large images, several GB of RAM), and the setup must be tested early. Licensing terms for the demo license should be re-checked on Microsoft Learn. |
+| **ServiceNow** (IT service management) | ~90% of the Fortune 500 (Q2 2026 fact sheet), ~8,800 customers | Scoped apps, Script Includes, Business Rules, UI Scripts, Scripted REST APIs | Free **Personal Developer Instance** (admin access; one per developer; "use it continuously and it's yours"). Hibernation rules weren't checked. | Best for an **IT help-desk clerk** variant: a ticket queue, access requests, asset changes. WorkArena already generates ServiceNow tasks with validators, usable as a side check. Cloud-hosted: needs internet at the venue, and an instance per teammate. |
+| **Salesforce** (CRM) | The largest CRM | Apex, Lightning Web Components, Flows, custom objects | Free **Developer Edition** org (deleted after 45 days inactive) | A **sales-ops / service-agent** variant. SCUBA benchmark exists (computer-use agents at most 39%). Less of a finance story. |
+| Excel (Office.js add-ins / VBA) | Everywhere in finance | Add-ins | Desktop on the PC | Good as a *second app inside the same job* (the boss's spreadsheet reports), not as the system of record. |
+| Odoo Community | Smaller, but free and Linux | Python modules | Docker | **Fallback** if Business Central setup fails. |
+
+Recommendation: **Business Central** for the live AP clerk company. If Windows containers fight us, fall back to Odoo with the same simulator design, since the world generator and truth ledger don't care which ERP they target. The grader reads BC through its standard OData/API (the agent may not).
+
 ## The world
 
 The company: a small manufacturer or distributor with ~15 vendors and ~20 customers. It runs **Odoo Community 18/19 with Invoicing/Accounting, Purchase and Inventory**, plus OCA `account_reconcile_oca` for the bank reconciliation screen. It is customized like a real company:
