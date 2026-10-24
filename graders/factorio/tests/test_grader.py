@@ -256,3 +256,27 @@ def test_recipe_evidence_from_an_old_mod_has_no_supply_chain_fields():
     m = next(m for m in g.MILESTONES if m["id"] == "red_auto")
     ev = g.judge(m, {"recipes": {"automation-science-pack": {"machines": 1, "finished": 10}}})
     assert ev and "supply_chain" not in ev
+
+
+def test_program_actions_are_written_as_deltas_and_survive_a_restart(tmp_path):
+    with_actions = lambda tick, **a: {**state(tick=tick), "actions": a}
+    fake = FakeRcon([
+        state(),                                          # mod older than 0.3.0: nothing
+        with_actions(200, build=3, mine=1, craft=0, rotate=0),
+        with_actions(300, build=3, mine=1, craft=0, rotate=0),   # nothing new: no record
+        with_actions(400, build=5, mine=1, craft=2, rotate=0),
+    ])
+    gr = g.Grader(tmp_path, connect=fake)
+    for _ in range(4):
+        gr.poll()
+    recs = records(tmp_path, "program_actions")
+    assert [(r["count"], r["kinds"]) for r in recs] == [(4, {"build": 3, "mine": 1}), (4, {"build": 2, "craft": 2})]
+    assert recs[-1]["totals"] == {"build": 5, "mine": 1, "craft": 2, "rotate": 0} and recs[-1]["tick"] == 400
+
+    # A restarted grader continues from the last totals; a lower count (an older save) restarts from it.
+    fake2 = FakeRcon([with_actions(500, build=6, mine=1, craft=2, rotate=0),
+                      with_actions(600, build=2, mine=1, craft=2, rotate=0)])
+    gr2 = g.Grader(tmp_path, connect=fake2)
+    gr2.poll(); gr2.poll()
+    recs = records(tmp_path, "program_actions")[2:]
+    assert [(r["count"], r["kinds"]) for r in recs] == [(1, {"build": 1}), (2, {"build": 2})]
