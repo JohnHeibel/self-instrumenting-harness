@@ -17,7 +17,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import io_tools
+from . import io_tools, spectator
 from .capture import Target
 from .docs import Docs, answer as answer_docs
 from .events import EventLog
@@ -170,6 +170,8 @@ def main() -> None:
     ap.add_argument("--host-config", type=Path, help="hosts/<host>.toml: install dir and reload actions")
     ap.add_argument("--agent-container", help="run extension tools in this container (default harness-agent-<run-id>); "
                                               "'local' runs them on this machine in the workspace")
+    ap.add_argument("--no-spectator", action="store_true",
+                    help="don't write <run>/live/latest.jpg (a host picture every 5 s for people watching)")
     args = ap.parse_args()
 
     host_config = HostConfig.load(args.host_config, args.run_dir)
@@ -179,6 +181,9 @@ def main() -> None:
     executor = LocalExecutor(workspace) if container == "local" else ContainerExecutor(container)
     log = EventLog(args.run_dir / "events.jsonl", args.run_id)
     log.write("server_started", host=args.host, port=args.port, host_config=host_config.name)
+    if not args.no_spectator:
+        spectator.start(Target(title=args.window_title or host_config.window_title, process=host_config.process,
+                               mode=host_config.capture), args.run_dir)
     build_server(log, args.host, args.port, args.window_title or "",
                  host_config=host_config, workspace=workspace, executor=executor,
                  archive_dir=args.run_dir / "extensions").run(transport="streamable-http")
