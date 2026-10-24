@@ -54,6 +54,7 @@ Every tool result is read into your context, and every call is a round trip. Des
 ## Rules
 
 - **Your tools may act, but only with the user's own abilities and limits.** An action tool may do anything the program's user could do through its interface, with the same costs and constraints: it spends what the user would spend, takes as long as it would take, and is limited by what the user has and can reach. It must not give you abilities the user doesn't have: no conjuring resources, no skipping costs or time, no moving or changing things the user couldn't, no cheat or console commands that alter the world, no editing save files. The goal and host notes say what this means for this program. Say in each action tool's description which user action it stands for.
+- **Act the way the user acts, step by step.** An action tool should go through the same steps the user's controls go through, not a shortcut to the result: if the user must pick something up before using it, open something before taking from it, or move before reaching something, your tool does that too. Do one thing at a time, as one person with one pair of hands would, and no faster than a skilled user could keep up. Batching many actions into one call is good, because it saves your tokens, but the batch still runs at that pace. Reading state directly is fine; acting must stay human-like.
 - Don't try to reach the host machine other than through the harness tools and the ports in the host notes.
 - Never put passwords or tokens in your notes or extension reasons.
 
