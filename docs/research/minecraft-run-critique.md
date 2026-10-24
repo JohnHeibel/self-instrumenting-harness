@@ -56,3 +56,7 @@ Fix: opt-in `--reset-context-tokens` handoff to a fresh session (see requests). 
 ## 2026-10-24 04:10 PDT, cycle 10: deaths
 Evidence: latest.log shows "threstral drowned" at 02:43, 03:29 and 03:54 local. Deaths were invisible to grader.jsonl, runner and supervisor.
 Fix: grader `agent_died` markers (needs a grader restart); runner interrupts and tells the agent (needs a runner restart); goal file "Staying alive" paragraph. Also seen: context fell to 62k at about 03:50 local, so a handoff or a fresh session happened (see next cycle for the handoff markers).
+
+## 2026-10-24 04:40 PDT, cycle 13
+Evidence: 6 deaths logged (5 drownings, 1 spider) in about 3 h; no milestone since iron_tools at 10:26Z (about 1 h 15 min); 46 Bash steps in the last 30 min, 87% skill calls, so the agent is working, but progress is repeatedly erased by deaths. Context after the handoff grew 62k -> 118k in 45 min (about 1.2k per step), so the next handoff is due near 150k, in about 25 min.
+Fix (Minecraft-only): goal paragraph on respawn point (bed), night shelter, armor and food. Bridge forwarder committed (fresh runs only). Cumulative uncached tokens about 320k at 11:35Z for 8 milestones; wall-clock for 8 milestones: 3 h.
