@@ -15,6 +15,7 @@ from pathlib import Path
 from mcp import types
 from mcp.server.fastmcp import Context, FastMCP, Image
 from mcp.server.lowlevel.server import NotificationOptions
+from mcp.server.transport_security import TransportSecuritySettings
 
 from . import capture
 from .events import EventLog
@@ -25,7 +26,16 @@ HOOK_NAME = re.compile(r"[a-z][a-z0-9_]{2,47}")
 
 def build_server(log: EventLog, host: str, port: int, window_title: str = "Factorio",
                  max_screenshot_width: int = 1280) -> FastMCP:
-    mcp = FastMCP("harness", host=host, port=port, log_level="WARNING")
+    # Bound to localhost, the SDK only accepts Host: localhost. The agent container
+    # reaches us as host.docker.internal, so allow that too; rebinding protection stays on.
+    local = ["127.0.0.1:*", "localhost:*", "[::1]:*", "host.docker.internal:*"]
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=local,
+        allowed_origins=[f"http://{h}" for h in local],
+    )
+    mcp = FastMCP("harness", host=host, port=port, log_level="WARNING",
+                  transport_security=security)
     _advertise_tool_list_changed(mcp)
     hooks: dict[str, dict] = {}
     builtin = {"screenshot", "load_extension", "list_hooks", "call_hook"}
