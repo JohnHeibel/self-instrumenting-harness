@@ -22,3 +22,9 @@ Evidence: grader works after restart: first_wood and crafting_table fired at 09:
 Cost: metrics blind spot (hook share 0%, reuse invisible, rules review impossible). Total-token per milestone is dominated by context re-read (100k per request); uncached is the fair measure, so report uncached per milestone.
 Fix: brief bullet to route bridge calls through registered tools or run_script; analyzer shows model-side mix and skill reuse. Skill library exists (skills/INDEX.md), good sign: the continue-prompt injection will pick it up.
 Trend (uncached tokens at milestone): first_wood/crafting_table 143k at t+31 min; baseline for later cycles.
+
+## 2026-10-24 02:45 PDT, cycle 4
+Evidence: milestones at 09:21Z: stone_tools, furnace, chest, crafted_10 (uncached 159k, total 7.2M). Bash results are tiny (94 calls, 27 KB) but each step re-reads 100-130k context; screenshots are 23 of the images (about 30k tokens). 33 of 94 Bash steps (35%) are 27 s wait polls, many duplicated in the same step; the agent self-capped at 28 s.
+Cost: about 33 steps x 120k tokens = 4M cached-read tokens and 15 min of wall clock in 70 min. Uncached cost is small, but wall-clock matters.
+Fix: generic brief bullet (long waits) and a Minecraft goal paragraph (poll for ~4 min inside one call). Takes effect at the next runner restart: this one is worth a deliberate restart (the brief is copied into runner state at first run, so the NUDGE restart will NOT refresh it unless the continue prompt carries it; see below).
+Note: `state.extra["brief"]` is frozen at run start, so brief edits only reach the live run via the continue prompt. Proposed: put critic-approved advice into update_note.

@@ -69,3 +69,9 @@ each extension tool's declared `timeout_s` at manifest parse time (so `run_scrip
 Evidence (mc-overnight-01, 02:10-02:21): in 12 min the model made 35 requests; the tool server logged 9 calls. The agent built `skills/sk.py` and drives its
 in-host bridge from Bash, so none of that is in events.jsonl: hook share reads 0%, reuse is unmeasurable, and the rules ("every call to your extensions is recorded and reviewed") cannot be checked.
 Change: one bullet in the brief's Skill library section: reach the in-program part through registered tools or `run_script`, not ad-hoc shell. Request: consider also a runner-side counter of Bash calls (the stream has them) as a `marker` or `agent_state`, so coverage can include them; `tools/critic/analyze.py` now prints the model-side tool mix from runner.jsonl.
+
+## 2026-10-24 (critic, cycle 4: poll steps) prompts/brief.md
+Evidence (mc-overnight-01, first 70 min): of 94 Bash steps, 33 (35%) were `sk.wait(27)`-style polls that returned "still busy" or a status; several were issued twice in the same step.
+At 100-130k tokens of context per request this is the largest avoidable cost, and about 27 s of wall clock each. The agent capped its waits at 28 s itself (it believed calls must end before its 30 s hook timeout).
+Change: brief bullet "Wait in one long step, not many short ones" (block until done or several minutes; shell up to 10 min, run_script up to 20; no duplicate calls in one step).
+Related: the new 90 s cap on extension tool timeouts means a hook cannot be the long wait; long waits belong in run_script or the shell, with short hook calls inside.
