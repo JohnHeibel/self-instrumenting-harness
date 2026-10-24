@@ -58,6 +58,26 @@ CONTINUE_PROMPT = (
     "check which hooks and tools you have (list_hooks), and take a fresh observation of the host before "
     "you act. Restate your current goal with set_goal. Then continue from where your notes say "
     "you are, and keep the notes current. Do not stop to ask questions: nobody is watching.")
+SKILLS_INDEX = "skills/INDEX.md"
+SKILLS_CAP = 3000
+
+
+def skills_note(workspace: Path) -> str:
+    """Text for the continue prompt that puts the agent's skill index back in front of it after a
+    restart or compaction. Empty when the agent has not written one."""
+    p = workspace / SKILLS_INDEX
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not text:
+        return ""
+    cut = len(text) > SKILLS_CAP
+    return ("Your skill library index (/home/agent/work/" + SKILLS_INDEX + "). Use these saved scripts and "
+            "tools before doing a chore by hand, and add to it when you save a new one:\n\n"
+            + text[:SKILLS_CAP] + ("\n... (index cut; read the file for the rest)" if cut else ""))
+
+
 SETTINGS_IN_IMAGE = "/opt/harness/claude-settings.json"
 MCP_IN_CONTAINER = "/opt/harness/mcp.json"
 
@@ -340,6 +360,10 @@ class ClaudeRunner:
         st = self.state
         first = st.thread_id is None
         prompt = self.first_prompt() if first else CONTINUE_PROMPT
+        if not first:
+            note = skills_note(self.run_dir / "workspace")
+            if note:
+                prompt += "\n\n" + note
         if not first and self.state.extra.get("update_note"):
             prompt += "\n\n" + self.state.extra.pop("update_note")
         nudge = self.run_dir / "NUDGE"

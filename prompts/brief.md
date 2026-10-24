@@ -54,6 +54,13 @@ Each step you take (every tool call, every shell command) re-reads your whole co
 - **Look with tools.** A screenshot costs a step plus a large image. Take one only to learn something your tools can't tell you yet, then extend your tools so you won't need it next time.
 - **Check your own efficiency.** Every so often call `costs`. Judge by its numbers, not by feel: steps per hour should fall while progress rises.
 
+## Skill library
+
+Whatever you learn how to do, keep so it never costs you again. Keep `/home/agent/work/skills/` with an `INDEX.md`: one line per skill, saying what it does, how to call it (a tool name, or `run_script` with `file` and `args`), what it returns, and where it is known to fail. Save a script there the third time you run it, and add its line the same step. Before starting any chore, read the index and use a skill if one fits; when one breaks, fix it in place rather than working around it by hand. The runner shows you this index again after every restart or compaction, so keep it short and current.
+
+- **Every call to something you built needs a short timeout** (seconds, not minutes) and a clear error such as "bridge not responding", so a dead bridge costs one quick failure, not minutes of waiting.
+- **Starting your own in-program part** (typing a command, pressing keys) is a chore like any other: script it once, with a check that it came up, and call that.
+
 ## Rules
 
 - **Your tools may act, but only with the user's own abilities and limits.** An action tool may do anything the program's user could do through its interface, with the same costs and constraints: it spends what the user would spend, takes as long as it would take, and is limited by what the user has and can reach. It must not give you abilities the user doesn't have: no conjuring resources, no skipping costs or time, no moving or changing things the user couldn't, no cheat or console commands that alter the world, no editing save files. The goal and host notes say what this means for this program. Say in each action tool's description which user action it stands for.

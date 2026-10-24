@@ -45,3 +45,15 @@ we'd like John to consider so the two paths converge. Append new entries at the 
    which works with `key`/`type`. A generic "start an in-host program" reload action would need host-specific input, so we left it to the agent.
 
 - **claude_runner NUDGE file** (8af0311): a supervisor writes <run>/NUDGE to interrupt a stuck turn and deliver a one-time note on resume (marker kind supervisor_nudge). Suggest the same for the Codex runner: on the 2026-10-24 Minecraft run the agent sat 4+ min on a hung hook call before moving.
+
+## 2026-10-24 (critic, cycle 1: skill library)
+
+Evidence (mc-overnight-01, first 20 min): each step costs about 45-55k tokens of context re-read; the agent's own `mc_exec` hook used a
+1200 s urlopen timeout against a bridge that was not up, so two calls hung 250 s and 143 s and died with exit 137 (about 400 s lost in 20 min).
+Nothing in the brief says to give hooks short timeouts or to keep reusable scripts in a known place.
+1. `prompts/brief.md`: new "Skill library" section (skills/INDEX.md, save at the third repeat, short timeouts on own tools). Additive.
+2. `runner/claude_runner.py`: `skills_note()` appends the agent's `skills/INDEX.md` (capped at 3000 chars) to the continue prompt, so the
+   index is back in context after a restart or compaction. The Codex runner could do the same. Test: `runner/tests/test_skills_note.py`.
+3. Proposal: event-log record types `skill_saved` (`name`, `kind`: script|hook, `path`, `description`) and `skill_used` (`name`, `via`), so the
+   dashboard can plot reuse. Until then `tools/critic/analyze.py` derives them from `run_script` calls with `file` and from `hook_loaded`.
+4. Proposal: hooks that proxy to an in-host server could get a default timeout cap in `extensions.py` (e.g. 60 s unless the manifest says otherwise) so a hung bridge cannot hold a step for minutes.
