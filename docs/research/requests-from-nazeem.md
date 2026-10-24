@@ -106,3 +106,9 @@ State machine tested in `runner/tests/test_skills_note.py`; the turn-loop wiring
 Evidence: three drownings (02:43, 03:29, 03:54 local) in a flooded cave; the second cost all iron and stone gear (about 30 min) right after iron_tools; nothing in the logs flagged it.
 1. Grader writes `marker` records `kind: agent_died` (`cause`, `player`, `game_time`, `key`, `count`) from the game log's death lines. Please add the kind to the `marker` row in docs/interfaces/event-log.md; Factorio could write the same kind (character death).
 2. Runner: `new_host_events()` reads those markers; a new death interrupts the turn (reason `host_event`) and the next continue prompt carries a generic "you died; re-check inventory; re-plan" note. Tests in runner/tests/test_skills_note.py and graders/minecraft/tests.
+
+## 2026-10-24 (critic, cycle 11: compaction vs handoff, naming)
+John's `--compact-tokens` (b9752e2) makes Codex compact one thread past N context tokens; our `--reset-context-tokens N` in `claude_runner.py` (also accepted as `--compact-tokens`) replaces the session instead.
+- Compaction keeps one thread, the model writes its own summary; nothing for the harness to do, but the summary is unstructured and lossy (and with Claude Code `-p` the CLI did not compact before 218k in our run).
+- Handoff (ours): the agent first updates NOTES.md and skills/INDEX.md (structured, in files that survive crashes too), then a fresh session reads brief + goal + notes + the skills index. Live result: 218k -> 62k context in 21 s (handoff ask 21 s, no lost work), skills carried over (80% of later Bash steps called saved skills).
+- Trade-offs: handoff costs one extra short turn and relies on the notes being good (the brief already requires them); compaction is cheaper to implement. They compose: compact at a lower N, hand off at a higher one.
