@@ -78,6 +78,19 @@ def skills_note(workspace: Path) -> str:
             + text[:SKILLS_CAP] + ("\n... (index cut; read the file for the rest)" if cut else ""))
 
 
+def take_update_note(run_dir: Path) -> str:
+    """Advice for the agent written by a human or critic into <run>/UPDATE_NOTE.md. Delivered once, with the
+    next continue prompt, then renamed to UPDATE_NOTE.md.sent so it is kept for the record."""
+    p = run_dir / "UPDATE_NOTE.md"
+    try:
+        text = p.read_text(encoding="utf-8").strip()
+        p.rename(p.with_name(p.name + ".sent"))
+    except OSError:
+        return ""
+    return ("Update from the people running this harness (guidance changed since your brief was written; it "
+            "applies from now on):\n" + text) if text else ""
+
+
 SETTINGS_IN_IMAGE = "/opt/harness/claude-settings.json"
 MCP_IN_CONTAINER = "/opt/harness/mcp.json"
 
@@ -364,6 +377,10 @@ class ClaudeRunner:
             note = skills_note(self.run_dir / "workspace")
             if note:
                 prompt += "\n\n" + note
+        if not first:
+            un = take_update_note(self.run_dir)
+            if un:
+                prompt += "\n\n" + un
         if not first and self.state.extra.get("update_note"):
             prompt += "\n\n" + self.state.extra.pop("update_note")
         nudge = self.run_dir / "NUDGE"

@@ -75,3 +75,7 @@ Evidence (mc-overnight-01, first 70 min): of 94 Bash steps, 33 (35%) were `sk.wa
 At 100-130k tokens of context per request this is the largest avoidable cost, and about 27 s of wall clock each. The agent capped its waits at 28 s itself (it believed calls must end before its 30 s hook timeout).
 Change: brief bullet "Wait in one long step, not many short ones" (block until done or several minutes; shell up to 10 min, run_script up to 20; no duplicate calls in one step).
 Related: the new 90 s cap on extension tool timeouts means a hook cannot be the long wait; long waits belong in run_script or the shell, with short hook calls inside.
+
+## 2026-10-24 (critic, cycle 4b: delivering guidance to a live run) runner/claude_runner.py
+The brief is frozen into runner state at run start, so edits to prompts/brief.md never reach a live run. `take_update_note()` delivers `<run>/UPDATE_NOTE.md`
+once with the next continue prompt (then renames it `.sent`). Any supervisor can use it without touching runner-state.json while the runner is up. Test in `runner/tests/test_skills_note.py`.
