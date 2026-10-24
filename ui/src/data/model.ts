@@ -68,6 +68,28 @@ export type Integrity = {
   signals: SignalState[]
   grader?: { ok: boolean; since: number; detail: string }
 }
+/** Headline numbers over the run so far, computed exactly as tools/time_use.py's "all" line: the window runs from the
+ *  first runner/tool-server record to `at` (grader and estimator records don't move it); tokens and steps are `usage`
+ *  records in it; actions are real `program_actions` counts in it; hands busy is a share of the time the agent ran. */
+export type Metrics = {
+  wallMs: number; offMs: number; handsMs: number; toolsMs: number; idleMs: number
+  tokens: number; steps: number; actions: number
+  tokPerHour?: number; handsPct?: number; tokPerStep?: number; tokPerAction?: number
+}
+/** Counts from the records up to a moment, for the ledger. Undefined fields: the run has no record of that kind. */
+export type Ledger = {
+  input: number; cached: number; output: number; failed: number; scripts: number
+  deaths: number; lastDeath?: string; stalls: number; tasks: number; handoffs: number; nudges: number
+}
+export type OpenTask = { task: string; name: string; hands: boolean; t: number }
+export type ActionLine = { t: number; label: string; count: number; ok: boolean }
+export type ToolVersion = { version: number; t: number; reason: string }
+export type HookUse = { name: string; calls: number; lastCall?: number; acts?: boolean }
+/** One extension the agent wrote (several hooks share its version) or one kept script, with every version and its use. */
+export type Kit = {
+  kind: 'extension' | 'script'; name: string; versions: ToolVersion[]; restored: number[]
+  hooks: HookUse[]; calls: number; lastCall?: number
+}
 export type UsageInfo = { requests: number; input: number; cached: number; output: number; reasoning: number; contextWindow?: number; t: number }
 
 const AGENT_STATES: Record<string, string> = {
@@ -103,6 +125,10 @@ export class Run {
   private tokenSeries: { t: number; cum: number }[] = []
   private toolSeries: { t: number; n: number }[] = []
   private steps_: MilestoneStep[] = []
+  /** Tokens of each model request (growth of the thread total), as time_use.py's usage_points. */
+  private requests: { t: number; tokens: number }[] = []
+  /** First and last record of the runner and tool server: time_use.py's window. */
+  private own?: [number, number]
   private spans_?: { hands: Span[]; tools: Span[]; off: Span[] }
 
   constructor(records: Rec[]) {
@@ -133,9 +159,11 @@ export class Run {
     let cum = 0, prev = 0
     for (const u of this.of('usage')) {
       const total = Number(u.total_tokens) || 0
-      cum += total >= prev ? total - prev : total  // a smaller total means the thread counter restarted
+      const d = total >= prev ? total - prev : total  // a smaller total means the thread counter restarted
+      cum += d
       prev = total
       this.tokenSeries.push({ t: u.t, cum })
+      this.requests.push({ t: u.t, tokens: d })
     }
     const seen = new Set<string>()
     for (const h of this.of('hook_loaded')) if (!seen.has(h.hook)) { seen.add(h.hook); this.toolSeries.push({ t: h.t, n: seen.size }) }
@@ -152,6 +180,8 @@ export class Run {
       pt = m.t; ptok = tok
     }
     this.markers = this.buildMarkers()
+    const own = this.recs.filter(r => r.writer !== 'grader' && r.writer !== 'estimator')
+    if (own.length) this.own = [own[0].t, own[own.length - 1].t]
   }
 
   of(type: string): TRec[] { return this.byType.get(type) ?? [] }
@@ -165,6 +195,13 @@ export class Run {
     return s ? `${s.agent ?? 'agent'} · ${s.host ?? 'host'}` : (this.recs[0]?.run_id ?? 'run')
   }
   get goal(): string { return this.started?.goal ?? '' }
+  /** The run's goal headline: the first line of run_started.goal, without markdown heading marks or a "Goal:" prefix. */
+  get goalTitle(): string { return (this.goal.split('\n').find(l => l.trim()) ?? '').replace(/^#+\s*/, '').replace(/^goal:\s*/i, '') }
+  /** Agent and model as run_started records them; effort and agent version only if a record carries them. */
+  get harness(): { agent?: string; model?: string; effort?: string; version?: string } {
+    const s = this.started
+    return { agent: s?.agent, model: s?.model, effort: s?.effort ?? s?.reasoning_effort, version: s?.agent_version }
+  }
 
   get ended(): boolean { return this.of('run_ended').length > 0 }
   /** Still running: no run_ended yet and a record in the last two minutes. */
@@ -218,6 +255,7 @@ export class Run {
     for (const [start, held] of open.values()) { tools.push([start, Infinity]); if (held) hands.push([start, Infinity]) }
     const states = this.of('agent_state').map(r => [r.t, String(r.state)] as const)
     const off: Span[] = states.flatMap(([t, st], i): Span[] => RUNNING_STATES.has(st) ? [] : [[t, states[i + 1]?.[0] ?? Infinity]])
+    if (states.length) off.unshift([-Infinity, states[0][0]])  // before the run began (costs._not_running)
     return (this.spans_ = { hands, tools, off })
   }
 
@@ -308,6 +346,122 @@ export class Run {
     for (const a of [...tracked, ...(lump ? [lump] : [])]) for (const [k, n] of Object.entries(kindMap(a))) counts.set(k, (counts.get(k) ?? 0) + n)
     const kinds = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k)
     return { bins, binMs: BIN, pre, now, kinds, anyEstimated: bins.some(b => b.estimated) }
+  }
+
+  /** The headline numbers up to `at`, exactly as tools/time_use.py computes its "all" line. Undefined before anything ran. */
+  metrics(at: number): Metrics | undefined {
+    if (!this.own) return undefined
+    const [a, last] = this.own
+    const b = Math.min(at, last)
+    if (b <= a) return undefined
+    const { hands: H, tools: T, off: O } = this.timeSpans()
+    const off = covered(O, a, b)
+    const handsMs = covered([...H, ...O], a, b) - off
+    const all = covered([...H, ...T, ...O], a, b)
+    const wallMs = b - a
+    const req = this.requests.filter(r => r.t >= a && r.t <= b)
+    const tokens = req.reduce((x, r) => x + r.tokens, 0), steps = req.length
+    const actions = this.of('program_actions')
+      .filter(r => r.writer !== 'estimator' && r.source !== ESTIMATED && r.t >= a && r.t <= b)
+      .reduce((x, r) => x + (Number(r.count) || 0), 0)
+    const on = wallMs - off
+    return {
+      wallMs, offMs: off, handsMs, toolsMs: all - off - handsMs, idleMs: Math.max(0, wallMs - all), tokens, steps, actions,
+      tokPerHour: tokens / (wallMs / 3_600_000), handsPct: on > 0 ? handsMs / on : undefined,
+      tokPerStep: steps ? tokens / steps : undefined, tokPerAction: actions ? tokens / actions : undefined,
+    }
+  }
+
+  ledger(at: number): Ledger {
+    const us = this.upTo('usage', at)
+    const sum = (k: string) => us.reduce((x, u) => x + (Number(u[k]) || 0), 0)
+    const marks = this.upTo('marker', at)
+    const deaths = marks.filter(m => m.kind === 'agent_died')
+    let failed = 0, scripts = 0
+    for (const c of this.upTo('tool_call', at)) {
+      if (!byAgent(c)) continue
+      if (!c.ok) failed++
+      if (c.tool === 'run_script' && c.via !== 'script' && !String(c.via ?? '').startsWith('task:')) scripts++
+    }
+    return {
+      input: sum('input_tokens'), cached: sum('cached_input_tokens'), output: sum('output_tokens'), failed, scripts,
+      deaths: deaths.length, lastDeath: deaths[deaths.length - 1]?.label, stalls: this.upTo('task_stalled', at).length,
+      tasks: this.upTo('task_started', at).length, handoffs: marks.filter(m => m.kind === 'context_handoff_done').length,
+      nudges: marks.filter(m => m.kind === 'idle_nudge' || m.kind === 'supervisor_nudge').length,
+    }
+  }
+
+  /** Background tasks running at `at`, newest first. */
+  openTasks(at: number): OpenTask[] {
+    const open = new Map<string, OpenTask>()
+    for (const r of this.recs.slice(0, upper(this.recs, at))) {
+      if (r.type === 'task_started') open.set(String(r.task), { task: String(r.task), name: String(r.name ?? ''), hands: !!r.hands, t: r.t })
+      else if (r.type === 'task_ended') open.delete(String(r.task))
+    }
+    return [...open.values()].reverse()
+  }
+
+  /** The agent's newest words (`agent_message`). */
+  message(at: number): TRec | undefined { return this.latest('agent_message', at) }
+
+  /** The agent's own recent calls (not those made inside its scripts or tasks), consecutive repeats folded. */
+  actions(at: number, n = 10): ActionLine[] {
+    const calls = this.of('tool_call')
+    const out: ActionLine[] = []
+    for (let i = upper(calls, at) - 1, k = 0; i >= 0 && k < 3000 && out.length <= n; i--, k++) {
+      const c = calls[i]
+      const via = String(c.via ?? '')
+      if (!byAgent(c) || via === 'script' || via === 'forward' || via.startsWith('task:') || c.tool === 'costs') continue
+      const label = c.tool === 'run_script' && c.args?.name ? `run_script ${c.args.name}`
+        : c.tool === 'task' && c.args?.id ? `task ${c.args.id}` : c.tool === 'wait' && Array.isArray(c.args?.on) ? `wait ${c.args.on.join(' ')}`
+        : c.channel === 'input' && c.summary ? String(c.summary) : String(c.tool)
+      const ok = c.ok !== false
+      const prev = out[out.length - 1]
+      if (prev && prev.label === label && prev.ok === ok) { prev.count++; continue }
+      out.push({ t: c.t, label, count: 1, ok })
+    }
+    return out.slice(0, n)
+  }
+
+  /** Every extension and kept script by `at`: versions with times, restores, and how often and when it was last used. */
+  kits(at: number): Kit[] {
+    const kits = new Map<string, Kit>()
+    const kit = (kind: Kit['kind'], name: string) => {
+      const key = `${kind}:${name}`
+      let k = kits.get(key)
+      if (!k) { k = { kind, name, versions: [], restored: [], hooks: [], calls: 0 }; kits.set(key, k) }
+      return k
+    }
+    const hookOf = new Map<string, Kit>()
+    for (const r of this.upTo('hook_loaded', at)) {
+      const k = kit('extension', String(r.extension || r.hook))
+      if (!k.versions.some(v => v.version === r.version)) k.versions.push({ version: Number(r.version), t: r.t, reason: String(r.reason ?? '') })
+      if (!k.hooks.some(h => h.name === r.hook)) k.hooks.push({ name: r.hook, calls: 0 })
+      hookOf.set(r.hook, k)
+    }
+    for (const r of this.upTo('hook_restored', at)) kit('extension', String(r.extension)).restored.push(r.t)
+    const scriptName = (s: string) => s.replace(/^scripts\//, '').replace(/\.py$/, '')
+    for (const c of this.upTo('tool_call', at)) {
+      if (!byAgent(c)) continue
+      if (c.channel === 'hook') {
+        const name = c.hook?.name ?? c.tool, k = hookOf.get(name)
+        const h = k?.hooks.find(x => x.name === name)
+        if (!k || !h) continue
+        h.calls++; h.lastCall = c.t; k.calls++; k.lastCall = c.t
+        if (c.hook && typeof c.hook.acts === 'boolean') h.acts = c.hook.acts
+      } else if (c.tool === 'run_script') {
+        const kept = /kept as (scripts\/[\w.-]+)/.exec(String(c.summary ?? ''))
+        if (kept) { const k = kit('script', scriptName(kept[1])); k.versions.push({ version: k.versions.length + 1, t: c.t, reason: '' }) }
+        if (c.args?.name) { const k = kit('script', scriptName(String(c.args.name))); k.calls++; k.lastCall = c.t }
+      }
+    }
+    for (const r of this.upTo('task_started', at)) {
+      const name = String(r.name ?? '')
+      if (!name || name === 'code') continue
+      const k = kit('script', scriptName(name)); k.calls++; k.lastCall = r.t
+    }
+    for (const k of kits.values()) k.hooks.sort((x, y) => y.calls - x.calls)
+    return [...kits.values()].sort((x, y) => (x.kind === y.kind ? (y.lastCall ?? 0) - (x.lastCall ?? 0) : x.kind === 'extension' ? -1 : 1))
   }
 
   /** Tokens used so far: the sum of per-request growth of the thread total, so a counter reset doesn't undo progress. */

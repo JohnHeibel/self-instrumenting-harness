@@ -1,10 +1,12 @@
 import { createElement } from 'react'
-// The one place that names the backdrop. To swap in another version, change this import and the element below;
-// nothing else refers to it. The module registers <sisyphus-backdrop> (an SVG drawn with the figure, the stone and
-// the ramp in the manner of black-figure painting) and respects prefers-reduced-motion by holding a still pose.
-import './backdrop/sisyphus.js'
+// The one place that names the backdrop. To swap in another version, change these imports and the element below;
+// nothing else refers to it. The modules register <sisyphus-backdrop-v3>: Sisyphus pushing his stone up a 38° slope,
+// drawn in the manner of a red-figure vase, held still under prefers-reduced-motion.
+import './backdrop/sisyphus-parts.js'
+import './backdrop/sisyphus-v3.js'
 
-/** Sits behind the dashboard: very faint, ink and terracotta tuned to the night-stone palette, never intercepting input. */
+/** Bottom-right quarter, behind the data, at full opacity. styles.css (.backdrop) recolours it to one tone on the
+ *  page ground, so the figure is crisp and flat rather than faded; it never intercepts input. */
 export function Backdrop() {
-  return createElement('sisyphus-backdrop', { class: 'backdrop', ground: '#b5683f', ink: '#050607', opacity: '0.13', 'aria-hidden': 'true' })
+  return createElement('sisyphus-backdrop-v3', { class: 'backdrop', palette: 'marble', bands: 'none', opacity: '1', 'aria-hidden': 'true' })
 }

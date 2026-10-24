@@ -2,11 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Run, TRec } from '../data/model'
 import type { Spectator } from '../data/source'
 import { Backdrop } from '../Backdrop'
-import { Leverage } from '../components/Leverage'
-import { TimeUse } from '../components/TimeUse'
 import { HookDetail } from '../components/HookDetail'
-import { CoverageChart, TimeChart, TokensChart, ToolsChart } from '../components/charts'
-import { Event, Feed, Goal, Header, HookLibrary, Milestones, Mind, ReadLine, Screen } from '../components/panels'
+import { Actions, Event, Goal, Header, Kits, Ledger, Metrics, Now, Progress, Screen } from '../components/panels'
 import { Timeline } from '../components/Timeline'
 import { SPEEDS, useNow } from '../util'
 
@@ -87,38 +84,28 @@ export function Story({ run, spectator, imageUrl }: { run: Run; spectator: Spect
 
   const hooks = run.hooks(at)
   const openHook = open ? hooks.find(h => h.name === open) : undefined
-  const opening = at - run.t0 < 90_000
   return (
     <div className="stage-fit">
       <div className="canvas" style={{ transform: `scale(${scale})` }}>
         <Backdrop />
         <Header run={run} at={at} now={now} onJump={jumpLive} />
-        <Milestones items={run.milestones(at)} />
-        <div className="main">
-          <div className="left">
-            <div className="screenwrap">
-              <Screen run={run} at={at} now={now} following={following} spectator={spectator} imageUrl={imageUrl} />
-              <div className="over top"><ReadLine run={run} at={at} /></div>
-              <div className="over bottom"><Event run={run} at={at} /></div>
-            </div>
-            <div className="charts">
-              <TokensChart run={run} at={at} />
-              <TimeChart run={run} at={at} />
-              <CoverageChart run={run} at={at} />
-              <ToolsChart run={run} at={at} />
-            </div>
-          </div>
-          <div className="right">
-            <Goal run={run} at={at} opening={opening} />
-            <Mind run={run} at={at} playing={playing || following} opening={opening} />
-            <HookLibrary hooks={hooks} onOpen={setOpen} />
-            <Leverage run={run} at={at} />
-            <TimeUse run={run} at={at} />
-            <Feed run={run} at={at} items={[]} />
-          </div>
+        <div className="hero">
+          <Screen run={run} at={at} now={now} following={following} spectator={spectator} imageUrl={imageUrl} />
+          <Event run={run} at={at} />
+        </div>
+        <div className="under">
+          <Goal run={run} at={at} />
+          <Progress run={run} at={at} />
+          <Ledger run={run} at={at} />
         </div>
         <Timeline run={run} at={at} playing={playing} speed={speed} live={live} onJump={jumpLive}
                   onSeek={t => setAt(Math.max(run.t0, Math.min(run.t1, t)))} onPlay={setPlaying} onSpeed={setSpeed} />
+        <aside className="side">
+          <Metrics run={run} at={at} />
+          <Now run={run} at={at} />
+          <Kits run={run} at={at} onOpen={setOpen} />
+          <Actions run={run} at={at} />
+        </aside>
         {openHook && <HookDetail hook={openHook} run={run} onClose={() => setOpen(null)} />}
       </div>
     </div>

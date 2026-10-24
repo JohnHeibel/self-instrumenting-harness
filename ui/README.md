@@ -24,17 +24,23 @@ A run that is still writing opens at its newest moment and follows it (the heade
 
 Both produce the same records, so nothing above `src/data/source.ts` knows which is in use.
 
-## Metrics
+## Layout and numbers
 
-Leverage (right column): actions the program counted per model step and tokens per action, in 30-minute bins, from `program_actions` (grader) and `usage` (runner), with the trailing 30 minutes large and the kind breakdown on hover. Estimated bins (`source: estimated_from_host_commands`, read from `<run>/estimates/*.jsonl`) are hatched or dashed. A first real record that covers far more than a bin is shown as one "before tracking" average block. `components/Leverage.tsx` takes only a `Run` and a time, so the Stage overlay can mount it as is.
+One 1920×1080 stage, scaled to fit: the game (agent screenshot, or the spectator frame when live and the last look is old) as the hero; under it the current goal (`goal` record, else the first line of `run_started.goal`), milestones reached of announced (grader), a ledger and the scrubber; on the right the efficiency table, what the agent is doing now, the tools it built and its recent calls. Every number comes from a record; where a run has no record of a kind it shows a dash.
 
-Time use (right column): how wall-clock time while the agent ran split between hands busy, tools only and idle (`costs.py` / `tools/time_use.py` rules, event-log.md "Time use"), as one proportional bar with h:mm and %, plus the share per 30-minute bin. It is derived in `Run.timeUse` from `tool_call`, `task_started`/`task_ended` and `agent_state` records, so it needs no new record type; a run with no tool calls shows "Not recorded for this run".
+| Shown | Source |
+|---|---|
+| tokens / hour, tokens / step, tokens / action, hands busy | `Run.metrics`, the same computation as `tools/time_use.py`'s "all" line: window from the first runner/tool-server record to now; tokens and steps are `usage` records in it (growth of `total_tokens`); actions are real `program_actions.count`; hands busy is hands time ÷ (wall − off), with `costs.py` span rules |
+| steps, actions, failed calls, scripts run, tokens in / cached in / out, tasks, deaths, stalls, handoffs, nudges | `Run.metrics` / `Run.ledger`: `usage` count; Σ `program_actions.count`; `tool_call` ok=false (health checks excluded); agent `run_script` calls; Σ `usage.input_tokens` / `cached_input_tokens` / `output_tokens`; `task_started`; `marker` `agent_died`; `task_stalled`; `marker` `context_handoff_done`; `marker` `idle_nudge` + `supervisor_nudge` |
+| agent, model, effort, host | `run_started` (`effort` / `agent_version` only if recorded; a dash otherwise) |
+| tools | `Run.kits`: per extension every `hook_loaded` version on the run's time axis, `hook_restored`, calls and last call per hook; kept scripts from `run_script` "kept as scripts/…" summaries, runs from `run_script name=` and `task_started` |
+| now | newest `agent_state`, open background task (`task_started` without `task_ended`), newest `agent_message` |
 
-Tokens per milestone and wall-clock time per milestone (falling is good, with a fitted trend), coverage over the last hour, and distinct hooks built over time.
+The single accent (terracotta) marks state changes only: a milestone reached, a tool improved, a death or break.
 
 ## Backdrop
 
-`src/Backdrop.tsx` is the only file that names the background animation. To swap it, change its one import and element. The current one is `src/backdrop/sisyphus.js`, a `<sisyphus-backdrop>` web component at ~13% opacity; it holds a still pose under reduced motion.
+`src/Backdrop.tsx` is the only file that names the background animation. To swap it, change its one import and element. The current one is `src/backdrop/sisyphus-v3.js`, a `<sisyphus-backdrop-v3>` web component; `styles.css` (`.backdrop`) places it in the bottom-right quarter at full opacity and recolours it to one tone on the page ground. It holds a still pose under reduced motion.
 
 ## Fake runs for development
 
