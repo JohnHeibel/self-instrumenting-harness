@@ -25,6 +25,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PROBE = "probe_hello"
+# The agent image is tagged with the Codex version its Dockerfile installs, as the runner does.
+CODEX_VERSION = next(l.split("=", 1)[1].strip() for l in (REPO / "agent" / "Dockerfile").read_text().splitlines()
+                     if l.startswith("ARG CODEX_VERSION="))
 PROMPT = f"""This is an automated test of your tool setup. Do exactly this:
 1. In your workspace (/home/agent/work), create extensions/probe/probe.py: it reads JSON from stdin
    and prints a JSON object {{"summary": "probe ok", "query": <the "query" argument>}}.
@@ -46,7 +49,7 @@ def main() -> int:
     ap.add_argument("--variant", choices=["default", "no-omit"], default="default",
                     help="no-omit drops omit_tools_from, to see Codex's default exposure")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--image", default="harness-agent:spike")
+    ap.add_argument("--image", default=f"harness-agent:codex-{CODEX_VERSION}")
     ap.add_argument("--skip-build", action="store_true")
     ap.add_argument("--codex-home", type=Path, default=Path.home() / ".codex",
                     help="host Codex home holding auth.json")
