@@ -10,6 +10,8 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
+import anyio
+
 from mcp import types
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
@@ -17,6 +19,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from . import io_tools
 from .capture import Target
+from .docs import Docs, answer as answer_docs
 from .events import EventLog
 from .extensions import ContainerExecutor, Executor, Extensions, HostConfig, LocalExecutor
 
@@ -96,6 +99,20 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
     hc = host_config or HostConfig()
     target = Target(title=window_title or hc.window_title, process=hc.process, mode=hc.capture)
     io_tools.register(mcp, log, target, max_screenshot_width, **(io or {}))
+    docs = Docs(hc.docs, (archive_dir or Path("extensions")).parent / "docs-cache")
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def read_docs(query: str = "", section: str = "", source: str = "", limit: int = 8) -> str:
+        """Search and read this program's documentation (the sources its host config lists).
+        No arguments: list the sources. query: search; returns matching sections with their ids.
+        section: the full text of one section, by the id a search returned. source: search one
+        source only. limit: number of search results (1-25)."""
+        args = {k: v for k, v in {"query": query, "section": section, "source": source}.items() if v}
+        with log.call("read_docs", "docs", args) as res:
+            text, summary = await anyio.to_thread.run_sync(answer_docs, docs, query, section, source,
+                                                           max(1, min(int(limit), 25)))
+            res.set("text", len(text), summary=summary)
+            return text
 
     @mcp.tool(annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                                 idempotentHint=False, openWorldHint=False),

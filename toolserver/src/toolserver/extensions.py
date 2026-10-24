@@ -43,6 +43,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.fastmcp.tools.base import Tool
 
+from .docs import parse_sources
 from .events import EventLog
 
 NAME = re.compile(r"[a-z][a-z0-9_]{2,47}")
@@ -74,6 +75,7 @@ class HostConfig:
     install_dir: Path | None = None          # where in-host extension files go
     reload_actions: dict[str, list[str]] = field(default_factory=dict)
     reload_timeout_s: int = 120
+    docs: list[dict] = field(default_factory=list)  # [docs] sources for read_docs (docs.py)
 
     @classmethod
     def load(cls, path: Path | None, run_dir: Path | None = None) -> "HostConfig":
@@ -100,6 +102,7 @@ class HostConfig:
             install_dir=Path(os.path.expanduser(fill(install))) if install else None,
             reload_actions={k: [fill(a) for a in _argv(v, f"reload.{k}")] for k, v in ext.get("reload", {}).items()},
             reload_timeout_s=int(ext.get("reload_timeout_s", 120)),
+            docs=parse_sources(raw.get("docs", {}), fill),
         )
 
 
