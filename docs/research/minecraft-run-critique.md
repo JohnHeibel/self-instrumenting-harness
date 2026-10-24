@@ -47,3 +47,8 @@ Fixes: runner IdleWatch + idle note (restart needed, default on at 8 min); brief
 Evidence: after the idle-watch restart (10:05Z) and the nudges the agent built a `job` helper that prints progress (mine/goto positions every 15 s), mines iron (12 raw iron by 10:21Z) and is smelting. Context 201k, so each request re-reads about 200k cached tokens (11 requests per 10 min, 11k uncached): the context never compacted (window is larger than the 200k shown). No milestone since 09:21Z (iron_ingot expected next).
 Derived skill metrics (analyze.py from raw stream, last 60 min): 101 Bash steps = 15 skill writes, 80 skill calls, 6 other, 0 logged hook or run_script calls. The skill library is real but invisible to events.jsonl (see requests for `skill_saved`/`skill_used`).
 Trend: tokens per step rising with context (45k -> 200k); steps per milestone not yet falling; wall-clock per milestone: first_wood 31 min, stone-tier batch +8 min, iron batch pending (>60 min). Next lever: fewer, bigger steps per chore now that helpers exist, and context hygiene (stale screenshots).
+
+## 2026-10-24 03:50 PDT, cycle 9
+Evidence: iron_ingot + iron_tools at 10:26Z (+65 min after the stone batch): 90k uncached tokens but 18.9M total tokens (steps now carry a 200k+ context). Cumulative: 26.1M total, 249k uncached at 10:26Z.
+Cost: wall-clock and rate-limit pressure grow with context; model requests are about 200k tokens each, 5x the start.
+Fix: opt-in `--reset-context-tokens` handoff to a fresh session (see requests). Recommend a deliberate restart with `--reset-context-tokens 150000`: the notes and skills index already exist, so a handoff should be cheap and safe. The run is now at 212k.

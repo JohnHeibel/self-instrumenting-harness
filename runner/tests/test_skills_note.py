@@ -42,3 +42,17 @@ def test_idle_watch(tmp_path):
     (tmp_path / "events.jsonl").write_text("x")       # a tool call was logged: activity
     assert not w.idle()
     assert not cr.IdleWatch(tmp_path, 0).idle()       # off
+
+
+def test_handoff_state_machine():
+    e = {}
+    assert not cr.handoff_trigger(e, 100, 0)            # off
+    assert not cr.handoff_trigger(e, 100, 150)          # under the limit
+    assert cr.handoff_trigger(e, 200, 150) and e["handoff"] == "wanted"
+    assert not cr.handoff_trigger(e, 300, 150)          # already in progress
+    assert not cr.handoff_end_turn(e, False)            # the interrupted turn is not the asking turn
+    assert "NOTES.md" in cr.handoff_begin_turn(e) and e["handoff"] == "asked"
+    assert not cr.handoff_end_turn(e, True)             # asking turn failed: ask again next turn
+    assert "NOTES.md" in cr.handoff_begin_turn(e)
+    assert cr.handoff_end_turn(e, False) and e["fresh_session"] and not e["handoff"]
+    assert cr.handoff_begin_turn(e) == ""

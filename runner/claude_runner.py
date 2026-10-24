@@ -86,6 +86,43 @@ IDLE_NOTE = ("Idle check: for {m:.0f} minutes nothing on the host screen changed
              "progress in 2 minutes. Never wait more than about 2 minutes without observing the host.")
 
 
+HANDOFF_ASK = ("Context handoff: your context is large, which makes every step slower and dearer, so this session "
+               "will be replaced by a fresh one. Do only this now, in a few steps: bring /home/agent/work/NOTES.md "
+               "fully up to date (current goal and subgoal, what is done, exactly what you are in the middle of, "
+               "what comes next, lessons and known problems) and /home/agent/work/skills/INDEX.md (one line per "
+               "skill: what it does, how to call it, known failures). Then end your turn with the single line "
+               "'handoff ready'. Do not start new work.")
+HANDOFF_TIMEOUT_S = 300
+
+
+def handoff_trigger(extra: dict, context: int, limit: int) -> bool:
+    """True when a handoff should start: the feature is on, the context is over the limit, none in progress."""
+    if limit <= 0 or context < limit or extra.get("handoff"):
+        return False
+    extra["handoff"] = "wanted"
+    return True
+
+
+def handoff_begin_turn(extra: dict) -> str:
+    """At the start of a turn: the ask to append to the prompt, if a handoff was wanted."""
+    if extra.get("handoff") == "wanted":
+        extra["handoff"] = "asked"
+        return HANDOFF_ASK
+    return ""
+
+
+def handoff_end_turn(extra: dict, failed: bool) -> bool:
+    """After a turn: when the asking turn is over, the next turn starts a fresh session (returns True)."""
+    if extra.get("handoff") == "asked":
+        if failed:
+            extra["handoff"] = "wanted"   # ask again on the next turn
+            return False
+        extra["handoff"] = ""
+        extra["fresh_session"] = True
+        return True
+    return False
+
+
 class IdleWatch:
     """Notices a stall that the agent's own waiting hides: the host's picture (live/latest.jpg) is unchanged
     and the tool server logged no call for `idle_s` seconds. Host-generic; off when idle_s <= 0."""
@@ -197,6 +234,7 @@ class ClaudeRunner:
         self.uncached = int(self.state.extra.get("uncached_tokens", 0))
         self.total_tokens = int(self.state.extra.get("total_tokens", 0))
         self.pending_note = ""
+        self.context = 0
         self.last_state: tuple | None = None
         self._tick_at = time.monotonic()
 
@@ -414,7 +452,20 @@ class ClaudeRunner:
         """Returns ok | failed | interrupted."""
         st = self.state
         first = st.thread_id is None
-        prompt = self.first_prompt() if first else CONTINUE_PROMPT
+        fresh = bool(st.extra.pop("fresh_session", False)) and not first
+        if fresh:
+            # a new session, not a resume: the brief and goal again, then the usual rebuild-from-files prompt
+            prompt = self.first_prompt() + "\n\n" + CONTINUE_PROMPT
+            self.log.write("marker", label="fresh session after context handoff", kind="context_reset",
+                           context_tokens=self.context)
+            self.context = 0
+        else:
+            prompt = self.first_prompt() if first else CONTINUE_PROMPT
+        ask = handoff_begin_turn(st.extra) if not first and not fresh else ""
+        if ask:
+            prompt += "\n\n" + ask
+            self.log.write("marker", label="context handoff requested", kind="context_handoff",
+                           context_tokens=self.context)
         if not first:
             note = skills_note(self.run_dir / "workspace")
             if note:
@@ -451,17 +502,22 @@ class ClaudeRunner:
         self.agent_state("thinking", "starting turn")
         idle = IdleWatch(self.run_dir, self.a.idle_minutes * 60)
         idle.reset()
-        t = Turn(self.docker_cmd(None if first else st.thread_id), prompt,
+        t = Turn(self.docker_cmd(None if (first or fresh) else st.thread_id), prompt,
                  self.run_dir / "raw" / "claude-stream.jsonl", self.run_dir / "raw" / "claude.stderr.log")
         seen_msgs: set[str] = set()
         last_msg = time.monotonic()
         last_host_check = time.monotonic()
         got_result = False
+        why_handoff = False
         while True:
             self.tick()
             why = self.end_reason() or ("pause" if self.paused() else None)
             if not why and (self.run_dir / "NUDGE").exists():
                 why = "nudge"
+            if not why and st.extra.get("handoff") == "asked" and time.monotonic() - t0 > HANDOFF_TIMEOUT_S:
+                why = "handoff_timeout"
+            if not why and why_handoff:
+                why = "handoff"
             if not why and idle.idle():
                 why = "idle"
                 self.pending_note = IDLE_NOTE.format(m=self.a.idle_minutes)
@@ -493,6 +549,8 @@ class ClaudeRunner:
             last_msg = time.monotonic()
             res = self.handle(ev, seen_msgs)
             turn_tokens += res.get("tokens", 0)
+            if not why_handoff and handoff_trigger(st.extra, self.context, self.a.reset_context_tokens):
+                why_handoff = True
             if res.get("result"):
                 got_result = True
                 r = ev
@@ -502,6 +560,8 @@ class ClaudeRunner:
                     if "limit" in error.lower() and "reset" in error.lower():
                         error = "rate_limit: " + error
         t.kill(self.name)
+        if handoff_end_turn(st.extra, status == "failed"):
+            self.log.write("marker", label="handoff done; next turn is a fresh session", kind="context_handoff_done")
         st.active_turn_id = None
         self.state.extra["last_error"] = error or ""
         self.log.write("turn_completed", turn=st.turns, turn_id=turn_id, status=status,
@@ -577,6 +637,7 @@ class ClaudeRunner:
         delta_total = inp + cin + cc + out
         self.total_tokens += delta_total
         self.uncached += inp + cc + out
+        self.context = inp + cc + cin
         self.log.write("usage", total_tokens=self.total_tokens, uncached_tokens=self.uncached,
                        context_window=1_000_000 if "[1m]" in model else 200_000,
                        input_tokens=inp + cc, cached_input_tokens=cin, output_tokens=out,
@@ -607,6 +668,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stall-timeout", type=float, default=1800)
     ap.add_argument("--idle-minutes", type=float, default=8,
                     help="interrupt and nudge when the host screen is unchanged and no tool was called this long (0 = off)")
+    ap.add_argument("--reset-context-tokens", type=int, default=0,
+                    help="when one request's context passes this, ask the agent to write its notes, then continue in "
+                         "a fresh session (0 = off; e.g. 150000)")
     ap.add_argument("--host-poll", type=float, default=30)
     ap.add_argument("--backoff-base", type=float, default=30)
     ap.add_argument("--backoff-cap", type=float, default=3600)

@@ -92,3 +92,12 @@ Evidence (mc-overnight-01, 09:21-10:03Z): 42 min with no milestone; 23 min of it
 get_blocks/scan job held the main thread (one job, 8+ minutes, no progress record), and the agent could only see it by screenshot. The agent's own waiting hides the stall from the supervisor.
 Change: (1) `IdleWatch`: if `live/latest.jpg` is byte-identical and `events.jsonl` has not grown for `--idle-minutes` (default 8, 0 = off), the runner interrupts the turn (which also stops stuck background shell jobs), logs `marker kind=interrupt reason=idle`, and the continue prompt carries an idle note (`kind=idle_nudge`). Generic: needs only the spectator image the tool server already writes. (2) Brief bullet "Long jobs report progress". Tests: `runner/tests/test_skills_note.py`.
 Caveat: a restart costs a re-read of the context (cached if under 5 min old).
+
+## 2026-10-24 (critic, cycle 9: context handoff to a fresh session) runner/claude_runner.py (opt-in flag)
+Evidence (mc-overnight-01): context grew from 37k at start to 212k by 2.5 h; each model request re-reads that whole context, so tokens per request went 45k -> 206k and
+total tokens per milestone exploded: first_wood 4.3M, stone batch +2.9M, iron_ingot/iron_tools +19M (uncached only 249k: the cache works, but cache reads are still tokens, time and rate-limit).
+The context never compacted (200k shown as the window; the CLI did not compact within -p).
+Change: `--reset-context-tokens N` (default 0 = off). When one request's context passes N, the runner interrupts, resumes with a handoff ask (update NOTES.md and skills/INDEX.md, end with
+'handoff ready'; 5 min cap), then starts the next turn as a fresh session (brief + goal + continue prompt + skills index). Markers: `context_handoff`, `context_handoff_done`, `context_reset`.
+The fresh context is about 40k, so steps cost about 5x less until it grows again. This is Anthropic's "reset with a structured handoff" pattern from docs/research/long-horizon-harnesses.md.
+State machine tested in `runner/tests/test_skills_note.py`; the turn-loop wiring has not been run end to end (no fake claude CLI in runner/tests), so first use should be watched.
