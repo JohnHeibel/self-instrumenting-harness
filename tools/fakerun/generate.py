@@ -87,6 +87,7 @@ def generate(out: Path, seed: int, hours: float, scenario: dict, rich: bool = Fa
     for frac in scenario["compactions"]:
         timeline.append((at(frac), lambda t: runner(t, "agent_state", state="compacting", text="Compacting memory")))
         timeline.append((at(frac) + timedelta(minutes=6), lambda t: runner(t, "agent_state", state="thinking", text="")))
+    _time_use_events(timeline, random.Random(seed + 2), tools, runner, at, hours, rich)
     timeline.sort(key=lambda x: x[0])
 
     loaded: list[dict] = []
@@ -148,6 +149,32 @@ def generate(out: Path, seed: int, hours: float, scenario: dict, rich: bool = Fa
     runner(end, "turn_completed", turn=turn + 1)
     runner(end, "agent_state", state="ended", text="Goal reached")
     runner(end, "run_ended", reason="goal reached")
+
+
+def _time_use_events(timeline: list, rng: random.Random, tools: Writer, runner: Writer, at, hours: float, rich: bool) -> None:
+    """Background tasks (`task_started`/`task_ended`, as in docs/interfaces/event-log.md) so the time-use split has
+    something to show: tasks that hold the hands (acting) and reading tasks that don't. The agent improves, so tasks
+    fill more of the time as the run goes on and idle time falls. A separate random stream, like leverage. Rich runs
+    also have a stretch with the host down (the agent not running), which time use leaves out of the split."""
+    n, frac = 0, 0.0
+    while frac < 1:
+        frac += rng.uniform(0.004, 0.012) * (1.6 - 1.2 * frac)   # gaps shrink as the run goes on
+        if frac >= 1:
+            break
+        n += 1
+        task, hands = f"t{n}", rng.random() < 0.6
+        secs = rng.uniform(40, 200) if hands else rng.uniform(20, 120)
+        start = at(frac)
+        name = rng.choice(["build_outpost", "lay_belts", "craft_batch"] if hands else ["scan_resources", "read_stats", "survey_base"])
+        timeline.append((start, lambda t, task=task, name=name, hands=hands, secs=secs: tools(
+            t, "task_started", task=task, name=name, hands=hands, minutes=round(secs / 60, 1), args={}, why="agent")))
+        end = start + timedelta(seconds=secs)
+        timeline.append((end, lambda t, task=task, name=name, secs=secs: tools(
+            t, "task_ended", task=task, name=name, status="ok", duration_ms=int(secs * 1000), calls=rng.randint(3, 40), summary="done")))
+    if rich:
+        down = at(0.55)
+        timeline.append((down, lambda t: runner(t, "agent_state", state="host_down", text="Game host is down")))
+        timeline.append((down + timedelta(minutes=14), lambda t: runner(t, "agent_state", state="thinking", text="")))
 
 
 # Kinds of action each fake host counts for itself, with how often. Free-form per host, like the real ones.

@@ -38,6 +38,21 @@ export type Leverage = {
   anyEstimated: boolean
 }
 export const LEVERAGE_BIN_MS = 30 * 60_000
+/** Time use: wall-clock time while the agent ran (docs/interfaces/event-log.md, "Time use"), in ms. `hands`: acting on the
+ *  program; `tools`: tools or reading tasks running with the hands free; `idle`: nothing running (the model thinking);
+ *  `off`: the runner said the agent was not running (not counted in the split). */
+export type TimeUseBin = { t0: number; t1: number; hands: number; tools: number; idle: number; off: number }
+export type TimeUse = { bins: TimeUseBin[]; total: Omit<TimeUseBin, 't0' | 't1'>; binMs: number }
+export const TIME_USE_BIN_MS = 30 * 60_000
+const RUNNING_STATES = new Set(['thinking', 'acting', 'compacting', 'waiting'])  // runner states while the agent runs
+type Span = [number, number]
+/** ms of [a, b] covered by the union of spans. */
+function covered(spans: Span[], a: number, b: number): number {
+  let total = 0, end = a
+  const hit = spans.filter(([s, e]) => e > a && s < b).map(([s, e]): Span => [Math.max(s, a), Math.min(e, b)]).sort((x, y) => x[0] - y[0])
+  for (const [s, e] of hit) if (e > end) { total += e - Math.max(s, end); end = e }
+  return total
+}
 export const ESTIMATED = 'estimated_from_host_commands'
 
 export type MarkerKind = 'milestone' | 'hook' | 'break' | 'repair' | 'compaction' | 'message'
@@ -88,6 +103,7 @@ export class Run {
   private tokenSeries: { t: number; cum: number }[] = []
   private toolSeries: { t: number; n: number }[] = []
   private steps_: MilestoneStep[] = []
+  private spans_?: { hands: Span[]; tools: Span[]; off: Span[] }
 
   constructor(records: Rec[]) {
     this.recs = records.map(r => ({ ...r, t: Date.parse(r.ts) }))
@@ -176,6 +192,54 @@ export class Run {
     const ids = new Set<string>(asOf ? (asOf.milestones ?? []).map((m: { id: string }) => m.id) : [])
     const list = this.milestonesDefined.filter(m => ids.has(m.id) || reached.has(m.id) || !asOf)
     return list.map(m => ({ ...m, t: reached.get(m.id)?.t, evidence: reached.get(m.id)?.evidence }))
+  }
+
+  /** Spans of time the agent's hands were busy and its tools were running, and when the runner said it was off. Same rules as
+   *  `spans` and `_not_running` in toolserver/costs.py. Still-open tasks run to infinity and are clipped to the window. */
+  private timeSpans() {
+    if (this.spans_) return this.spans_
+    const hands: Span[] = [], tools: Span[] = [], open = new Map<string, [number, boolean]>()
+    for (const r of this.recs) {
+      if (r.type === 'task_started') open.set(String(r.task), [r.t, !!r.hands])
+      else if (r.type === 'task_ended' && open.has(String(r.task))) {
+        const [start, held] = open.get(String(r.task))!
+        open.delete(String(r.task))
+        tools.push([start, r.t])
+        if (held) hands.push([start, r.t])
+      } else if (r.type === 'tool_call' && r.tool !== 'costs') {
+        const via = String(r.via ?? '')
+        if (via === 'script' || via.startsWith('task:')) continue  // inside a script or task: already covered by it
+        const span: Span = [r.t - (Number(r.duration_ms) || 0), r.t]
+        tools.push(span)
+        if (r.channel === 'input' || (r.channel === 'hook' && (r.hook?.acts ?? true))) hands.push(span)
+        else if (r.tool === 'run_script' && (r.held_hands ?? (Number(r.inner_calls) || 0) > 0)) hands.push(span)
+      }
+    }
+    for (const [start, held] of open.values()) { tools.push([start, Infinity]); if (held) hands.push([start, Infinity]) }
+    const states = this.of('agent_state').map(r => [r.t, String(r.state)] as const)
+    const off: Span[] = states.flatMap(([t, st], i): Span[] => RUNNING_STATES.has(st) ? [] : [[t, states[i + 1]?.[0] ?? Infinity]])
+    return (this.spans_ = { hands, tools, off })
+  }
+
+  /** Where wall-clock time went up to `at`, in 30-minute bins: hands busy, tools only, idle, off. Undefined when the run has no
+   *  tool calls or tasks (nothing to split: an older run or a source that does not carry them). */
+  timeUse(at: number): TimeUse | undefined {
+    if (!this.of('tool_call').length && !this.of('task_started').length) return undefined
+    const { hands: H, tools: T, off: O } = this.timeSpans()
+    const BIN = TIME_USE_BIN_MS
+    const end = Math.min(at, this.t1)
+    const bins: TimeUseBin[] = []
+    const total = { hands: 0, tools: 0, idle: 0, off: 0 }
+    for (let a = this.t0; a < end; a += BIN) {
+      const b = Math.min(a + BIN, end)
+      const off = covered(O, a, b)
+      const hands = covered([...H, ...O], a, b) - off
+      const all = covered([...H, ...T, ...O], a, b)
+      const bin = { t0: a, t1: a + BIN, hands, tools: all - off - hands, idle: Math.max(0, b - a - all), off }
+      bins.push(bin)
+      for (const k of ['hands', 'tools', 'idle', 'off'] as const) total[k] += bin[k]
+    }
+    return { bins, total, binMs: BIN }
   }
 
   /** Leverage in 30-minute bins up to `at`: `program_actions` (counted by the program) per model step (`usage` record), with

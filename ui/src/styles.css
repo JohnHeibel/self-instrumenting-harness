@@ -277,3 +277,13 @@ button:focus-visible { outline: 2px solid var(--lapis); outline-offset: 2px; }
 .lev .lev-note, .lev .lev-note span { white-space: nowrap; }
 .lev .lev-note { gap: 12px; }
 .lev h2 > span:first-child { margin-right: 12px; }
+/* Time use (components/TimeUse.tsx): reuses the .lev section; totals as one proportional bar. */
+.tu-row { display: grid; grid-template-columns: 84px 1fr 190px; gap: 14px; align-items: end; }
+.tu-row h2 { display: block; } .tu-row h2 span { display: block; } .tu-row h2 small { display: block; margin-top: 2px; font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); line-height: 1.3; }
+.tu-totals { min-width: 0; }
+.tu-bar { display: flex; height: 8px; gap: 2px; margin-bottom: 5px; } .tu-bar i { display: block; min-width: 0; }
+.tu-nums { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+.tu-nums > div { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.tu-nums dt { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-hi); }
+.tu-nums dt i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; } .tu-nums > div:last-child dt i { border: 1px solid var(--stone-hi); }
+.tu-nums dd { font-size: 17px; line-height: 1.1; font-weight: 600; color: var(--text); } .tu-nums dd small { margin-left: 4px; font-size: 12px; font-weight: 500; color: var(--muted-hi); }

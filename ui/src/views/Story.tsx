@@ -3,6 +3,7 @@ import type { Run, TRec } from '../data/model'
 import type { Spectator } from '../data/source'
 import { Backdrop } from '../Backdrop'
 import { Leverage } from '../components/Leverage'
+import { TimeUse } from '../components/TimeUse'
 import { HookDetail } from '../components/HookDetail'
 import { CoverageChart, TimeChart, TokensChart, ToolsChart } from '../components/charts'
 import { Event, Feed, Goal, Header, HookLibrary, Milestones, Mind, ReadLine, Screen } from '../components/panels'
@@ -112,7 +113,8 @@ export function Story({ run, spectator, imageUrl }: { run: Run; spectator: Spect
             <Mind run={run} at={at} playing={playing || following} opening={opening} />
             <HookLibrary hooks={hooks} onOpen={setOpen} />
             <Leverage run={run} at={at} />
-            <Feed run={run} at={at} items={run.feed(at, 2)} />
+            <TimeUse run={run} at={at} />
+            <Feed run={run} at={at} items={[]} />
           </div>
         </div>
         <Timeline run={run} at={at} playing={playing} speed={speed} live={live} onJump={jumpLive}

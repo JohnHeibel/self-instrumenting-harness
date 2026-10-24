@@ -28,6 +28,8 @@ Both produce the same records, so nothing above `src/data/source.ts` knows which
 
 Leverage (right column): actions the program counted per model step and tokens per action, in 30-minute bins, from `program_actions` (grader) and `usage` (runner), with the trailing 30 minutes large and the kind breakdown on hover. Estimated bins (`source: estimated_from_host_commands`, read from `<run>/estimates/*.jsonl`) are hatched or dashed. A first real record that covers far more than a bin is shown as one "before tracking" average block. `components/Leverage.tsx` takes only a `Run` and a time, so the Stage overlay can mount it as is.
 
+Time use (right column): how wall-clock time while the agent ran split between hands busy, tools only and idle (`costs.py` / `tools/time_use.py` rules, event-log.md "Time use"), as one proportional bar with h:mm and %, plus the share per 30-minute bin. It is derived in `Run.timeUse` from `tool_call`, `task_started`/`task_ended` and `agent_state` records, so it needs no new record type; a run with no tool calls shows "Not recorded for this run".
+
 Tokens per milestone and wall-clock time per milestone (falling is good, with a fitted trend), coverage over the last hour, and distinct hooks built over time.
 
 ## Backdrop
