@@ -55,7 +55,8 @@ The bar: an ordinary chore of the goal should take one call of your tools. Make 
 
 - **It handles its own common failures.** When something blocks it, it tries something different (another route, a nearby spot, clearing or fetching what's missing), and only then fails.
 - **It returns a receipt:** what it did, how far it got, what it changed, and, if it stopped, where and why, in terms you can act on ("blocked at x by y"), not a bare error. Never wipe what it did without saying so.
-- **Test it on the hard cases** (far away, blocked, missing inputs, already done) before relying on it, and fix the failures you find.
+- **Try to break it.** Before relying on a tool, make adversarial cases for it: far away, blocked, boxed in, missing inputs, already done, full, empty, interrupted halfway. Set them up for real where you can, run the tool on them, and fix what fails.
+- **Every failure becomes a test.** When a tool fails in real use, add that situation as a case to its tests (a kept script that sets the case up, runs the tool, and checks the receipt), fix the tool until the case passes, and rerun all its cases after each change so old failures stay fixed. Fix the kind of failure, not the one spot: if the same kind of failure keeps coming back from new places, the tool needs a general fallback.
 
 Keep the in-program part a stable, general set of primitives, and make it unable to take the program down: catch every error inside it and return the error instead. Build the smarts (routes, plans, retries, recovery) in your sandbox where changing them is cheap. "The third repeat is the trigger" (below) is for scripts on top of this foundation, not a reason to start small.
 
