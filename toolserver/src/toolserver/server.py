@@ -17,7 +17,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import io_tools, spectator
+from . import costs as costs_mod, io_tools, spectator
 from .capture import Target
 from .docs import Docs, answer as answer_docs
 from .events import EventLog
@@ -26,7 +26,7 @@ from .extensions import ContainerExecutor, Executor, Extensions, HostConfig, Loc
 READ_ONLY = types.ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 # Names agents can't give their own tools, including ones reserved for tools still to come.
 BUILTIN = {"screenshot", "load_extension", "list_hooks", "call_hook", "set_goal", "wait",
-           "click", "drag", "move", "scroll", "key", "type", "read_docs"}
+           "click", "drag", "move", "scroll", "key", "type", "read_docs", "costs"}
 
 LOAD_EXTENSION_DOC = """Load or update one of your extensions, and register its tools so you can call them by name.
 
@@ -136,6 +136,18 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
     async def call_hook(name: str, args: dict | None = None) -> str:
         """Call one of your extension tools by name. Only needed if it doesn't appear as its own tool."""
         return await ext.call(name, args or {}, via="call_hook")
+
+    run_dir = (archive_dir or Path("extensions")).parent
+
+    @mcp.tool(annotations=READ_ONLY)
+    def costs(minutes: float = 60) -> str:
+        """Your own spending over the last `minutes`: tool calls per tool with failures, time and
+        result size, the largest results, model tokens, and time between calls. Use it to decide
+        which tools to improve first."""
+        with log.call("costs", "meta", {"minutes": minutes}) as res:
+            text = costs_mod.report(run_dir, max(1.0, min(float(minutes), 24 * 60)))
+            res.set("text", len(text), summary=text.splitlines()[0])
+            return text
 
     return mcp
 

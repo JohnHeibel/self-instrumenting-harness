@@ -307,6 +307,7 @@ class Extensions:
         self.loaded: dict[str, Loaded] = {}          # extension name -> what is live
         self.owner: dict[str, str] = {}               # tool name -> extension name
         self._lock = asyncio.Lock()
+        self._restore_active()
 
     async def load(self, manifest_rel: str) -> str:
         async with self._lock:
@@ -316,7 +317,7 @@ class Extensions:
                     raise ValueError(f"tool {t.name!r} already belongs to extension {self.owner[t.name]!r}")
             if m.in_host:
                 self._check_install_as(m)
-            version = self.loaded[m.name].version + 1 if m.name in self.loaded else 1
+            version = self._next_version(m.name)
             ext_dir = self.workspace / m.dir_rel
             archived = self.archive_dir / m.name / f"v{version}"
             shutil.copytree(ext_dir, archived, dirs_exist_ok=True)   # outside the agent's reach
@@ -329,6 +330,7 @@ class Extensions:
                 if not ok:
                     if m.in_host:
                         self._restore(m)
+                    shutil.rmtree(archived, ignore_errors=True)   # the version number stays free
                     raise ValueError(f"reload {m.reload!r} failed, so the previous version stays installed and "
                                      f"registered. Output:\n{tail}")
                 notes.append(f"reload {m.reload!r} ok")
@@ -341,6 +343,7 @@ class Extensions:
                 self.owner[t.name] = m.name
             sources = _sources(ext_dir)
             self.loaded[m.name] = Loaded(m, version, sources)
+            self._save_active(m.name, manifest_rel, version)
             for t in m.tools:
                 self.log.write("hook_loaded", hook=t.name, version=version, extension=m.name, reason=m.reason,
                                language=_language(sources, t), kind="in_host" if m.in_host else "helper",
@@ -399,6 +402,45 @@ class Extensions:
         self.mcp._tool_manager._tools[t.name] = _RawTool(
             fn=run, name=t.name, description=f"{t.description}\n(Hook from extension {m.name}.)",
             parameters=t.input_schema, fn_metadata=base.fn_metadata, is_async=True, annotations=annotations)
+
+    # A tool server restart (a crash, or the runner restarting) must not cost the agent its tools:
+    # what was last loaded is kept beside the archive and registered again on start. Only the tools
+    # are registered; the in-host part is still installed, so nothing is reinstalled or reloaded.
+    def _active_path(self) -> Path:
+        return self.archive_dir / "active.json"
+
+    def _active(self) -> dict:
+        try:
+            return json.loads(self._active_path().read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _save_active(self, name: str, manifest_rel: str, version: int) -> None:
+        active = self._active()
+        active[name] = {"manifest": manifest_rel, "version": version}
+        self.archive_dir.mkdir(parents=True, exist_ok=True)
+        self._active_path().write_text(json.dumps(active, indent=1))
+
+    def _next_version(self, name: str) -> int:
+        """Versions keep counting across restarts, so an archived version is never overwritten."""
+        nums = [int(d.name[1:]) for d in (self.archive_dir / name).glob("v*") if d.name[1:].isdigit()]
+        return max([self.loaded[name].version if name in self.loaded else 0, *nums]) + 1
+
+    def _restore_active(self) -> None:
+        for name, a in self._active().items():
+            try:
+                m = parse_manifest(self.workspace, a["manifest"], self.host, self.builtin)
+                if m.name != name:
+                    raise ValueError(f"the manifest now names extension {m.name!r}")
+            except (ValueError, OSError, KeyError) as e:
+                self.log.write("hook_status", hook=name, status="broken",
+                               detail=f"not restored after a tool server restart: {e}"[:500])
+                continue
+            for t in m.tools:
+                self._register(m, t)
+                self.owner[t.name] = m.name
+            self.loaded[name] = Loaded(m, a["version"], _sources(self.workspace / m.dir_rel))
+            self.log.write("hook_restored", extension=name, version=a["version"], hooks=[t.name for t in m.tools])
 
     def _target(self, m: Manifest) -> Path:
         return self.host.install_dir / m.in_host["install_as"]
