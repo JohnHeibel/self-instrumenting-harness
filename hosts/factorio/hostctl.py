@@ -138,7 +138,12 @@ class Host:
         pids = self._pids()
         if not _alive(pids.get("server")):
             info = self.rcon_info()
-            if _listening(self.rcon_port) or _listening_udp(self.game_port):
+            # Windows can hold a killed server's ports for a few seconds (restart hits this).
+            busy = lambda: _listening(self.rcon_port) or _listening_udp(self.game_port)
+            deadline = time.monotonic() + 30
+            while busy() and time.monotonic() < deadline:
+                time.sleep(1)
+            if busy():
                 raise HostError(f"port {self.rcon_port} (RCON) or {self.game_port} (game) is already in use")
             if not self.no_grader:
                 # The grader's read-only mod, refreshed on every start. The tool server refuses an
