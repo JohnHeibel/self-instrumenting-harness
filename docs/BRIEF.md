@@ -116,7 +116,10 @@ The harness itself is the product. Each sponsor track is one demo of it.
 
 ## Decisions already made
 
-- Minecraft replaces Factorio.
+- ~~Minecraft replaces Factorio.~~ Reversed: **Factorio is the first host** (Lua mods, installed via Steam on the demo Mac). Minecraft and KSP are later hosts.
+- Claude Code and Codex are supported together from the first slice, through one shared primitive server.
+- The user-possible-actions rule is policy only: stated to the agent and logged, not enforced.
+- Extension loading starts from a small per-host config; a docs-only discovery run on a fresh host comes later.
 - The harness is the product. Sponsor tracks are demonstrations; Hyphenate is not the primary target.
 - Safety is not the headline. The user-possible-actions rule stays as a constraint.
 - Decompiling closed apps is future work only.
@@ -126,9 +129,7 @@ The harness itself is the product. Each sponsor track is one demo of it.
 
 - Minecraft version, mod loader, modpack, hook loading method, milestones.
 - Odoo Community plus add-ons, or ERPNext, for the accounting task.
-- Which wrapped harness comes first (Claude Code or Codex), and when Droid support lands.
+- When Droid support lands.
 - Token budget for long runs.
 - Licenses for Minecraft and KSP 1 on the demo machine.
-- How "actions limited to what a user could do" is enforced, given hooks run with host privileges.
-- Whether loading an extension is learned by the agent from docs or described by a small per-host config.
 - The denominator for "interface coverage".
