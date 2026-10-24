@@ -45,7 +45,8 @@ def load(path):
                 et = take(">b")
                 if et == 0:
                     return out
-                out[string()] = payload(et)
+                name = string()   # the name comes first in the stream: not `out[string()] = payload(et)`, which evaluates the value first
+                out[name] = payload(et)
         raise ValueError(f"bad NBT tag {t}")
 
     t = take(">b")

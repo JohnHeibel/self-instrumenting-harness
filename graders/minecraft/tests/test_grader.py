@@ -44,3 +44,15 @@ def test_integrity_signals():
 def test_command_line_parse():
     m = g.CMD_LINE.search("[24Oct2026 01:50:00.000] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: bob issued server command: /gamemode creative")
     assert m["cmd"] == "gamemode creative" and m["who"] == "bob"
+
+
+def test_nbt_reads_names_before_values(tmp_path):
+    import gzip, struct
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import nbt
+    def s(x): return struct.pack(">H", len(x)) + x.encode()
+    body = (b"\x0a" + s("") + b"\x03" + s("Id") + struct.pack(">i", 7) + b"\x08" + s("Name") + s("hello")
+            + b"\x0a" + s("Inner") + b"\x01" + s("b") + b"\x05" + b"\x00" + b"\x00")
+    p = tmp_path / "x.dat"
+    p.write_bytes(gzip.compress(body))
+    assert nbt.load(p) == {"Id": 7, "Name": "hello", "Inner": {"b": 5}}
