@@ -78,6 +78,28 @@ def skills_note(workspace: Path) -> str:
             + text[:SKILLS_CAP] + ("\n... (index cut; read the file for the rest)" if cut else ""))
 
 
+BACKLOG_FILE = "BACKLOG.md"
+BACKLOG_CAP = 2500
+
+
+def backlog_note(workspace: Path) -> str:
+    """The top of the agent's own backlog (/home/agent/work/BACKLOG.md), added to every continue prompt (which
+    also follows an idle interrupt or a wake from a death), so a restart, reset or stall lands on the next chore instead of on a re-plan. The queue itself
+    (background tasks with `after`) is the tool server's; this only points the agent at its written plan.
+    Empty when the agent has not written one (other goals, or before it has made one)."""
+    try:
+        text = (workspace / BACKLOG_FILE).read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not text:
+        return ""
+    cut = len(text) > BACKLOG_CAP
+    return ("Your backlog (/home/agent/work/" + BACKLOG_FILE + "). Call status, then start the first item that "
+            "is not already running or queued with run_script(..., background=True) (chain the next with after=), "
+            "and only then update the file and plan the items after it. Keep at least two chores queued at all times.\n\n"
+            + text[:BACKLOG_CAP] + ("\n... (backlog cut; read the file for the rest)" if cut else ""))
+
+
 IDLE_NOTE = ("Idle check: for {m:.0f} minutes nothing on the host screen changed and you called no harness tool. "
              "If you are waiting on a background job, assume it is stuck until it proves otherwise: your shell "
              "jobs were stopped by this restart, so look at the host now (a screenshot or a state read) and see "
@@ -531,6 +553,10 @@ class ClaudeRunner:
             note = skills_note(self.run_dir / "workspace")
             if note:
                 prompt += "\n\n" + note
+        if not first:
+            bl = backlog_note(self.run_dir / "workspace")
+            if bl:
+                prompt += "\n\n" + bl
         if not first and self.pending_note:
             prompt += "\n\n" + self.pending_note
             self.pending_note = ""

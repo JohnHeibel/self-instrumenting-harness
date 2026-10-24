@@ -6,7 +6,28 @@ _FIXED = {1: ">b", 2: ">h", 3: ">i", 4: ">q", 5: ">f", 6: ">d"}
 
 
 def load(path):
+    return loads(open(path, "rb").read())
+
+
+def region_chunks(path):
+    """Yield the NBT (as dicts) of each chunk stored in an Anvil .mca file (region/poi/entities)."""
+    import zlib
     data = open(path, "rb").read()
+    for i in range(1024):
+        off = int.from_bytes(data[i * 4:i * 4 + 3], "big") * 4096
+        if not off or off + 5 > len(data):
+            continue
+        length, scheme = int.from_bytes(data[off:off + 4], "big"), data[off + 4]
+        body = data[off + 5:off + 4 + length]
+        try:
+            raw = zlib.decompress(body) if scheme == 2 else gzip.decompress(body) if scheme == 1 else None
+            if raw is not None:
+                yield loads(raw)
+        except Exception:   # a chunk being written, or a scheme we do not read: skip it
+            continue
+
+
+def loads(data):
     if data[:2] == b"\x1f\x8b":
         data = gzip.decompress(data)
     pos = 0

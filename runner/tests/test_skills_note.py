@@ -84,3 +84,14 @@ def test_heartbeat_text(tmp_path):
     (tmp_path / "state" / "heartbeat.json").write_text('{"pos": [1, 2, 3], "hp": 4}')
     t = cr.heartbeat_text(tmp_path)
     assert '"pos": [1, 2, 3]' in t and "min old" in t
+
+
+def test_backlog_note(tmp_path):
+    assert cr.backlog_note(tmp_path) == ""
+    (tmp_path / "BACKLOG.md").write_text("  \n")
+    assert cr.backlog_note(tmp_path) == ""
+    (tmp_path / "BACKLOG.md").write_text("## Queue\n1. mine_iron(n=12)\n")
+    n = cr.backlog_note(tmp_path)
+    assert "mine_iron" in n and "status" in n and "BACKLOG.md" in n
+    (tmp_path / "BACKLOG.md").write_text("x" * 9000)
+    assert len(cr.backlog_note(tmp_path)) < cr.BACKLOG_CAP + 600
