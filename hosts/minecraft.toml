@@ -15,17 +15,27 @@ start_timeout_s = 300
 # The agent's own Minescript script may serve HTTP on this port (see notes).
 agent_ports = [8777]
 notes = """
-Minecraft Java 1.21.1 (NeoForge 21.1.264) with the Minescript 4.0 mod, running as a normal window on a Mac;
-you are the only player, in a creative test world. Minescript runs Python scripts (system python3, real
-processes) that you start by typing their name in game chat: press T, type \\name (for scripts in a
-subfolder, \\folder/name), press Enter. Scripts are read from disk on every run, so an edit takes effect the
-next time you run it; no game restart is needed. Use \\killjob to stop a running script, \\jobs to list them.
-The `minescript` module gives player_position, player_inventory, screen_name, container_get_items,
-world_info, getblock, entities, key presses, chat, event listeners and a Java reflection API
-(java_class, java_call_method, ...). A script can open a socket: serve HTTP on port 8777 bound to 0.0.0.0 and
-your tools reach it at host.docker.internal:8777. Run one script at a time per port. In-host files you
-install land in the game's minescript folder (as the install_as folder). Keep the game window visible and
-focused when you send input; screenshots show the window only. Press Esc to open or close the pause menu.
+Minecraft Java 1.21.1 (NeoForge 21.1.264) with the Minescript 4.0 mod, one client window on a Mac. A survival
+world is already open and you are its only player; the window should stay in front. Keyboard focus and
+the mouse belong to the game: Esc opens the pause menu (click Back to Game to return), T opens chat, E your
+inventory, 1-9 the hotbar, and the mouse looks around while no screen is open.
+Minescript runs Python scripts (the Mac's python3, a real process each time) that you start by typing their name
+in chat: press T, type \\name (for a script in a folder, \\folder/name), press Enter. Your in-host files land in
+the game's minescript folder as the install_as folder. A script is read from disk on every run, so an edit takes
+effect on the next run with no restart; running one by typing takes about a second. \\jobs lists running scripts
+and \\killjob <id> stops one. A script can serve HTTP on 0.0.0.0:8777 (the only port open to your sandbox, as
+host.docker.internal:8777): run one bridge script that answers queries and starts or stops actions, and keep
+your sandbox tools thin. The script must make all Minescript calls from its main thread.
+The `minescript` module (read_docs lists its API; the installed 4.0 has: player_position, player_orientation,
+player_set_orientation, player_inventory, player_hand_items, player_get_targeted_block and _entity, player_health,
+screen_name, container_get_items, world_info, getblock, getblocklist, entities, players, press_key_bind and
+player_press_forward/backward/left/right/jump/sprint/sneak/use/attack/drop/swap_hands, player_inventory_select_slot,
+register_*_listener events, chat, echo, and a Java reflection API (java_class, java_member, java_call_method,
+java_access_field) that reaches any class in the client, including the open screen, menu and block data). Hold
+a key with press_key_bind(name, True), sleep, then release it. Chat commands that change the game are cheats
+(see the goal); Minescript's own backslash commands are not.
+Screenshots show the game window only. Input goes to whatever is frontmost, so do not click outside the game.
+The world's files (advancements, stats) are written every few minutes by the game; a grader reads them.
 """
 
 [extensions]
