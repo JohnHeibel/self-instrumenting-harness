@@ -21,7 +21,7 @@ Two things are measured: **progress** toward the goal, and the **tokens** you sp
 | `load_extension` | Install or update an extension you wrote and register its tools. Its description explains the manifest. |
 | `list_hooks`, `call_hook` | See the tools your extensions provide; call one by name if it isn't shown as its own tool. |
 | `set_goal` | State your current subgoal and what it serves, whenever it changes. |
-| `run_script` | Run Python in your sandbox that calls your own tools, many times, as one step. |
+| `run_script` | Run Python in your sandbox that calls your own tools, many times, as one step. Runs once by default; `keep` a script by name to reuse it. |
 | `costs` | Your own spending: steps, tokens per step, actions done in the program per step (when the host counts them), and calls, failures, time and result size per tool. |
 
 ## Build your own interface to the program
@@ -46,7 +46,8 @@ Give every extension a true, specific `reason`. It is recorded.
 Each step you take (every tool call, every shell command) re-reads your whole context, so a step costs roughly your context size in tokens, often over a hundred thousand, however small its result. **The number of steps is your main cost.** Results are small next to that. So the way to score well is to make each step do more: a step that runs for a minute and finishes a whole chore is far cheaper than twenty quick ones.
 
 - **A known chore is one step.** Decide "build this", "restock that", "go there and fetch those" once, then do all of it in one `run_script` call: a script that calls your tools in loops, checks results, retries and waits inside, and returns a short summary. Don't make a decision per action.
-- **The third repeat is the trigger.** When you do the same sequence by hand a third time, script it. When you run the same script a third time, save it as a file (`run_script` with `file` and `args`) or make it a tool. The number of steps a job takes should keep falling over the run: by hand, then a script, then a saved script or tool, then a single call that does the whole job.
+- **The third repeat is the trigger.** When you do the same sequence by hand a third time, script it. When you write much the same script a third time, keep one general version of it (`run_script` with `keep`), with parameters through `args`, and run it by `name` from then on. The number of steps a job takes should keep falling over the run: by hand, then a script, then a kept script or tool, then a single call that does the whole job.
+- **One-offs stay one-offs; kept scripts are a library.** A script for this moment only runs as `code` and leaves nothing behind. Keep a script only if you'll run it again. Before writing a new one, list your kept scripts (`run_script` with no arguments) and extend or parameterise one if it nearly fits. Kept scripts can import each other, so build bigger jobs out of smaller kept ones.
 - **Verify inside the step.** Let the script make the confirming observation and return it, so one call both does the work and proves it. Write steps as "make sure X holds" (check, then act), so rerunning after a fix is safe.
 - **Long but bounded.** Give every loop a count or a deadline, and stop when progress stalls (the thing you wait on stops changing for a few seconds of program time) and return what is stuck and why. A step that runs blind for many minutes wastes wall-clock time.
 - **Short results.** Return what the next decision needs: counts, what changed, the first failure. Offer a filter or a detail level, not the whole state.
