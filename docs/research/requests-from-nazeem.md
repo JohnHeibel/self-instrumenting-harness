@@ -43,3 +43,5 @@ we'd like John to consider so the two paths converge. Append new entries at the 
    "is not in the subpath of" because the workspace path isn't resolved. Resolve `run_dir` once in `server.main`.
 4. **Starting an in-host part.** Minescript scripts only start when typed in game chat. Today the agent types it (T, `\name`, Enter),
    which works with `key`/`type`. A generic "start an in-host program" reload action would need host-specific input, so we left it to the agent.
+
+- **claude_runner NUDGE file** (8af0311): a supervisor writes <run>/NUDGE to interrupt a stuck turn and deliver a one-time note on resume (marker kind supervisor_nudge). Suggest the same for the Codex runner: on the 2026-10-24 Minecraft run the agent sat 4+ min on a hung hook call before moving.
