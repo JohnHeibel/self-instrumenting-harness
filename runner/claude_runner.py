@@ -705,7 +705,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stall-timeout", type=float, default=1800)
     ap.add_argument("--idle-minutes", type=float, default=8,
                     help="interrupt and nudge when the host screen is unchanged and no tool was called this long (0 = off)")
-    ap.add_argument("--reset-context-tokens", type=int, default=0,
+    ap.add_argument("--reset-context-tokens", "--compact-tokens", dest="reset_context_tokens", type=int, default=0,
                     help="when one request's context passes this, ask the agent to write its notes, then continue in "
                          "a fresh session (0 = off; e.g. 150000)")
     ap.add_argument("--host-poll", type=float, default=30)
