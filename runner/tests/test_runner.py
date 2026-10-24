@@ -245,3 +245,11 @@ def test_wake_file_interrupts_thinking_and_prompts_with_the_notices(h):
     second = h.requests("turn/start")[1]["params"]["input"][0]["text"]
     assert "rule:low_iron: iron below 50" in second and "context is intact" in second
     assert not (h.run_dir / "WAKE").exists()
+
+
+def test_deadline_mid_turn_ends_without_backing_off(h):
+    script = {"processes": [{"turns": [[{"hang": True}]]}]}
+    t0 = time.monotonic()
+    assert h.runner(script, until=time.time() + 0.5).run() == "deadline"
+    assert time.monotonic() - t0 < 10
+    assert not [r for r in h.records("agent_state") if r["state"] == "backing_off"]

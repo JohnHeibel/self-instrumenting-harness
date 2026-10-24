@@ -244,7 +244,7 @@ class Runner:
                 self._close_session()
 
             if outcome.interrupt in ("host_down", "input_blocked", "paused", "stop", "budget_time", "budget_tokens",
-                                     "wake"):
+                                     "wake", "deadline"):
                 continue  # not a failure; the loop top decides what happens next
             if outcome.duration_s is not None and outcome.duration_s > self.cfg.long_turn_seconds:
                 self.state.failures = 0
