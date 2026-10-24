@@ -52,6 +52,7 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 | N1 | **Story view redesign** on one branch (pick one of `ui-story-redesign`, `ui-variant-b`, `ui-variant-c` and delete the others), in Nazeem's direction: clean, official, nothing decorative, not stock AI-generated UI | in progress | John signs off on the look |
 | N2 | **Non-game fake-run scenario** (PR #2), so the UI is proven generic | done (merged 54806f1) | merged |
 | N3 | **SpacetimeDB module and publisher.** The publisher tails a run's top-level `*.jsonl` and batches writes; tested against fake runs; john-pc runs it on the PC | in review (PR #3, john-mac) | Story replays a run from SpacetimeDB |
+| N7 | **Leverage chart** (John's headline metric): actions done in the program per model step, and tokens per action, in 30-min bins next to the milestones; from `program_actions` (grader) and `usage` (runner); estimated points labelled | queued, right after N1 | shows trials 02 and 03 back-filled |
 | N4 | **Stage overlay** (live, over the game screen) | later | |
 | N5 | **Ops view** (health, alerts, STOP/PAUSE controls through reducers) | later | |
 | N6 | **Minecraft host** on Nazeem's Mac, the second host: get the modded game running, then `hosts/minecraft.toml` (data only, per the generality rule), then live plumbing tests (state out, reload) and a grader. It must work with the unchanged harness; anything the harness can't express generically goes to john-mac as a `request`. | in progress: NeoForge 1.21.1 instance set up, first launch | the harness loads an agent-written extension into Minecraft and calls its tool |
@@ -64,7 +65,7 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 | M1 | Keep this board, BRIEF and the interfaces current; review PRs into `main`  | ongoing |
 | M2 | Generic `read_docs` design: the host config lists doc sources, and the tool searches them | done (toolserver/src/toolserver/docs.py) |
 | M3 | A generic agent brief and goal-file format (host notes come from the host config), plus the Factorio goal file | done |
-| M4 | Evaluation plan: screenshot-only baseline, ablation, planted break, held-out tasks | queued |
+| M4 | Evaluation plan: screenshot-only baseline, ablation, planted break, held-out tasks; headline metric **leverage** (program actions per step, tokens per action); interface coverage counts the agent's mod commands (grader `host_command`, custom) as hook use, since it calls its helpers over the shell | queued |
 | M5 | **macOS screenshot and input backend** (`toolserver/src/toolserver/macos.py`, plus dispatch edits in capture.py, inputs.py and io_tools.py, agreed with john-pc), so hosts can run on a Mac (Nazeem's Minecraft). Tests with a fake, plus a live check on John's Mac | in progress |
 
 ## Open questions
