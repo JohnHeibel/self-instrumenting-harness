@@ -82,6 +82,9 @@ class Config:
     cwd: str = "/home/agent/work"
     budget_seconds: float | None = None
     budget_tokens: int | None = None          # uncached input + output
+    until: float | None = None                # wall-clock deadline (epoch seconds): end then
+    update_note: str | None = None            # told to the agent with the next prompt (why things changed)
+    update_instructions: bool = False         # on resume, replace the run's brief/goal with these
     checkpoint_every: float = 1800
     backoff_base: float = 30
     backoff_cap: float = 3600
@@ -161,6 +164,7 @@ class Runner:
                                          self.state.extra.get("turn_base") or {})
                 self.mapper.end_turn("cut_off", None, "the runner stopped during this turn")
             self.state.active_turn_id = None
+            self._apply_updates()
             self._save()
         else:
             if not self.cfg.goal:
@@ -254,6 +258,9 @@ class Runner:
         assert self.srv
         if self.state.goal_sent:
             prompt, kind = CONTINUE_PROMPT, "continue"
+            update = self.state.extra.pop("pending_update", None)
+            if update:
+                prompt, kind = update + "\n\n" + prompt, "update"
         else:
             prompt, kind = self.first_prompt(), "goal"
         res = self.srv.request("turn/start", {"threadId": self.state.thread_id,
@@ -339,9 +346,37 @@ class Runner:
         except (OSError, ValueError):
             return "input blocked"
 
+    def _apply_updates(self) -> None:
+        """On resume: a changed --brief-file or --goal-file replaces the run's copy, and the next
+        prompt tells the agent what changed (plus --update-note), so instructions can be tuned
+        during a long run without restarting it."""
+        changed = []
+        update = self.cfg.update_instructions
+        if update and self.cfg.brief is not None and self.cfg.brief != self.state.extra.get("brief"):
+            self.state.extra["brief"] = self.cfg.brief
+            changed.append("BRIEF.md")
+        if update and self.cfg.goal and self.cfg.goal != self.state.extra.get("goal"):
+            self.state.extra["goal"] = self.cfg.goal
+            changed.append("GOAL.md")
+        if not changed and not self.cfg.update_note:
+            return
+        parts = []
+        if changed:
+            parts.append(f"The run's instructions were updated: {' and '.join(changed)} in /home/agent/work/run/ "
+                         "changed. Re-read them now; where they differ from what you remember, the new "
+                         "version wins.")
+        if self.cfg.update_note:
+            parts.append("Note from the people running this harness: " + self.cfg.update_note.strip())
+        self.state.extra["pending_update"] = " ".join(parts)
+        self.log.write("marker", label="instructions updated: " + (", ".join(changed) or "note only")
+                       + (f"; note: {self.cfg.update_note.strip()}" if self.cfg.update_note else ""),
+                       kind="instructions_updated")
+
     def _end_reason(self) -> str | None:
         if (self.run_dir / "STOP").exists():
             return "stop"
+        if self.cfg.until is not None and self.cfg.clock() >= self.cfg.until:
+            return "deadline"
         self._tick()
         if self.cfg.budget_seconds is not None and self.active_seconds() >= self.cfg.budget_seconds:
             return "budget_time"
@@ -581,6 +616,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--auth-json", type=Path, default=Path.home() / ".codex" / "auth.json")
     ap.add_argument("--budget-hours", type=float)
     ap.add_argument("--budget-tokens", type=int, help="uncached input + output tokens (Codex thread totals)")
+    ap.add_argument("--until", help="wall-clock deadline, ISO 8601 (e.g. 2026-10-24T15:00:00Z): the run ends then")
+    ap.add_argument("--update-instructions", action="store_true",
+                    help="on resume: replace the run's brief and goal with --brief-file/--goal-file and tell the agent")
+    ap.add_argument("--update-note", help="on resume: a note told to the agent with the next prompt, e.g. why "
+                    "the brief changed")
     ap.add_argument("--no-toolserver", action="store_true")
     ap.add_argument("--agent-cmd", help="JSON list; replaces the agent container (tests, fakes)")
     ap.add_argument("--stall-timeout", type=float, default=1800)
@@ -605,7 +645,9 @@ def main(argv: list[str] | None = None) -> int:
                  agent_cmd=json.loads(args.agent_cmd) if args.agent_cmd else None,
                  host_check=hostcheck.resolve(args.host_check, hc) if args.host_check else None, stall_timeout=args.stall_timeout,
                  budget_seconds=args.budget_hours * 3600 if args.budget_hours else None,
-                 budget_tokens=args.budget_tokens)
+                 budget_tokens=args.budget_tokens, update_note=args.update_note,
+                 update_instructions=args.update_instructions,
+                 until=datetime.fromisoformat(args.until.replace("Z", "+00:00")).timestamp() if args.until else None)
     print(f"run dir: {run_dir}")
     reason = Runner(cfg).run()
     print(f"run ended: {reason}")

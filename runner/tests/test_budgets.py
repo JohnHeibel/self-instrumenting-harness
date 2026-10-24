@@ -3,6 +3,7 @@ host check from the host config. Time is a fake clock that only moves when the r
 
 from __future__ import annotations
 
+import json
 import sys
 import tarfile
 
@@ -245,3 +246,40 @@ def test_default_brief_is_the_repo_brief(h):
     r.run()
     first = h.requests("turn/start")[0]["params"]["input"][0]["text"]
     assert first.startswith(DEFAULT_BRIEF.read_text(encoding="utf-8").strip() + "\n\nReach the goal.")
+
+
+def _saved_run(h, brief: str) -> dict:
+    """A run that already sent its goal, as a crashed or stopped runner leaves it."""
+    import time
+    h.run_dir.mkdir(parents=True)
+    (h.run_dir / "runner-state.json").write_text(json.dumps({
+        "run_id": "r1", "started_at": time.time(), "thread_id": "thr_B", "goal_sent": True,
+        "run_started_logged": True, "turns": 3,
+        "extra": {"goal": "Reach the goal.", "brief": brief, "host": "test-host", "usage_total": {"totalTokens": 900}}}))
+    return {"thread_id": "thr_B", "processes": [{"resume_total": 900, "turns": [[{"usage": 1500}]]}]}
+
+
+def _last_prompt(h) -> str:
+    return h.requests("turn/start")[-1]["params"]["input"][0]["text"]
+
+
+def test_changed_brief_and_note_reach_the_agent_on_resume(h):
+    script = _saved_run(h, "Old brief.")
+    assert h.runner(script, brief="New brief.", update_instructions=True,
+                    update_note="Prefer fewer, larger tool calls.", budget_tokens=1400).run() == "budget_tokens"
+    text = _last_prompt(h)
+    assert "BRIEF.md" in text and "Prefer fewer, larger tool calls." in text
+    assert (h.run_dir / "workspace" / "run" / "BRIEF.md").read_text(encoding="utf-8").strip() == "New brief."
+    assert [m["kind"] for m in h.records("marker")].count("instructions_updated") == 1
+
+
+def test_resume_keeps_the_run_brief_unless_asked_to_update(h):
+    script = _saved_run(h, "Old brief.")
+    assert h.runner(script, brief="Some default brief.", budget_tokens=1400).run() == "budget_tokens"
+    assert _last_prompt(h).startswith("Your previous turn")
+    assert h.state()["extra"]["brief"] == "Old brief."
+
+def test_wall_clock_deadline_ends_the_run(h):
+    clock = Clock()
+    script = {"processes": [{"turns": [[{"usage": 1}]] * 50}]}
+    assert h.runner(script, clock=clock, sleep=clock.sleep, until=T0 - 1).run() == "deadline"
