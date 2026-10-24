@@ -457,6 +457,7 @@ def test_a_tool_review_is_suggested_at_new_milestones_and_after_a_long_gap(tmp_p
     w.review_check()                                # once per milestone
     assert [n.text.split(")")[0] for n in board.items] == ["Milestone reached (red_auto"]
     assert "get anywhere" in board.items[0].text
+    assert "kept test" not in board.items[0].text       # no failures: nothing to ask tests for
     w.review_check(now=w.last_review + tm.REVIEW_EVERY_S + 1)
     assert len(board.items) == 2 and "since the last milestone or tool review" in board.items[1].text
 
@@ -499,7 +500,8 @@ def test_the_review_carries_what_happened_since_the_last_one(tmp_path):
     w.review_check(now=w.last_review + tm.REVIEW_EVERY_S + 1)
     text = board.items[-1].text
     assert "only looked at the program: 5" in text
-    assert "3x blocked at 3,4 by tree (build)" in text and "4 ended, 3 failed" in text
+    assert "- failed 3x: blocked at 3,4 by tree (build)" in text and "4 ended, 3 failed, 1 different errors" in text
+    assert "does a kept test now set up that case" in text      # each failure should become a test
     assert "my_read 30.0k" in text and "small_tool" not in text
     assert w.since["looks"] == 0 and w.since["tasks"] == 0      # starts over after each review
     assert [kw["facts"] for k, kw in log.rows if k == "tool_review_suggested"][0][0].startswith("tasks:")

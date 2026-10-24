@@ -47,6 +47,9 @@ REVIEW_EVERY_S = 3600          # suggest a tool review this long after the last 
 REVIEW_ASK = ("Against the brief's foundation (get anywhere, get anything, change many things at once, see an "
               "area) and its rules on repeats (actions and questions), which of your tools is weakest, failed or "
               "cost the most? Improve that one before pushing on. (costs has more per tool.)")
+REVIEW_TESTS_ASK = ("For each failure above: does a kept test now set up that case, run the tool and check its "
+                    "receipt? Add the missing ones, fix the tool until they pass, and rerun all its tests.")
+REVIEW_FAILURES = 5             # kinds of failure listed in a review, most frequent first
 IDLE_NOTE_EVERY_S = 180         # ...at most this often
 STALL_REPEAT = 10               # a task holding the hands made the same acting call this many times...
 STALL_NO_ACT_S = 120            # ...or has made no acting call for this long: tell the agent, once each
@@ -657,17 +660,19 @@ class Work:
         self.last_review, self.since = now, _fresh_since()
         self.log.write("tool_review_suggested", why=why, facts=facts)
         lines = "".join(f"\n- {f}" for f in facts) or "\n- (nothing recorded)"
-        self.board.post("harness", f"{why} Time to review your own tools. Since the last review:{lines}\n"
-                        f"{REVIEW_ASK}")
+        ask = (REVIEW_TESTS_ASK + " " if any(f.startswith("failed ") for f in facts) else "") + REVIEW_ASK
+        self.board.post("harness", f"{why} Time to review your own tools. Since the last review:{lines}\n{ask}")
 
     def _review_facts(self) -> list[str]:
         s, facts = self.since, []
         if s["tasks"]:
-            line = f"tasks: {s['tasks']} ended, {sum(s['failures'].values())} failed"
-            top = sorted(s["failures"].items(), key=lambda kv: -kv[1])[:3]
-            if top:
-                line += "; most often: " + "; ".join(f"{n}x {s['examples'][k][:110]}" for k, n in top)
-            facts.append(line)
+            kinds = sorted(s["failures"].items(), key=lambda kv: -kv[1])
+            facts.append(f"tasks: {s['tasks']} ended, {sum(s['failures'].values())} failed"
+                         + (f", {len(kinds)} different errors" if kinds else ""))
+            for k, n in kinds[:REVIEW_FAILURES]:          # one line per kind of failure: each should get a test
+                facts.append(f"failed {n}x: {s['examples'][k][:160]}")
+            if len(kinds) > REVIEW_FAILURES:
+                facts.append(f"...and {len(kinds) - REVIEW_FAILURES} more kinds (task shows each)")
         if s["looks"]:
             facts.append(f"one-off scripts that only looked at the program: {s['looks']}")
         big = sorted(((c[1] / c[0], t, c[0]) for t, c in s["results"].items()
