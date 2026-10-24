@@ -51,7 +51,7 @@ def from_config(hc: HostConfig, config_dir: Path | None = None) -> HostCheck:
     if isinstance(spec, list):
         if not spec:
             raise ValueError("host config: [host] up_check is an empty command")
-        return cmd_check([str(a) for a in spec], config_dir)
+        return cmd_check([str(a) for a in spec], config_dir or hc.config_dir)
     if spec == "window":
         if not (hc.window_title or hc.process):
             raise ValueError('host config: up_check = "window" needs [host] window_title or process')

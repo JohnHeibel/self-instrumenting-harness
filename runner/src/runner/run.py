@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import tarfile
 import time
@@ -83,6 +84,7 @@ class Config:
     long_turn_seconds: float = 600
     poll: float = 1.0                         # how often mid-turn checks run
     host_poll: float = 30                     # how often the host is checked
+    start_retry: float = 600                  # after a failed [host] start, wait this long to retry
     stall_timeout: float = 1800               # no message at all for this long: kill and retry
     interrupt_grace: float = 60               # turn/interrupt must end the turn within this
     request_timeout: float = 120
@@ -108,7 +110,7 @@ class Runner:
         self.state_path = self.run_dir / "runner-state.json"
         self.lock = RunLock(self.run_dir / "runner.lock")
         cfg.host_config = cfg.host_config.resolve()
-        self.host = HostConfig.load(cfg.host_config)
+        self.host = HostConfig.load(cfg.host_config, self.run_dir)
         self.host_check = cfg.host_check or hostcheck.from_config(self.host, cfg.host_config.parent)
         self.srv: AppServer | None = None
         self.toolserver: ToolServer | None = None
@@ -184,6 +186,8 @@ class Runner:
                 self._wait(self.cfg.host_poll)
                 continue
             up, detail = self.host_check()
+            if not up and self._start_host(detail):
+                up, detail = self.host_check()
             if not up:
                 self._set_counting(False)
                 self.mapper.state("host_down", detail)
@@ -235,9 +239,9 @@ class Runner:
     def _run_turn(self) -> Outcome:
         assert self.srv
         if self.state.goal_sent:
-            prompt, kind = CONTINUE_PROMPT, "continue"
+            prompt, kind = CONTINUE_PROMPT + self._host_notes(), "continue"
         else:
-            prompt, kind = self.state.extra["goal"] + NOTES_HINT, "goal"
+            prompt, kind = self.state.extra["goal"] + self._host_notes() + NOTES_HINT, "goal"
         res = self.srv.request("turn/start", {"threadId": self.state.thread_id,
                                               "input": [{"type": "text", "text": prompt}]},
                                timeout=self.cfg.request_timeout)
@@ -426,6 +430,9 @@ class Runner:
 
     def _end(self, reason: str) -> str:
         self._maybe_snapshot(force="end")
+        if self.host.stop:
+            ok, what = self._host_cmd(self.host.stop, "stop", 120)
+            self.log.write("marker", label=f"stopped the host: {what}", kind="host_stop", ok=ok)
         self.mapper.state("ended", reason)
         self.log.write("run_ended", reason=reason, turns=self.state.turns,
                        total_tokens=self.mapper.total_tokens(), uncached_tokens=self.mapper.uncached_tokens(),
@@ -433,6 +440,43 @@ class Runner:
         self.state.status, self.state.ended_reason = "ended", reason
         self._save()
         return reason
+
+    # The host ----------------------------------------------------------------------
+
+    def _host_notes(self) -> str:
+        return f"\n\nAbout this host: {self.host.notes}" if self.host.notes else ""
+
+    def _start_host(self, why: str) -> bool:
+        """Run the host config's start command; True if it succeeded. Time spent starting isn't
+        active time. After a failure it waits start_retry before trying again."""
+        last = self.state.extra.get("host_start_failed_at")
+        if not self.host.start or (last is not None and self.cfg.clock() - last < self.cfg.start_retry):
+            return False
+        self._set_counting(False)
+        self.mapper.state("host_starting", why)
+        ok, what = self._host_cmd(self.host.start, "start", self.host.start_timeout_s)
+        self.log.write("marker", label=f"started the host: {what}" if ok else f"could not start the host: {what}",
+                       kind="host_start", ok=ok)
+        self.state.extra["host_start_failed_at"] = None if ok else self.cfg.clock()
+        self._save()
+        self._set_counting(True)  # the start itself didn't count
+        return ok
+
+    def _host_cmd(self, argv: list[str], what: str, timeout: float) -> tuple[bool, str]:
+        """Output goes to raw/host.log."""
+        shown = " ".join(argv)
+        t0 = time.monotonic()
+        with (self.run_dir / "raw" / "host.log").open("a", encoding="utf-8") as out:
+            out.write(f"--- {what} {_iso(self.cfg.clock())}: {shown}\n")
+            out.flush()
+            try:
+                rc = subprocess.run(argv, cwd=self.host.config_dir, stdout=out, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, timeout=timeout).returncode
+            except subprocess.TimeoutExpired:
+                return False, f"`{shown}` timed out after {timeout:.0f} s"
+            except OSError as e:
+                return False, f"`{shown}` could not run: {e}"
+        return rc == 0, f"`{shown}` exited {rc} after {time.monotonic() - t0:.0f} s (output in raw/host.log)"
 
     def _wait(self, seconds: float) -> None:
         """Sleep, waking early if STOP appears."""
@@ -496,7 +540,6 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = args.run_dir or agent.REPO / "runs" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     goal = args.goal_file.read_text(encoding="utf-8") if args.goal_file else args.goal
     if args.build and not args.agent_cmd:
-        import subprocess
         if subprocess.run(["docker", "build", "-t", args.image, "--build-arg",
                            f"CODEX_VERSION={agent.CODEX_VERSION}", str(agent.REPO / "agent")]).returncode:
             print("docker build failed", file=sys.stderr)
@@ -504,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.agent_cmd and not args.auth_json.exists():
         print(f"{args.auth_json} not found; run `codex login` first", file=sys.stderr)
         return 3
-    hc = HostConfig.load(args.host_config)
+    hc = HostConfig.load(args.host_config, run_dir)
     cfg = Config(run_dir=run_dir, host_config=args.host_config, goal=goal, model=args.model,
                  reasoning_summary=args.reasoning_summary, port=args.port, image=args.image,
                  auth_json=args.auth_json, toolserver=not args.no_toolserver,

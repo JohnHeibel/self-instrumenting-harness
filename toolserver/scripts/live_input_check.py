@@ -132,7 +132,7 @@ def main() -> int:
                     help="keys to press at the end to clean up (repeatable)")
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
-    hc = HostConfig.load(args.host_config)
+    hc = HostConfig.load(args.host_config, Path("runs") / "live-input-check")
     args.out = args.out or REPO / "runs" / f"live-input-check-{hc.name}"
     args.out.mkdir(parents=True, exist_ok=True)
     target = capture.Target(hc.window_title, hc.process, hc.capture)

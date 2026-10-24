@@ -169,3 +169,44 @@ def test_host_config_is_required_on_the_command_line(capsys):
     with pytest.raises(SystemExit):
         main(["--goal", "x", "--agent-cmd", "[]"])
     assert "--host-config" in capsys.readouterr().err
+
+
+# Starting and stopping the host ---------------------------------------------------------
+
+HOST_CTL = ('[host]\nname = "test-host"\n'
+            'up_check = ["{python}", "-c", "import os, sys; sys.exit(0 if os.path.exists(r\'{run_dir}/up\') else 1)"]\n'
+            'start = ["{python}", "-c", "import sys; open(r\'{run_dir}/up\', \'w\'); open(r\'{run_dir}/starts\', \'a\').write(\'x\'); print(\'started\')"]\n'
+            'stop = ["{python}", "-c", "import os; os.remove(r\'{run_dir}/up\')"]\n'
+            'notes = "Read {run_dir}/up for nothing in particular."\n')
+
+
+def test_runner_starts_a_down_host_and_stops_it_at_the_end(h):
+    script = {"processes": [{"turns": [[{"usage": 100}]]}]}
+    r = h.runner(script, host_toml=HOST_CTL, host_check=None, budget_tokens=50)
+    assert r.run() == "budget_tokens"
+    assert (h.run_dir / "starts").read_text() == "x"             # started once, then up
+    assert not (h.run_dir / "up").exists()                        # stopped at the end
+    kinds = [(m["kind"], m["ok"]) for m in h.records("marker") if m["kind"].startswith("host_")]
+    assert kinds == [("host_start", True), ("host_stop", True)]
+    assert "started" in (h.run_dir / "raw" / "host.log").read_text()
+    goal = h.requests("turn/start")[0]["params"]["input"][0]["text"]
+    assert f"About this host: Read {h.run_dir.resolve()}/up" in goal
+
+
+def test_failed_host_start_waits_before_retrying(h):
+    clock = Clock()
+    toml = HOST_CTL.replace("open(r'{run_dir}/up', 'w'); ", "").replace("print('started')", "sys.exit(3)")
+    checks = {"n": 0}
+
+    def down():   # always down; after 10 polls (1000 s), stop the run
+        checks["n"] += 1
+        if checks["n"] > 10:
+            (h.run_dir / "STOP").write_text("")
+        return False, "down"
+    r = h.runner({"processes": [{"turns": []}]}, host_toml=toml, host_check=down, clock=clock,
+                 sleep=clock.sleep, host_poll=100, start_retry=250)
+    r.run()
+    starts = [m for m in h.records("marker") if m["kind"] == "host_start"]
+    assert [m["ok"] for m in starts] == [False] * 4                 # t = 0, 300, 600, 900
+    assert "exited 3" in starts[0]["label"]
+    assert h.records("run_ended")[0]["active_s"] == 0

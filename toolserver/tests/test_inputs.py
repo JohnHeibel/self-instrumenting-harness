@@ -324,7 +324,7 @@ def _server(tmp_path, host="notepad", backend=None):
     shot = Shot(b"PNG fake", b"JPEG fake", {"source": "window", "captured_size": [2560, 1440],
                                                          "image_size": [1280, 720]}, cap())
     log = EventLog(tmp_path / "events.jsonl", "t")
-    mcp = build_server(log, "127.0.0.1", 0, host_config=HostConfig.load(HOSTS[host]),
+    mcp = build_server(log, "127.0.0.1", 0, host_config=HostConfig.load(HOSTS[host], tmp_path),
                        workspace=tmp_path / "ws", archive_dir=tmp_path / "ext",
                        io={"backend": b, "shoot": lambda: shot})
     return mcp, b
@@ -368,7 +368,7 @@ def test_tools_log_summaries_artifacts_and_goal(tmp_path, host):
     assert shot["summary"] == "Screenshot of the program's window"
     assert calls[2]["summary"] == "Pressed e" and calls[3]["summary"] == "Typed 'iron'"
     assert calls[5]["summary"].startswith("click failed: (5000.0, 1.0) is outside")
-    hc = HostConfig.load(HOSTS[host])
+    hc = HostConfig.load(HOSTS[host], tmp_path)
     assert b.located and all(t == Target(hc.window_title, hc.process, hc.capture) for t in b.located)
     goal = next(r for r in recs if r["type"] == "goal")
     assert (goal["writer"], goal["text"], goal["serves"]) == ("toolserver", "Automate iron", "Red science")
@@ -451,4 +451,32 @@ def test_agent_ports_must_be_port_numbers(tmp_path):
     cfg = tmp_path / "h.toml"
     cfg.write_text('[host]\nagent_ports = ["27015"]\n')
     with pytest.raises(ValueError, match="agent_ports"):
+        HostConfig.load(cfg)
+
+
+def test_host_config_placeholders_and_reload_runs_from_the_config_dir(tmp_path):
+    import asyncio
+    import sys
+    from types import SimpleNamespace
+    from toolserver.extensions import Extensions, HostConfig
+    cfg_dir = tmp_path / "hosts"
+    cfg_dir.mkdir()
+    cfg = cfg_dir / "h.toml"
+    cfg.write_text('[host]\nup_check = ["{python}", "check.py", "{run_dir}"]\n'
+                   'start = ["{python}", "ctl.py", "start", "--run-dir", "{run_dir}"]\n'
+                   'notes = "state is in {run_dir}/out"\n'
+                   '[extensions]\ninstall_dir = "{run_dir}/mods"\n'
+                   '[extensions.reload]\nhere = ["{python}", "-c", "import os; print(os.getcwd())"]\n')
+    run = tmp_path / "run"
+    hc = HostConfig.load(cfg, run)
+    assert hc.install_dir == run.resolve() / "mods" and hc.config_dir == cfg_dir.resolve()
+    assert hc.up_check == [sys.executable, "check.py", str(run.resolve())]
+    assert hc.start[-1] == str(run.resolve()) and hc.stop == []
+    assert hc.notes == f"state is in {run.resolve()}/out"
+    ok, out = asyncio.run(Extensions._reload(SimpleNamespace(host=hc), "here"))
+    assert ok and out.strip() == str(cfg_dir.resolve())
+    with pytest.raises(ValueError, match="no run directory"):
+        HostConfig.load(cfg)
+    cfg.write_text('[host]\nstart = "ctl.py start"\n')
+    with pytest.raises(ValueError, match="start must be a command"):
         HostConfig.load(cfg)

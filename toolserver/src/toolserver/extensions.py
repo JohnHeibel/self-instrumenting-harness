@@ -57,34 +57,71 @@ LANGS = {".lua": "lua", ".py": "python", ".cs": "csharp", ".java": "java", ".js"
 
 @dataclass
 class HostConfig:
+    """hosts/<host>.toml. Strings in install_dir and in command lists may use {run_dir} (this
+    run's directory), {config_dir} (the host config's directory) and {python} (the Python
+    running the harness), plus environment variables. Commands run from {config_dir}."""
     name: str = "none"
     window_title: str = ""
     process: str = ""                         # exe name of the host's program, e.g. "notepad.exe"
     capture: str = "window"                   # window | process | monitor (see capture.py)
     up_check: str | list[str] = "window"      # window | always | [argv]: up when it exits 0
     agent_ports: list[int] = field(default_factory=list)  # host ports the agent's sandbox may reach
+    start: list[str] = field(default_factory=list)   # brings the host up when it is down
+    stop: list[str] = field(default_factory=list)    # run once when the run ends
+    start_timeout_s: int = 300
+    notes: str = ""                           # told to the agent: where things are on this host
+    config_dir: Path | None = None
     install_dir: Path | None = None          # where in-host extension files go
     reload_actions: dict[str, list[str]] = field(default_factory=dict)
     reload_timeout_s: int = 120
 
     @classmethod
-    def load(cls, path: Path | None) -> "HostConfig":
+    def load(cls, path: Path | None, run_dir: Path | None = None) -> "HostConfig":
         if path is None:
             return cls()
+        path = Path(path).resolve()
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
         host, ext = raw.get("host", {}), raw.get("extensions", {})
+        fill = _placeholders(path.parent, Path(run_dir).resolve() if run_dir else None)
         install = ext.get("install_dir")
+        up = host.get("up_check", "window")
         return cls(
             name=host.get("name", path.stem),
             window_title=host.get("window_title", ""),
             process=host.get("process", ""),
             capture=_one_of(host.get("capture", "window"), CAPTURE_MODES, "capture"),
-            up_check=host.get("up_check", "window"),
+            up_check=[fill(a) for a in up] if isinstance(up, list) else up,
             agent_ports=_ports(host.get("agent_ports", [])),
-            install_dir=Path(os.path.expanduser(os.path.expandvars(install))) if install else None,
-            reload_actions={k: [os.path.expandvars(a) for a in v] for k, v in ext.get("reload", {}).items()},
+            start=[fill(a) for a in _argv(host.get("start", []), "start")],
+            stop=[fill(a) for a in _argv(host.get("stop", []), "stop")],
+            start_timeout_s=int(host.get("start_timeout_s", 300)),
+            notes=fill(str(host.get("notes", ""))).strip(),
+            config_dir=path.parent,
+            install_dir=Path(os.path.expanduser(fill(install))) if install else None,
+            reload_actions={k: [fill(a) for a in _argv(v, f"reload.{k}")] for k, v in ext.get("reload", {}).items()},
             reload_timeout_s=int(ext.get("reload_timeout_s", 120)),
         )
+
+
+def _placeholders(config_dir: Path, run_dir: Path | None):
+    import sys
+    values = {"{config_dir}": str(config_dir), "{python}": sys.executable}
+    if run_dir is not None:
+        values["{run_dir}"] = str(run_dir)
+
+    def fill(text: str) -> str:
+        if "{run_dir}" in text and run_dir is None:
+            raise ValueError(f"host config: {text!r} uses {{run_dir}}, but no run directory was given")
+        for key, value in values.items():
+            text = text.replace(key, value)
+        return os.path.expandvars(text)
+    return fill
+
+
+def _argv(value, key: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(a, str) for a in value):
+        raise ValueError(f"host config: {key} must be a command, as a list of strings, not {value!r}")
+    return value
 
 
 CAPTURE_MODES = ("window", "process", "monitor")
@@ -384,7 +421,7 @@ class Extensions:
         argv = self.host.reload_actions[action]
         if not argv:
             return True, ""
-        code, out, err = await _exec(argv, None, "", self.host.reload_timeout_s)
+        code, out, err = await _exec(argv, self.host.config_dir, "", self.host.reload_timeout_s)
         return code == 0, _tail(out + err)
 
 

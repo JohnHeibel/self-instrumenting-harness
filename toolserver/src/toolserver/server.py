@@ -155,7 +155,7 @@ def main() -> None:
                                               "'local' runs them on this machine in the workspace")
     args = ap.parse_args()
 
-    host_config = HostConfig.load(args.host_config)
+    host_config = HostConfig.load(args.host_config, args.run_dir)
     workspace = args.run_dir / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     container = args.agent_container or f"harness-agent-{args.run_id}"

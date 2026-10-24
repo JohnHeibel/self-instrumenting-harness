@@ -36,7 +36,15 @@ The host config's `[host]` table: `name`, `window_title` and/or `process` (exe n
 program, `capture` (`window`: its main window's client area; `process`: the bounding box of all its
 visible windows, so dialogs count; `monitor`: the whole screen), and `up_check` (`window`: its
 window is on screen and not minimized; `always`; or a command list, up when it exits 0, run from
-the host config's directory).
+the host config's directory). Optional: `start` (a command the runner runs when the host is down;
+time spent starting isn't active time, and after a failed start it waits `start_retry`, 10 min,
+before trying again), `stop` (run once when the run ends, not when the runner is killed),
+`start_timeout_s`, `agent_ports`, and `notes` (added to the goal and continue prompts as "About this
+host: ..."). Their output goes to `raw/host.log`, with `host_start`/`host_stop` markers.
+
+In `install_dir` and in any command, `{run_dir}` is this run's directory, `{config_dir}` the host
+config's, and `{python}` the Python running the harness; environment variables expand too. All
+host commands, reload actions included, run from the host config's directory.
 
 Without a game, for a smoke test:
 

@@ -21,7 +21,7 @@ class Harness:
         script_path = self.tmp / "script.json"
         script_path.write_text(json.dumps(script))
         host_config = self.tmp / "host.toml"
-        host_config.write_text('[host]\nname = "test-host"\nup_check = "always"\n')
+        host_config.write_text(overrides.pop("host_toml", '[host]\nname = "test-host"\nup_check = "always"\n'))
         cfg = dict(run_dir=self.run_dir, host_config=host_config, goal="Reach the goal.", toolserver=False,
                    agent_cmd=[sys.executable, str(FAKE), str(script_path), str(self.fake_state)],
                    host_check=lambda: (True, "up"), poll=0.02, host_poll=0.05,
