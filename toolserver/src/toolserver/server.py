@@ -220,7 +220,8 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
                           error=c.get("error"), duration_ms=c.get("ms"), result_kind="text",
                           result_bytes=c.get("bytes"), summary=c.get("summary"), via="script",
                           hook=ext.hook_info(c.get("tool", "")))
-            res.set("text", len(text), summary=text.splitlines()[-1][:200], inner_calls=len(calls))
+            res.set("text", len(text), summary=text.splitlines()[-1][:200], inner_calls=len(calls),
+                    held_hands=bool(free))
             if not ok:
                 raise ToolError(text)
             return text

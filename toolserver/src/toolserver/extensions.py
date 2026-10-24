@@ -392,7 +392,7 @@ class Extensions:
         loaded = self.loaded[ext]
         spec = next(t for t in loaded.manifest.tools if t.name == name)
         missing = [k for k in spec.input_schema.get("required", []) if k not in args]
-        hook = {"name": name, "version": loaded.version, "extension": ext}
+        hook = {"name": name, "version": loaded.version, "extension": ext, "acts": not spec.read_only}
         with self.log.call(name, "hook", args, via=via, hook=hook) as res:
             if missing:
                 raise ToolError(f"{name}: missing required argument(s) {missing}")
@@ -413,7 +413,11 @@ class Extensions:
 
     def hook_info(self, name: str) -> dict | None:
         ext = self.owner.get(name)
-        return {"name": name, "version": self.loaded[ext].version, "extension": ext} if ext else None
+        if not ext:
+            return None
+        spec = next((t for t in self.loaded[ext].manifest.tools if t.name == name), None)
+        return {"name": name, "version": self.loaded[ext].version, "extension": ext,
+                "acts": not (spec and spec.read_only)}
 
     def describe(self) -> list[dict]:
         return [{"tool": t.name, "extension": name, "version": l.version, "description": t.description,
