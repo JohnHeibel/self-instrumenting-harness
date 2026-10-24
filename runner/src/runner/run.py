@@ -57,6 +57,7 @@ CONTINUE_PROMPT = (
 DEFAULT_BRIEF = agent.REPO / "prompts" / "brief.md"
 RUN_FILES = "run"   # workspace/run/: BRIEF.md, GOAL.md, HOST.md, rewritten on every runner start
 RATE_LIMIT_MARGIN_S = 60
+INPUT_BLOCKED = "INPUT_BLOCKED"   # written by the tool server while input can't reach the host
 
 
 class Stalled(Exception):
@@ -190,6 +191,14 @@ class Runner:
                 self.mapper.state("paused", "PAUSE file present")
                 self._wait(self.cfg.host_poll)
                 continue
+            blocked = self._input_blocked()
+            if blocked is not None:
+                # The tool server can't deliver input (it retries and removes the file). Prompting
+                # the agent would only burn turns, so wait like a down host; the time doesn't count.
+                self._set_counting(False)
+                self.mapper.state("input_blocked", blocked)
+                self._wait(self.cfg.host_poll)
+                continue
             up, detail = self.host_check()
             if not up and self._start_host(detail):
                 up, detail = self.host_check()
@@ -212,7 +221,7 @@ class Runner:
                     self.state.active_turn_id = None
                 self._close_session()
 
-            if outcome.interrupt in ("host_down", "paused", "stop", "budget_time", "budget_tokens"):
+            if outcome.interrupt in ("host_down", "input_blocked", "paused", "stop", "budget_time", "budget_tokens"):
                 continue  # not a failure; the loop top decides what happens next
             if outcome.duration_s is not None and outcome.duration_s > self.cfg.long_turn_seconds:
                 self.state.failures = 0
@@ -311,12 +320,24 @@ class Runner:
             return reason
         if (self.run_dir / "PAUSE").exists():
             return "paused"
+        if self._input_blocked() is not None:
+            return "input_blocked"
         if check_host:
             up, detail = self.host_check()
             if not up:
                 self.mapper.state("host_down", detail)
                 return "host_down"
         return None
+
+    def _input_blocked(self) -> str | None:
+        """The tool server's INPUT_BLOCKED detail while input can't reach the host, else None."""
+        p = self.run_dir / INPUT_BLOCKED
+        try:
+            return json.loads(p.read_text(encoding="utf-8")).get("detail") or "input blocked"
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return "input blocked"
 
     def _end_reason(self) -> str | None:
         if (self.run_dir / "STOP").exists():

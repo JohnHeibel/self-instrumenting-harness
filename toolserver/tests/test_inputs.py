@@ -182,6 +182,36 @@ def test_focus_failure_sends_nothing():
     assert not b.events
 
 
+def test_repeated_focus_failures_mark_input_blocked_until_a_probe_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(I, "PROBE_S", 0.01)
+    c, b = ctl()
+    flag = tmp_path / "INPUT_BLOCKED"
+    c.watch_blocked(flag)
+    b.focus_ok = False
+    for _ in range(I.BLOCK_AFTER - 1):
+        with pytest.raises(InputError):
+            c.key("e")
+    assert not flag.exists()   # a failure or two isn't "blocked"
+    with pytest.raises(InputError, match="pauses the run"):
+        c.key("e")
+    assert "detail" in json.loads(flag.read_text())
+    b.focus_ok = True          # the probe notices and clears it
+    c._probe.join(timeout=5)
+    assert not flag.exists()
+    c.key("e")
+    assert b.events
+
+
+def test_a_left_over_input_blocked_file_is_probed_on_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(I, "PROBE_S", 0.01)
+    flag = tmp_path / "INPUT_BLOCKED"
+    flag.write_text("{}")
+    c, b = ctl()
+    c.watch_blocked(flag)
+    c._probe.join(timeout=5)
+    assert not flag.exists()
+
+
 def test_every_call_focuses_the_window_first():
     c, b = ctl()
     c.key("e")

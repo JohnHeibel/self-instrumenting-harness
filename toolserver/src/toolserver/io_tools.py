@@ -34,6 +34,7 @@ def register(mcp: FastMCP, log: EventLog, target: Target, max_screenshot_width: 
     """`backend` and `shoot` replace Win32 input and screen capture (tests)."""
     run_dir = Path(log.path).parent
     ctl = Controller(backend or _LazyBackend(), target)
+    ctl.watch_blocked(run_dir / "INPUT_BLOCKED")   # the runner pauses the run while this exists
     shoot = shoot or (lambda: capture.screenshot(target, max_screenshot_width))
 
     @mcp.tool(annotations=READ_ONLY)

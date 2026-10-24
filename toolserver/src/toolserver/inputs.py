@@ -17,13 +17,18 @@ the SendInput events (tests/test_inputs.py). An event is one INPUT structure:
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from .capture import Capture, NotFound, Region, Target
+
+BLOCK_AFTER = 3    # focus failures in a row before the run is paused for blocked input
+PROBE_S = 30       # how often focus is retried while input is blocked
 
 # SendInput flags (winuser.h)
 MOUSEEVENTF_MOVE = 0x0001
@@ -164,6 +169,47 @@ class Controller:
         self.capture: Capture | None = None   # set by every window screenshot
         self._lock = threading.Lock()
         self._held: list[tuple] = []          # release events for what is down right now
+        # After BLOCK_AFTER focus failures in a row, blocked_file is written (the runner pauses
+        # the run while it exists) and a probe retries focus until it works, then removes it.
+        self.blocked_file: Path | None = None
+        self._focus_failures = 0
+        self._probe: threading.Thread | None = None
+
+    def watch_blocked(self, path: Path) -> None:
+        self.blocked_file = path
+        if path.exists():   # left by a tool server that stopped while input was blocked
+            self._start_probe()
+
+    def _focus_failed(self, why: str) -> None:
+        self._focus_failures += 1
+        if self.blocked_file and self._focus_failures >= BLOCK_AFTER:
+            self.blocked_file.write_text(json.dumps({"since_failures": self._focus_failures, "detail": why}))
+            self._start_probe()
+
+    def _focus_ok(self) -> None:
+        self._focus_failures = 0
+        if self.blocked_file and self.blocked_file.exists():
+            self.blocked_file.unlink(missing_ok=True)
+
+    def _start_probe(self) -> None:
+        if self._probe and self._probe.is_alive():
+            return
+
+        def probe() -> None:
+            while self.blocked_file and self.blocked_file.exists():
+                time.sleep(PROBE_S)
+                try:
+                    with self._lock:
+                        region = self.b.locate(self.target)
+                        ok = region.hwnd is None or self.b.focus(region.hwnd)
+                except Exception:
+                    ok = False
+                if ok:
+                    self._focus_ok()
+                    return
+
+        self._probe = threading.Thread(target=probe, name="input-probe", daemon=True)
+        self._probe.start()
 
     # Tools ------------------------------------------------------------------------
 
@@ -290,7 +336,11 @@ class Controller:
                                  "take a new screenshot")
         if region.hwnd is not None and not self.b.focus(region.hwnd):
             why = getattr(self.b, "focus_detail", "")
-            raise InputError("could not bring the program's window to the front" + (f": {why}" if why else ""))
+            self._focus_failed(why)
+            raise InputError("could not bring the program's window to the front" + (f": {why}" if why else "")
+                             + ("; the harness pauses the run until it can" if self._focus_failures >= BLOCK_AFTER
+                                and self.blocked_file else ""))
+        self._focus_ok()
         vscreen = self.b.virtual_screen()
 
         def point(x: float, y: float) -> tuple[int, int]:

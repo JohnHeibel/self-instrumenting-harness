@@ -192,6 +192,26 @@ def test_pause_file_holds_the_run(h):
     assert h.records("agent_state")[0]["state"] == "paused"
 
 
+def test_input_blocked_holds_the_run_without_prompting(h):
+    script = {"processes": [{"turns": [[{"usage": 100}]]}]}
+    h.run_dir.mkdir(parents=True)
+    (h.run_dir / "INPUT_BLOCKED").write_text('{"detail": "Windows kept \'Claude\' in front"}')
+    threading.Timer(0.4, lambda: (h.run_dir / "INPUT_BLOCKED").unlink()).start()
+    assert h.runner(script, budget_tokens=50).run() == "budget_tokens"
+    first = h.records("agent_state")[0]
+    assert first["state"] == "input_blocked" and "Claude" in first["text"]
+    assert len(h.requests("turn/start")) == 1   # no turn while blocked
+
+
+def test_input_blocked_mid_turn_interrupts_without_counting_failure(h):
+    script = {"processes": [{"turns": [[{"hang": True}], [{"usage": 100}]]}]}
+    threading.Timer(0.3, lambda: (h.run_dir / "INPUT_BLOCKED").write_text("{}")).start()
+    threading.Timer(0.8, lambda: (h.run_dir / "INPUT_BLOCKED").unlink()).start()
+    assert h.runner(script, budget_tokens=50).run() == "budget_tokens"
+    assert any(m["kind"] == "interrupt" and "input_blocked" in m["label"] for m in h.records("marker"))
+    assert not [s for s in h.records("agent_state") if s["state"] == "backing_off"]
+
+
 def test_second_runner_on_same_run_dir_is_refused(h):
     import os
     import pytest
