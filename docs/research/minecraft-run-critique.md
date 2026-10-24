@@ -6,3 +6,8 @@ Time lost: `mc_exec` 1200 s urlopen timeout on a dead bridge: 251 s and 143 s ha
 Cost of context: tokens are dominated by context re-read, not images (screenshot about 1.3k tokens at 1280x761).
 Fixes (host-generic, effect at next runner restart): brief "Skill library" section with short-timeout rule; continue prompt re-injects skills/INDEX.md (`skills_note`). Added `tools/critic/analyze.py` for window stats. Requests drafted in requests-from-nazeem.md.
 Candidate for a deliberate restart: low value alone; worth bundling with the next fix. Mc-specific: tell the agent (host notes) that a bridge script started from chat dies with the world/permission dialogs; not yet tuned.
+
+## 2026-10-24 02:30 PDT, cycle 2
+Evidence: mc_exec 3/3 failed, 655 s of tool time in the last 20 min (hook declared timeout_s 1200, bridge down); run_script with 40 s timeout blocked 0 calls. Model: 78k tokens per request at 96k context, 40k uncached in 35 requests (cache works). Agent has since built skills/sk.py + prelude.py (host functions) on its own and documents timeouts of 30 s in NOTES.
+Fix: toolserver caps declared tool timeouts (default 90 s, config/flag) with a clear error; test added. Needs tool server restart (the runner starts it, so a runner restart picks it up).
+Grader: still "no readable world" at 08:56Z; milestones cannot fire until the save path exists (check graders/minecraft path and the world folder name next cycle).

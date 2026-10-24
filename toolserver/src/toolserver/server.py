@@ -234,11 +234,15 @@ def main() -> None:
     ap.add_argument("--host-config", type=Path, help="hosts/<host>.toml: install dir and reload actions")
     ap.add_argument("--agent-container", help="run extension tools in this container (default harness-agent-<run-id>); "
                                               "'local' runs them on this machine in the workspace")
+    ap.add_argument("--max-tool-timeout", type=float, default=None,
+                    help="cap (seconds) on any extension tool's timeout_s; overrides [extensions] max_tool_timeout_s")
     ap.add_argument("--no-spectator", action="store_true",
                     help="don't write <run>/live/latest.jpg (a host picture every 5 s for people watching)")
     args = ap.parse_args()
 
     host_config = HostConfig.load(args.host_config, args.run_dir)
+    if args.max_tool_timeout:
+        host_config.max_tool_timeout_s = args.max_tool_timeout
     workspace = args.run_dir / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     container = args.agent_container or f"harness-agent-{args.run_id}"

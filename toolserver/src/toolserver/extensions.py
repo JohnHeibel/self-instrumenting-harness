@@ -76,6 +76,7 @@ class HostConfig:
     install_dir: Path | None = None          # where in-host extension files go
     reload_actions: dict[str, list[str]] = field(default_factory=dict)
     reload_timeout_s: int = 120
+    max_tool_timeout_s: float = 90.0          # clamps every extension tool's declared timeout_s
     docs: list[dict] = field(default_factory=list)  # [docs] sources for read_docs (docs.py)
 
     @classmethod
@@ -103,6 +104,7 @@ class HostConfig:
             install_dir=Path(os.path.expanduser(fill(install))) if install else None,
             reload_actions={k: [fill(a) for a in _argv(v, f"reload.{k}")] for k, v in ext.get("reload", {}).items()},
             reload_timeout_s=int(ext.get("reload_timeout_s", 120)),
+            max_tool_timeout_s=float(ext.get("max_tool_timeout_s", 90)),
             docs=parse_sources(raw.get("docs", {}), fill),
         )
 
@@ -271,7 +273,8 @@ def parse_manifest(workspace: Path, manifest_rel: str, host: HostConfig, builtin
             problems.append(f"{where}.description: say what it returns")
         if not problems or all(not p.startswith(where) for p in problems):
             tools.append(ToolSpec(name=tname, description=desc, run=run, input_schema={"type": "object", **schema},
-                                  timeout_s=float(t.get("timeout_s", 30)), read_only=bool(t.get("read_only", True)),
+                                  timeout_s=max(1.0, min(float(t.get("timeout_s", 30)), host.max_tool_timeout_s)),
+                                  read_only=bool(t.get("read_only", True)),
                                   depends_on=[d for d in t.get("depends_on", []) if isinstance(d, str)]))
     hc = m.get("health_check")
     if hc is not None and (not isinstance(hc, dict) or hc.get("tool") not in seen):
@@ -380,6 +383,9 @@ class Extensions:
             if missing:
                 raise ToolError(f"{name}: missing required argument(s) {missing}")
             code, out, err = await self.executor.run(spec.run, loaded.manifest.dir_rel, json.dumps(args), spec.timeout_s)
+            if code == -1 and err.startswith("timed out"):
+                raise ToolError(f"{name} timed out after {spec.timeout_s:g} s; check its backend is running "
+                                f"(the declared timeout is capped at {self.host.max_tool_timeout_s:g} s)")
             if code != 0:
                 raise ToolError(f"{name} exited with {code}. stderr (last lines):\n{_tail(err)}")
             out = out.strip()

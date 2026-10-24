@@ -57,3 +57,10 @@ Nothing in the brief says to give hooks short timeouts or to keep reusable scrip
 3. Proposal: event-log record types `skill_saved` (`name`, `kind`: script|hook, `path`, `description`) and `skill_used` (`name`, `via`), so the
    dashboard can plot reuse. Until then `tools/critic/analyze.py` derives them from `run_script` calls with `file` and from `hook_loaded`.
 4. Proposal: hooks that proxy to an in-host server could get a default timeout cap in `extensions.py` (e.g. 60 s unless the manifest says otherwise) so a hung bridge cannot hold a step for minutes.
+
+## 2026-10-24 (critic, cycle 2: cap on extension tool timeouts) toolserver change, please review
+Evidence: mc-overnight-01's `mc_exec` declared `timeout_s: 1200`; its backend (bridge on :8777) was down, so calls blocked the turn for
+251 s, 143 s and more (about 655 s in 20 min, 3 of 3 calls failed with exit 137), and the same hook inside `run_script` stalled it too.
+Change: `HostConfig.max_tool_timeout_s` (default 90, `[extensions] max_tool_timeout_s`, or `toolserver --max-tool-timeout N`) clamps
+each extension tool's declared `timeout_s` at manifest parse time (so `run_script` sees the clamped value too); a timeout now reads
+"<tool> timed out after N s; check its backend is running". Test: `toolserver/tests/test_tool_timeout_cap.py`. Takes effect at tool server restart.
