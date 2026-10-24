@@ -15,7 +15,7 @@ manifest, `extension.json` in its workspace:
         "input_schema": {"type": "object", "properties": {...}},     # optional
         "run": ["python3", "tools/status.py"],                      # runs in the agent's sandbox
         "where": "sandbox",                          # optional; reserved for host-side helpers later
-        "timeout_s": 30, "read_only": true, "depends_on": ["..."]
+        "timeout_s": 30, "read_only": true, "depends_on": ["..."]   # read_only: default false (it acts)
       }],
       "health_check": {"tool": "get_status", "args": {}}            # optional
     }
@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,7 +45,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.fastmcp.tools.base import Tool
 
 from .docs import parse_sources
-from .events import EventLog
+from .events import WHO, EventLog
 
 NAME = re.compile(r"[a-z][a-z0-9_]{2,47}")
 INSTALL_AS = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
@@ -71,6 +72,8 @@ class HostConfig:
     stop: list[str] = field(default_factory=list)    # run once when the run ends
     start_timeout_s: int = 300
     notes: str = ""                           # told to the agent: where things are on this host
+    log_dirs: list[str] = field(default_factory=list)  # more folders the program writes logs to; the
+                                              # runner always looks in {run_dir}/host (see run.py, host_evidence)
     config_dir: Path | None = None
     install_dir: Path | None = None          # where in-host extension files go
     reload_actions: dict[str, list[str]] = field(default_factory=dict)
@@ -98,6 +101,7 @@ class HostConfig:
             stop=[fill(a) for a in _argv(host.get("stop", []), "stop")],
             start_timeout_s=int(host.get("start_timeout_s", 300)),
             notes=fill(str(host.get("notes", ""))).strip(),
+            log_dirs=[fill(str(d)) for d in host.get("log_dirs", [])],
             config_dir=path.parent,
             install_dir=Path(os.path.expanduser(fill(install))) if install else None,
             reload_actions={k: [fill(a) for a in _argv(v, f"reload.{k}")] for k, v in ext.get("reload", {}).items()},
@@ -151,22 +155,42 @@ class Executor(Protocol):
 class ContainerExecutor:
     """Runs a tool inside the agent's container, where the agent wrote it."""
 
+    python = "python3"
+
     def __init__(self, container: str, workdir: str = "/home/agent/work") -> None:
         self.container, self.workdir = container, workdir
 
     async def run(self, argv, cwd, stdin, timeout_s):
+        return await _exec(self._argv(argv, cwd), None, stdin, timeout_s)
+
+    async def spawn(self, argv, cwd):
+        """Start a process and return it (stdin, stdout and stderr are pipes); for long-running scripts."""
+        return await _spawn(self._argv(argv, cwd), None)
+
+    def _argv(self, argv, cwd):
         wd = f"{self.workdir}/{cwd}".rstrip("/")
-        return await _exec(["docker", "exec", "-i", "-w", wd, self.container, *argv], None, stdin, timeout_s)
+        return ["docker", "exec", "-i", "-w", wd, self.container, *argv]
 
 
 class LocalExecutor:
     """Runs a tool on this machine, in the workspace. For tests and container-less runs."""
+
+    python = sys.executable
 
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
 
     async def run(self, argv, cwd, stdin, timeout_s):
         return await _exec(argv, self.workspace / cwd, stdin, timeout_s)
+
+    async def spawn(self, argv, cwd):
+        return await _spawn(argv, self.workspace / cwd)
+
+
+async def _spawn(argv: list[str], cwd: Path | None):
+    return await asyncio.create_subprocess_exec(*argv, cwd=cwd, stdin=asyncio.subprocess.PIPE,
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                limit=1 << 20)
 
 
 async def _exec(argv: list[str], cwd: Path | None, stdin: str, timeout_s: float) -> tuple[int, str, str]:
@@ -266,7 +290,7 @@ def parse_manifest(workspace: Path, manifest_rel: str, host: HostConfig, builtin
             problems.append(f"{where}.description: say what it returns")
         if not problems or all(not p.startswith(where) for p in problems):
             tools.append(ToolSpec(name=tname, description=desc, run=run, input_schema={"type": "object", **schema},
-                                  timeout_s=float(t.get("timeout_s", 30)), read_only=bool(t.get("read_only", True)),
+                                  timeout_s=float(t.get("timeout_s", 30)), read_only=bool(t.get("read_only", False)),
                                   depends_on=[d for d in t.get("depends_on", []) if isinstance(d, str)]))
     hc = m.get("health_check")
     if hc is not None and (not isinstance(hc, dict) or hc.get("tool") not in seen):
@@ -306,7 +330,9 @@ class Extensions:
         self.workspace, self.executor, self.archive_dir, self.builtin = workspace, executor, archive_dir, builtin
         self.loaded: dict[str, Loaded] = {}          # extension name -> what is live
         self.owner: dict[str, str] = {}               # tool name -> extension name
+        self.hands = None                             # tasks.Hands, set by the server
         self._lock = asyncio.Lock()
+        self._restore_active()
 
     async def load(self, manifest_rel: str) -> str:
         async with self._lock:
@@ -316,7 +342,7 @@ class Extensions:
                     raise ValueError(f"tool {t.name!r} already belongs to extension {self.owner[t.name]!r}")
             if m.in_host:
                 self._check_install_as(m)
-            version = self.loaded[m.name].version + 1 if m.name in self.loaded else 1
+            version = self._next_version(m.name)
             ext_dir = self.workspace / m.dir_rel
             archived = self.archive_dir / m.name / f"v{version}"
             shutil.copytree(ext_dir, archived, dirs_exist_ok=True)   # outside the agent's reach
@@ -329,6 +355,7 @@ class Extensions:
                 if not ok:
                     if m.in_host:
                         self._restore(m)
+                    shutil.rmtree(archived, ignore_errors=True)   # the version number stays free
                     raise ValueError(f"reload {m.reload!r} failed, so the previous version stays installed and "
                                      f"registered. Output:\n{tail}")
                 notes.append(f"reload {m.reload!r} ok")
@@ -341,6 +368,7 @@ class Extensions:
                 self.owner[t.name] = m.name
             sources = _sources(ext_dir)
             self.loaded[m.name] = Loaded(m, version, sources)
+            self._save_active(m.name, manifest_rel, version)
             for t in m.tools:
                 self.log.write("hook_loaded", hook=t.name, version=version, extension=m.name, reason=m.reason,
                                language=_language(sources, t), kind="in_host" if m.in_host else "helper",
@@ -367,10 +395,12 @@ class Extensions:
         loaded = self.loaded[ext]
         spec = next(t for t in loaded.manifest.tools if t.name == name)
         missing = [k for k in spec.input_schema.get("required", []) if k not in args]
-        hook = {"name": name, "version": loaded.version, "extension": ext}
+        hook = {"name": name, "version": loaded.version, "extension": ext, "acts": not spec.read_only}
         with self.log.call(name, "hook", args, via=via, hook=hook) as res:
             if missing:
                 raise ToolError(f"{name}: missing required argument(s) {missing}")
+            if not spec.read_only and self.hands is not None:
+                self.hands.check(WHO.get())    # an acting tool needs your hands (tasks.Hands)
             code, out, err = await self.executor.run(spec.run, loaded.manifest.dir_rel, json.dumps(args), spec.timeout_s)
             if code != 0:
                 raise ToolError(f"{name} exited with {code}. stderr (last lines):\n{_tail(err)}")
@@ -379,6 +409,18 @@ class Extensions:
                 out = out[:MAX_RESULT_CHARS] + f"\n… [{len(out) - MAX_RESULT_CHARS} more characters cut]"
             res.set("text", len(out), summary=_summary(out))
             return out
+
+    @property
+    def executor_python(self) -> str:
+        return getattr(self.executor, "python", "python3")
+
+    def hook_info(self, name: str) -> dict | None:
+        ext = self.owner.get(name)
+        if not ext:
+            return None
+        spec = next((t for t in self.loaded[ext].manifest.tools if t.name == name), None)
+        return {"name": name, "version": self.loaded[ext].version, "extension": ext,
+                "acts": not (spec and spec.read_only)}
 
     def describe(self) -> list[dict]:
         return [{"tool": t.name, "extension": name, "version": l.version, "description": t.description,
@@ -399,6 +441,45 @@ class Extensions:
         self.mcp._tool_manager._tools[t.name] = _RawTool(
             fn=run, name=t.name, description=f"{t.description}\n(Hook from extension {m.name}.)",
             parameters=t.input_schema, fn_metadata=base.fn_metadata, is_async=True, annotations=annotations)
+
+    # A tool server restart (a crash, or the runner restarting) must not cost the agent its tools:
+    # what was last loaded is kept beside the archive and registered again on start. Only the tools
+    # are registered; the in-host part is still installed, so nothing is reinstalled or reloaded.
+    def _active_path(self) -> Path:
+        return self.archive_dir / "active.json"
+
+    def _active(self) -> dict:
+        try:
+            return json.loads(self._active_path().read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _save_active(self, name: str, manifest_rel: str, version: int) -> None:
+        active = self._active()
+        active[name] = {"manifest": manifest_rel, "version": version}
+        self.archive_dir.mkdir(parents=True, exist_ok=True)
+        self._active_path().write_text(json.dumps(active, indent=1))
+
+    def _next_version(self, name: str) -> int:
+        """Versions keep counting across restarts, so an archived version is never overwritten."""
+        nums = [int(d.name[1:]) for d in (self.archive_dir / name).glob("v*") if d.name[1:].isdigit()]
+        return max([self.loaded[name].version if name in self.loaded else 0, *nums]) + 1
+
+    def _restore_active(self) -> None:
+        for name, a in self._active().items():
+            try:
+                m = parse_manifest(self.workspace, a["manifest"], self.host, self.builtin)
+                if m.name != name:
+                    raise ValueError(f"the manifest now names extension {m.name!r}")
+            except (ValueError, OSError, KeyError) as e:
+                self.log.write("hook_status", hook=name, status="broken",
+                               detail=f"not restored after a tool server restart: {e}"[:500])
+                continue
+            for t in m.tools:
+                self._register(m, t)
+                self.owner[t.name] = m.name
+            self.loaded[name] = Loaded(m, a["version"], _sources(self.workspace / m.dir_rel))
+            self.log.write("hook_restored", extension=name, version=a["version"], hooks=[t.name for t in m.tools])
 
     def _target(self, m: Manifest) -> Path:
         return self.host.install_dir / m.in_host["install_as"]

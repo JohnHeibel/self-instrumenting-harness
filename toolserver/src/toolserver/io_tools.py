@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP, Image
 
 from . import capture
 from .capture import Target
-from .events import EventLog
+from .events import WHO, EventLog
 from .inputs import Controller, InputError, Win32Backend
 
 NAMES = {"screenshot", "click", "drag", "move", "scroll", "key", "type", "set_goal"}
@@ -30,10 +30,11 @@ SHOWN = {"window": "the program's window", "process": "the program's windows", "
 
 
 def register(mcp: FastMCP, log: EventLog, target: Target, max_screenshot_width: int,
-             backend=None, shoot: Callable[[], capture.Shot] | None = None) -> Controller:
+             backend=None, shoot: Callable[[], capture.Shot] | None = None, hands=None) -> Controller:
     """`backend` and `shoot` replace Win32 input and screen capture (tests)."""
     run_dir = Path(log.path).parent
     ctl = Controller(backend or _LazyBackend(), target)
+    ctl.watch_blocked(run_dir / "INPUT_BLOCKED")   # the runner pauses the run while this exists
     shoot = shoot or (lambda: capture.screenshot(target, max_screenshot_width))
 
     @mcp.tool(annotations=READ_ONLY)
@@ -57,8 +58,12 @@ def register(mcp: FastMCP, log: EventLog, target: Target, max_screenshot_width: 
             return Image(data=shot.png, format="png")
 
     async def act(tool: str, args: dict, fn: Callable[[], str]) -> str:
+        who = WHO.get()
+
         def run() -> str:
             with log.call(tool, "input", args) as res:
+                if hands is not None:
+                    hands.check(who)
                 try:
                     summary = fn()
                 except InputError as e:

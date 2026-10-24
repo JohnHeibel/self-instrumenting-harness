@@ -2,6 +2,8 @@
 
 **The single source of truth for who does what.** Only john-mac edits this file. Assignments and changes to them happen here, not in chat. When an assignment changes, john-mac updates this file and sends a short message pointing to it.
 
+**Project name:** Sisyphus (Nazeem's pick).
+
 **Roles:** john-mac is John's main point of contact and the coordinator. john-pc is the powerful machine, with Factorio (and room for more games) next to it. Nazeem's side owns the UI and the Minecraft host.
 
 Decisions live in `docs/BRIEF.md` ("Decisions already made"). Interfaces live in `docs/interfaces/`.
@@ -35,8 +37,10 @@ Decisions live in `docs/BRIEF.md` ("Decisions already made"). Interfaces live in
 | P3 | **Codex spike re-run** with the real extension flow (the model writes and loads its own extension, and the tool runs via `docker exec`) | done| verdict PASS, or a report of what's awkward |
 | P4 | **Factorio host setup, built from live observation** (not from PR #1): launch through Steam per John's decision, a `restart` reload action, RCON reachable from the container, plumbing tests (a) state out and (b) reload behavior and cost, a starting save past the crash-site intro, reload paths resolved against the host config's directory, and a generic `[host]` field for notes and paths the agent needs | done | results in mailbox `interfaces/factorio-host`; full `load_extension` cycle with `restart` works live |
 | P4b | **Wire the brief and goal into the runner** (`--brief-file`, the run/ files in the workspace, the continue prompt), requested in M3 | done (5e7fe6b) | tests pass |
-| R1 | **First supervised run:** Factorio, blue-science goal, 2 h time cap, no token cap, runs/factorio-trial-01. Watch only; reports at 30 min, 1 h and the end | running (started 05:16 UTC) | report delivered; run dir kept |
-| P5 | **Factorio grader** (`graders/factorio/`), validated against the running game: `milestones_defined`, `milestone` {id, evidence} from production stats, and integrity signals (console commands, cheat mode, achievements flag) into `grader.jsonl` | mostly done (a1d1b60); live milestone check pending | live check reads real production stats; milestones fire in a real game |
+| R1 | **First supervised run:** Factorio, blue-science goal, 2 h time cap, no token cap, runs/factorio-trial-01. Watch only; reports at 30 min, 1 h and the end | done: 2 h, no milestones; ~67 min lost to a focus bug (fixed 4f58253) | report delivered; run dir kept |
+| R2 | **Trial 02:** redesign approved by John (extension tools may act within the player's limits; brief rewards tool-building per token; runner pauses when input is blocked) | done: stopped after milestones first_assembler, red_auto, green_auto (hand-fed under old rule) |
+| R3 | **Trial 03:** rocket-launch goal, full brief, fair-play grader, runs to 15:00 UTC; john-pc tunes for token and wall-clock efficiency (general changes only) | running (from 08:56 UTC) |
+| P5 | **Factorio grader** (`graders/factorio/`), validated against the running game: `milestones_defined`, `milestone` {id, evidence} from production stats, and integrity signals (console commands, cheat mode, achievements flag) into `grader.jsonl` | done (fair-play checks e0d62f7, db423ad) |
 | P6 | **Container freedom:** passwordless sudo, one long-lived container per run plus replay of `setup.sh`, an egress proxy (open internet; LAN, Tailscale and other host ports blocked; tool server allowed), CPU and memory caps, no Docker socket or extra mounts | queued | the live checks listed in the task 4 message pass |
 
 If something needs John (e.g. the launch design hits Steam's prompt), stop and report to john-mac.
@@ -47,10 +51,11 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 |---|---|---|---|
 | N1 | **Story view redesign** on one branch (pick one of `ui-story-redesign`, `ui-variant-b`, `ui-variant-c` and delete the others), in Nazeem's direction: clean, official, nothing decorative, not stock AI-generated UI | in progress | John signs off on the look |
 | N2 | **Non-game fake-run scenario** (PR #2), so the UI is proven generic | done (merged 54806f1) | merged |
-| N3 | **SpacetimeDB module and publisher.** The publisher tails a run's top-level `*.jsonl` and batches writes; tested against fake runs; john-pc runs it on the PC | queued | Story replays a run from SpacetimeDB |
+| N3 | **SpacetimeDB module and publisher.** The publisher tails a run's top-level `*.jsonl` and batches writes; tested against fake runs; john-pc runs it on the PC | in review (PR #3, john-mac) | Story replays a run from SpacetimeDB |
+| N7 | **Leverage chart** (John's headline metric): actions done in the program per model step, and tokens per action, in 30-min bins next to the milestones; from `program_actions` (grader) and `usage` (runner); estimated points labelled | queued, right after N1 | shows trials 02 and 03 back-filled |
 | N4 | **Stage overlay** (live, over the game screen) | later | |
 | N5 | **Ops view** (health, alerts, STOP/PAUSE controls through reducers) | later | |
-| N6 | **Minecraft host** on Nazeem's Mac, the second host: get the modded game running, then `hosts/minecraft.toml` (data only, per the generality rule), then live plumbing tests (state out, reload) and a grader. It must work with the unchanged harness; anything the harness can't express generically goes to john-mac as a `request`. | in progress (setup) | the harness loads an agent-written extension into Minecraft and calls its tool |
+| N6 | **Minecraft host** on Nazeem's Mac, the second host: get the modded game running, then `hosts/minecraft.toml` (data only, per the generality rule), then live plumbing tests (state out, reload) and a grader. It must work with the unchanged harness; anything the harness can't express generically goes to john-mac as a `request`. | in progress: NeoForge 1.21.1 instance set up, first launch | the harness loads an agent-written extension into Minecraft and calls its tool |
 | — | **No Factorio host work.** PR #1 was closed: the Factorio setup is built against the real game by john-pc. | — | |
 
 ## john-mac (coordination, design, review)
@@ -60,11 +65,11 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 | M1 | Keep this board, BRIEF and the interfaces current; review PRs into `main`  | ongoing |
 | M2 | Generic `read_docs` design: the host config lists doc sources, and the tool searches them | done (toolserver/src/toolserver/docs.py) |
 | M3 | A generic agent brief and goal-file format (host notes come from the host config), plus the Factorio goal file | done |
-| M4 | Evaluation plan: screenshot-only baseline, ablation, planted break, held-out tasks | queued |
+| M4 | Evaluation plan: screenshot-only baseline, ablation, planted break, held-out tasks; headline metric **leverage** (program actions per step, tokens per action); interface coverage counts the agent's mod commands (grader `host_command`, custom) as hook use, since it calls its helpers over the shell | queued |
 | M5 | **macOS screenshot and input backend** (`toolserver/src/toolserver/macos.py`, plus dispatch edits in capture.py, inputs.py and io_tools.py, agreed with john-pc), so hosts can run on a Mac (Nazeem's Minecraft). Tests with a fake, plus a live check on John's Mac | in progress |
 
 ## Open questions
 
 | Question | Waiting on |
 |---|---|
-| Real-world showcase: Tennessee Eastman chemical-plant control room vs Odoo vs Business Central. John defers to Nazeem, who is still deciding | Nazeem |
+| Real-world showcase: Nazeem will bring his own ideas to John. The research in docs/research/ is reference only, not a proposal | Nazeem |

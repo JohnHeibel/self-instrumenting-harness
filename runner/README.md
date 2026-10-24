@@ -125,7 +125,7 @@ Raw and Codex files sit in subdirectories, so readers that merge the top-level `
 |---|---|
 | `run_started` | after the first `thread/start`; `model` from its response |
 | `turn_started` / `turn_completed` | `turn/start` response and `turn/completed`; extra fields `turn_id`, `status`, `duration_ms`, `error`, and `turn_total_tokens` on completion |
-| `agent_state` | `turn/started` and reasoning or message items → `thinking`; tool, shell, file and web items → `acting` (text names the tool or command); `sleep` items and a harness `wait` tool → `waiting`; `contextCompaction` item → `compacting`; runner-side `host_down`, `backing_off`, `paused`, `ended` |
+| `agent_state` | `turn/started` and reasoning or message items → `thinking`; tool, shell, file and web items → `acting` (text names the tool or command); `sleep` items and a harness `wait` tool → `waiting`; `contextCompaction` item → `compacting`; runner-side `host_down`, `input_blocked`, `backing_off`, `paused`, `ended` |
 | `reasoning` | each entry of a completed reasoning item's `summary`, split into `title` (the leading `**...**`) and `text` |
 | `agent_message` | completed `agentMessage` items; extra field `phase` (`commentary` or `final_answer`) |
 | `usage` | each `thread/tokenUsage/updated` that grows the total (one per model request): that request's tokens, plus thread totals `total_tokens` and `uncached_tokens`, and `context_window` |

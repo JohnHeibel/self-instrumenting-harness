@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 
@@ -119,6 +120,19 @@ def test_runner_restart_resumes_from_state_file(h):
     assert [t["turn_total_tokens"] for t in h.records("turn_completed")] == [500, 600]
 
 
+def test_reopen_continues_an_ended_run_on_its_thread(h):
+    h.run_dir.mkdir(parents=True)
+    (h.run_dir / "runner-state.json").write_text(json.dumps({
+        "run_id": "r1", "started_at": time.time(), "thread_id": "thr_C", "goal_sent": True,
+        "run_started_logged": True, "turns": 2, "status": "ended", "ended_reason": "stop",
+        "extra": {"goal": "g", "host": "factorio", "usage_total": {"totalTokens": 900}}}))
+    script = {"thread_id": "thr_C", "processes": [{"resume_total": 900, "turns": [[{"usage": 1500}]]}]}
+    assert h.runner(script).run() == "stop"                     # ended runs stay ended
+    assert h.runner(script, budget_tokens=1400, reopen=True).run() == "budget_tokens"
+    assert [r["params"]["threadId"] for r in h.requests("thread/resume")] == ["thr_C"]
+    assert any(m["kind"] == "reopen" for m in h.records("marker"))
+
+
 def test_usage_total_is_saved_on_every_update(h):
     script = {"processes": [{"turns": [[{"usage": 700}, {"hang": True}]]}]}
     r = h.runner(script)
@@ -192,6 +206,26 @@ def test_pause_file_holds_the_run(h):
     assert h.records("agent_state")[0]["state"] == "paused"
 
 
+def test_input_blocked_holds_the_run_without_prompting(h):
+    script = {"processes": [{"turns": [[{"usage": 100}]]}]}
+    h.run_dir.mkdir(parents=True)
+    (h.run_dir / "INPUT_BLOCKED").write_text('{"detail": "Windows kept \'Claude\' in front"}')
+    threading.Timer(0.4, lambda: (h.run_dir / "INPUT_BLOCKED").unlink()).start()
+    assert h.runner(script, budget_tokens=50).run() == "budget_tokens"
+    first = h.records("agent_state")[0]
+    assert first["state"] == "input_blocked" and "Claude" in first["text"]
+    assert len(h.requests("turn/start")) == 1   # no turn while blocked
+
+
+def test_input_blocked_mid_turn_interrupts_without_counting_failure(h):
+    script = {"processes": [{"turns": [[{"hang": True}], [{"usage": 100}]]}]}
+    threading.Timer(0.3, lambda: (h.run_dir / "INPUT_BLOCKED").write_text("{}")).start()
+    threading.Timer(0.8, lambda: (h.run_dir / "INPUT_BLOCKED").unlink()).start()
+    assert h.runner(script, budget_tokens=50).run() == "budget_tokens"
+    assert any(m["kind"] == "interrupt" and "input_blocked" in m["label"] for m in h.records("marker"))
+    assert not [s for s in h.records("agent_state") if s["state"] == "backing_off"]
+
+
 def test_second_runner_on_same_run_dir_is_refused(h):
     import os
     import pytest
@@ -200,3 +234,45 @@ def test_second_runner_on_same_run_dir_is_refused(h):
     (h.run_dir / "runner.lock").write_text(str(os.getppid()))  # a live process that isn't us
     with pytest.raises(SystemExit):
         RunLock(h.run_dir / "runner.lock").acquire()
+
+
+def test_wake_file_interrupts_thinking_and_prompts_with_the_notices(h):
+    script = {"processes": [{"turns": [[{"hang": True}], [{"usage": 100}]]}]}
+    wake = '[{"source": "rule:low_iron", "text": "iron below 50"}]'
+    threading.Timer(0.3, lambda: (h.run_dir / "WAKE").write_text(wake)).start()
+    assert h.runner(script, budget_tokens=50).run() == "budget_tokens"
+    assert any(m["kind"] == "interrupt" and "wake" in m["label"] for m in h.records("marker"))
+    assert not [s for s in h.records("agent_state") if s["state"] == "backing_off"]
+    second = h.requests("turn/start")[1]["params"]["input"][0]["text"]
+    assert "rule:low_iron: iron below 50" in second and "context is intact" in second
+    assert not (h.run_dir / "WAKE").exists()
+
+
+def test_deadline_mid_turn_ends_without_backing_off(h):
+    script = {"processes": [{"turns": [[{"hang": True}]]}]}
+    t0 = time.monotonic()
+    assert h.runner(script, until=time.time() + 0.5).run() == "deadline"
+    assert time.monotonic() - t0 < 10
+    assert not [r for r in h.records("agent_state") if r["state"] == "backing_off"]
+
+
+def test_host_down_mid_turn_shows_the_agent_what_the_host_wrote(h):
+    logs = h.run_dir / "host" / "server"
+    logs.mkdir(parents=True)
+    (logs / "prog.log").write_text("\n".join(f"line {i}" for i in range(100))
+                                   + "\nError: mod.lua:9: attempt to index nil\nstack traceback:\n  mod.lua:9\n"
+                                   + "\n".join(f"after {i}" for i in range(30)) + "\n")
+    (logs / "save.bin").write_bytes(b"\x00\x01binary")
+    calls = {"n": 0}
+
+    def check():
+        calls["n"] += 1
+        return (calls["n"] not in (2, 3), "prog")
+
+    toml = f'[host]\nname = "test-host"\nup_check = "always"\nstart = [{json.dumps(sys.executable)}, "-c", "pass"]\n'
+    script = {"processes": [{"turns": [[{"hang": True}], [{"usage": 100}]]}]}
+    assert h.runner(script, host_check=check, budget_tokens=50, host_toml=toml).run() == "budget_tokens"
+    second = prompts(h)[1]
+    assert second.startswith("The program went down") and "mod.lua:9: attempt to index nil" in second, second
+    assert "after 29" in second and "line 3\n" not in second and "binary" not in second
+    assert [m["files"] for m in h.records("marker") if m["kind"] == "host_log"] == [["server/prog.log"]]

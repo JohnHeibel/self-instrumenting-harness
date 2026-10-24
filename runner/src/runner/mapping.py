@@ -56,6 +56,11 @@ class Mapper:
         self._state = (state, text)
         self.log.write("agent_state", state=state, text=text, **extra)
 
+    @property
+    def current(self) -> str | None:
+        """The agent's state as last written: thinking, acting, compacting, ..."""
+        return self._state[0] if self._state else None
+
     def begin_turn(self, turn: int, turn_id: str) -> None:
         self.turn, self.turn_id = turn, turn_id
         self._turn_base = dict(self.total)
