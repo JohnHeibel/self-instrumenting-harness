@@ -23,15 +23,16 @@ def test_report_counts_calls_tokens_and_largest_results(tmp_path):
         call("2026-01-01T11:30:10Z", "status", ok=False),
         call("2026-01-01T11:30:40Z", "screenshot", size=10**6, kind="image"),
         call("2026-01-01T11:31:00Z", "costs"),                      # its own calls don't count
+        {**call("2026-01-01T11:30:50Z", "status"), "via": "script"},  # inside a script: not a step
     ])
     _write(tmp_path / "runner.jsonl", [
         {"ts": "2026-01-01T11:29:00Z", "type": "usage", "total_tokens": 1000, "uncached_tokens": 100, "input_tokens": 50},
         {"ts": "2026-01-01T11:59:00Z", "type": "usage", "total_tokens": 31000, "uncached_tokens": 400, "input_tokens": 900},
     ])
     text = report(tmp_path, 60, now=NOW)
-    assert text.startswith("Last 60 min: 3 tool calls, 1 failed.")
-    assert "Model tokens: 30,000 (300 not cached), about 10,000 per tool call. Context now: 900" in text
-    assert "status: 2, 1 failed" in text and "screenshot: 1, 0 failed, 0.5 s, 1 images" in text
+    assert text.startswith("Last 60 min: 3 tool calls, 1 failed; 1 more calls ran inside scripts.")
+    assert "Model: 1 steps, 30,000 tokens (300 not cached), about 30,000 per step. Context now: 900" in text
+    assert "status: 3, 1 failed" in text and "screenshot: 1, 0 failed, 0.5 s, 1 images" in text
     assert "old" not in text and "Largest text results: status" in text
     assert "median 30 s, longest 30 s" in text
 

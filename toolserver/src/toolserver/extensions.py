@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -151,6 +152,8 @@ class Executor(Protocol):
 class ContainerExecutor:
     """Runs a tool inside the agent's container, where the agent wrote it."""
 
+    python = "python3"
+
     def __init__(self, container: str, workdir: str = "/home/agent/work") -> None:
         self.container, self.workdir = container, workdir
 
@@ -161,6 +164,8 @@ class ContainerExecutor:
 
 class LocalExecutor:
     """Runs a tool on this machine, in the workspace. For tests and container-less runs."""
+
+    python = sys.executable
 
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
@@ -382,6 +387,14 @@ class Extensions:
                 out = out[:MAX_RESULT_CHARS] + f"\n… [{len(out) - MAX_RESULT_CHARS} more characters cut]"
             res.set("text", len(out), summary=_summary(out))
             return out
+
+    @property
+    def executor_python(self) -> str:
+        return getattr(self.executor, "python", "python3")
+
+    def hook_info(self, name: str) -> dict | None:
+        ext = self.owner.get(name)
+        return {"name": name, "version": self.loaded[ext].version, "extension": ext} if ext else None
 
     def describe(self) -> list[dict]:
         return [{"tool": t.name, "extension": name, "version": l.version, "description": t.description,

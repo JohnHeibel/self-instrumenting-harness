@@ -233,3 +233,33 @@ def test_tools_survive_a_tool_server_restart(server):
     ev = events(server["run"])
     assert [(e["extension"], e["version"]) for e in ev if e["type"] == "hook_restored"] == [("probe_kit", 1)]
     assert (server["run"] / "extensions" / "probe_kit" / "v1").exists()
+
+
+def test_run_script_composes_tool_calls_in_one_step(server):
+    ws = server["ws"]
+    m = write_ext(ws, "probe_kit", [tool("probe_state")], mod_text=None, reload=None)
+    code = textwrap.dedent("""
+        seen = [call("probe_state", q=str(i))["echo"]["q"] for i in range(3)]
+        try:
+            call("probe_state", fail=True)
+        except ToolFailed:
+            seen.append("caught")
+        print(",".join(seen))
+    """)
+
+    async def body(s, changes):
+        assert not (await s.call_tool("load_extension", {"manifest": m})).isError
+        res = await s.call_tool("run_script", {"code": code, "timeout_s": 60})
+        assert not res.isError, res.content[0].text
+        text = res.content[0].text
+        assert text.startswith("0,1,2,caught") and "4 tool calls" in text
+        bad = await s.call_tool("run_script", {"code": "print('half'); raise ValueError('boom')"})
+        assert bad.isError and "half" in bad.content[0].text and "boom" in bad.content[0].text
+
+    anyio.run(_session, server["url"], body)
+    ev = events(server["run"])
+    inner = [e for e in ev if e["type"] == "tool_call" and e.get("via") == "script"]
+    assert len(inner) == 4 and [e["ok"] for e in inner] == [True, True, True, False]
+    assert inner[0]["hook"]["extension"] == "probe_kit" and inner[0]["args"] == {"q": "0"}
+    outer = [e for e in ev if e["type"] == "tool_call" and e["tool"] == "run_script"]
+    assert [e["ok"] for e in outer] == [True, False] and outer[0]["inner_calls"] == 4
