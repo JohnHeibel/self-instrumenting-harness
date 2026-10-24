@@ -193,7 +193,7 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
                 t = work.start(code, file, name or file or "code", args, minutes, hands, wake_on_end, after=after)
                 if t.status == "queued":
                     text = (f"queued {t.id} ({t.name}): it starts by itself "
-                            f"{'when ' + after + ' ends ok (skipped if it does not)' if after else 'when your hands are free'}"
+                            f"{'when ' + after + ' ends ok (held for you if it does not)' if after else 'when your hands are free'}"
                             f". Its end arrives as a notice.")
                 else:
                     text = (f"started {t.id} ({t.name}{', holding your hands' if hands else ', reading only'}; "
@@ -264,16 +264,23 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
 
     @mcp.tool(annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                                 idempotentHint=False, openWorldHint=False))
-    async def task(id: str = "", wait_s: float = 0, stop: bool = False) -> str:
+    async def task(id: str = "", wait_s: float = 0, stop: bool = False, resume: bool = False,
+                   after: str = "") -> str:
         """Your background tasks (scripts started with run_script(..., background=True)).
         No arguments: list them. id: one task's status, its latest log() lines and, once it has ended,
         its result. wait_s: wait up to that long (at most 900 s) for it to end first.
-        stop: stop it (id "all" stops every running task)."""
-        with log.call("task", "meta", {k: v for k, v in {"id": id, "wait_s": wait_s, "stop": stop}.items() if v}) as res:
+        stop: stop it; for a queued or held task, also drops what's queued behind it (id "all" stops
+        everything). When a task fails or is stopped, what was queued behind it is held: resume=True
+        lets it run again, now or `after` another task (e.g. the fix you just started)."""
+        logged = {k: v for k, v in {"id": id, "wait_s": wait_s, "stop": stop, "resume": resume,
+                                    "after": after}.items() if v}
+        with log.call("task", "meta", logged) as res:
             if not id:
                 text = work.listing()
             elif stop:
                 text = await work.stop(id)
+            elif resume:
+                text = work.resume(id, after)
             else:
                 t = work.tasks.get(id)
                 if t and t.status == "running" and wait_s > 0 and t.job:

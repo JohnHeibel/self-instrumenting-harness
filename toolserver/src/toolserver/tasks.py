@@ -6,8 +6,9 @@ Nothing here knows the program. A task is the agent's own script; a rule's check
 own script that calls the agent's own tools; the harness only schedules, waits, delivers and logs.
 
 A task that needs the hands while they are busy waits in a queue and starts as soon as they are
-free; a task started with `after` waits for that task to end well (and is skipped if it doesn't). So
-the agent can line up its next chores and think while they run, instead of leaving its hands idle.
+free; a task started with `after` waits for that task to end well. If it doesn't, everything queued
+behind it is held (not dropped) until the agent resumes or drops it. So the agent can line up its next
+chores and think while they run, instead of leaving its hands idle.
 
 Notices reach the agent three ways: as a footer on its next tool result, from wait(), and, for
 urgent ones, by the runner waking it (the WAKE file in the run dir, which the runner watches).
@@ -176,8 +177,9 @@ class Task:
     deadline_s: float
     wake_on_end: bool
     handle: scripts.Handle = field(default_factory=scripts.Handle)
-    status: str = "running"        # queued | running | ok | failed | stopped | skipped
+    status: str = "running"        # queued | held | running | ok | failed | stopped
     after: str = ""                # queued until this task ends ok
+    held_why: str = ""             # why it's held: the task before it didn't end ok
     queued_at: float = 0.0
     start_args: tuple = ()         # (code, file, args, why) kept while queued
     result: scripts.Result | None = None
@@ -189,8 +191,8 @@ class Task:
         if self.status == "queued":
             behind = f"after {self.after}" if self.after else "for your hands"
             return f"{self.id} {self.name}: queued {behind} ({time.time() - self.queued_at:.0f} s)"
-        if self.status == "skipped":
-            return f"{self.id} {self.name}: skipped ({self.after} didn't end ok)"
+        if self.status == "held":
+            return f"{self.id} {self.name}: held ({self.held_why})"
         took = time.time() - self.started if self.result is None else self.result.seconds
         hands = ", hands" if self.hands and self.status == "running" else ""
         return f"{self.id} {self.name}: {self.status} ({took:.0f} s, {self.calls} calls{hands})"
@@ -253,13 +255,16 @@ class Work:
         """Start a task now, or queue it: behind `after` (a task id), or for the hands if they're busy."""
         if after and after not in self.tasks:
             raise ToolError(f"after: no task {after!r}. " + self.listing())
-        queued = [t for t in self.tasks.values() if t.status == "queued"]
-        must_queue = (after and self.tasks[after].status in ("queued", "running")) or \
-            (hands and (not self.hands.free_for(None) or any(q.hands for q in queued)))
+        queued = [t for t in self.tasks.values() if t.status in ("queued", "held")]
+        if after and self.tasks[after].status in ("failed", "stopped"):
+            raise ToolError(f"after: {after} has already ended {self.tasks[after].status}, so this wouldn't run; "
+                            "start it without after, or after another task")
+        waiting_for_hands = any(q.hands and q.status == "queued" for q in queued)   # held ones don't count
+        must_queue = (after and self.tasks[after].status in ("queued", "held", "running")) or \
+            (hands and (not self.hands.free_for(None) or waiting_for_hands))
         if must_queue and len(queued) >= MAX_QUEUED:
-            raise ToolError(f"{len(queued)} tasks are already queued (at most {MAX_QUEUED}). " + self.listing())
-        if after and not must_queue and self.tasks[after].status != "ok":
-            raise ToolError(f"after: {after} has already ended {self.tasks[after].status}, so this wouldn't run")
+            raise ToolError(f"{len(queued)} tasks are already queued or held (at most {MAX_QUEUED}). "
+                            + self.listing())
         self._n += 1
         tid = f"t{self._n}"
         t = Task(tid, name, hands, time.time(), max(1.0, min(float(minutes), MAX_TASK_MINUTES)) * 60, wake_on_end,
@@ -269,6 +274,7 @@ class Work:
             t.status = "queued"
             self.log.write("task_queued", task=tid, name=name, hands=hands, after=after or None,
                            behind=None if after else self.hands.holder, args=args or {}, why=why or None)
+            self.pump()                         # behind a held task: held at once
             return t
         self._begin(t)
         return t
@@ -287,19 +293,60 @@ class Work:
                        queued_s=round(waited, 1) if waited >= 0.5 else None)
         t.job = asyncio.create_task(self._run(t, code, file, args))
 
+    def _behind(self, tid: str) -> list[Task]:
+        """Queued or held tasks that wait on `tid`, directly or through others, in queue order."""
+        out, ids = [], {tid}
+        for t in self.tasks.values():
+            if t.status in ("queued", "held") and t.after in ids:
+                out.append(t)
+                ids.add(t.id)
+        return out
+
+    def _hold_behind_failures(self) -> None:
+        for root in [x for x in self.tasks.values() if x.status in ("failed", "stopped")]:
+            newly = [t for t in self._behind(root.id) if t.status == "queued"]
+            if not newly:
+                continue
+            summary = (root.result.detail if root.result and not root.result.ok else "")[:160]
+            why = f"{root.id} ended {root.status}"
+            for t in newly:
+                t.status, t.held_why = "held", why
+                self.log.write("task_held", task=t.id, name=t.name, after=t.after, why=why)
+            ids = ", ".join(t.id for t in newly)
+            first = newly[0].id
+            self.board.post(root.id, f"{why}{': ' + summary if summary and root.status == 'failed' else ''}. "
+                            f"Held {ids} behind it: if they still fit, task(\"{first}\", resume=True) "
+                            f"(with after= to run it after a fix); if not, task(\"{first}\", stop=True) drops them.",
+                            urgent=root.status == "failed")
+
+    def resume(self, tid: str, after: str = "") -> str:
+        """Let a held task (and the ones held behind it) run again: now, or after another task."""
+        t = self.tasks.get(tid)
+        if t is None:
+            raise ToolError(f"no task {tid!r}. " + self.listing())
+        if t.status != "held":
+            raise ToolError(f"{tid} is {t.status}, not held. " + self.listing())
+        if after:
+            if after not in self.tasks or after == tid or after in {x.id for x in self._behind(tid)}:
+                raise ToolError(f"after: {after!r} isn't a task this one can wait on. " + self.listing())
+            if self.tasks[after].status in ("failed", "stopped"):
+                raise ToolError(f"after: {after} ended {self.tasks[after].status}")
+        group = [t] + [x for x in self._behind(tid) if x.status == "held"]
+        t.after = after
+        for x in group:
+            x.status, x.held_why = "queued", ""
+            self.log.write("task_resumed", task=x.id, name=x.name, after=x.after or None)
+        self.pump()
+        return "\n".join(self.tasks[x.id].brief() for x in group)
+
     def pump(self) -> None:
         """Start queued tasks whose turn has come: in the order they were queued, the first one that
-        needs the hands gets them once they're free; one queued behind a task that didn't end ok is
-        skipped."""
+        needs the hands gets them once they're free. One queued behind a task that didn't end ok is
+        held, with everything behind it, and the agent is told once per chain."""
+        self._hold_behind_failures()
         for t in [x for x in self.tasks.values() if x.status == "queued"]:
             dep = self.tasks.get(t.after) if t.after else None
-            if dep is not None and dep.status in ("queued", "running"):
-                continue
             if dep is not None and dep.status != "ok":
-                t.status = "skipped"
-                self.log.write("task_ended", task=t.id, name=t.name, status="skipped", duration_ms=0, calls=0,
-                               summary=f"{dep.id} ended {dep.status}")
-                self.board.post(t.id, f"skipped: {dep.id} ended {dep.status}", urgent=t.wake_on_end)
                 continue
             if t.hands and not self.hands.free_for(None):
                 return                          # keep the order: nothing jumps a task waiting for the hands
@@ -343,15 +390,18 @@ class Work:
         self.pump()
 
     async def stop(self, tid: str, why: str = "stopped") -> str:
-        ids = [k for k, t in self.tasks.items() if t.status in ("running", "queued")] if tid == "all" else [tid]
+        waiting = ("queued", "held")
+        ids = [k for k, t in self.tasks.items() if t.status in ("running",) + waiting] if tid == "all" else [tid]
         if tid != "all" and tid not in self.tasks:
             raise ToolError(f"no task {tid!r}. " + self.listing())
+        if tid != "all" and self.tasks[tid].status in waiting:
+            ids += [x.id for x in self._behind(tid)]   # dropping a queued chore drops what waits on it
         for k in ids:                           # unqueue first, so stopping a running one starts nothing
             t = self.tasks[k]
-            if t.status == "queued":
+            if t.status in waiting:
                 t.status = "stopped"
                 self.log.write("task_ended", task=t.id, name=t.name, status="stopped", duration_ms=0, calls=0,
-                               summary="stopped while queued")
+                               summary=f"dropped while {'held' if t.held_why else 'queued'}")
         for k in ids:
             t = self.tasks[k]
             if t.status == "running":
@@ -374,6 +424,9 @@ class Work:
             lines.append("log: " + " | ".join(t.logs[-8:]))
         if t.result is not None:
             lines.append(t.result.text())
+        elif t.status == "held":
+            lines.append(f"(Held: {t.held_why}. task(\"{t.id}\", resume=True) runs it, after= another task if "
+                         f"you like; task(\"{t.id}\", stop=True) drops it and what's behind it.)")
         elif t.status in ("running", "queued"):
             lines.append(f"(Checking again costs a step. wait(on=[\"{t.id}\"]) returns when it ends; meanwhile "
                          f"queue the next chore with run_script(..., background=True, after=\"{t.id}\").)")

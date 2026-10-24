@@ -183,39 +183,62 @@ def test_status_says_where_things_stand(server):
     anyio.run(_session, server["url"], body)
 
 
-def test_queue_runs_chores_in_order_and_skips_after_a_failure(server):
+def test_queue_runs_in_order_and_holds_what_follows_a_failure(server):
     ws = server["ws"]
     m = ext_with_reader_and_actor(ws)
     step = 'import time\ncall("probe_act", q=args["q"])\ntime.sleep(0.5)\nprint("done", args["q"])\n'
 
+    def bg(**kw):
+        return {"code": step, "background": True, **kw}
+
     async def body(s, changes):
         assert not (await s.call_tool("load_extension", {"manifest": m})).isError
-        first = text(await s.call_tool("run_script", {"code": step, "args": {"q": "a"}, "background": True}))
+        first = text(await s.call_tool("run_script", bg(args={"q": "a"})))
         assert first.startswith("started t1") and 'after="t1"' in first, first
-        q2 = await s.call_tool("run_script", {"code": step, "args": {"q": "b"}, "background": True, "after": "t1"})
+        q2 = await s.call_tool("run_script", bg(args={"q": "b"}, after="t1"))
         assert text(q2).startswith("queued t2") and "when t1 ends ok" in text(q2), text(q2)
         bad = await s.call_tool("run_script", {"code": "raise SystemExit(3)", "background": True, "after": "t2"})
         assert text(bad).startswith("queued t3")
-        never = await s.call_tool("run_script", {"code": step, "args": {"q": "z"}, "background": True, "after": "t3"})
-        assert text(never).startswith("queued t4")
+        assert text(await s.call_tool("run_script", bg(args={"q": "d"}, after="t3"))).startswith("queued t4")
+        assert text(await s.call_tool("run_script", bg(args={"q": "e"}, after="t4"))).startswith("queued t5")
         st = text(await s.call_tool("status", {}))
         assert "t2 code: queued after t1" in st and "t4 code: queued after t3" in st, st
         polled = text(await s.call_tool("task", {"id": "t4"}))
         assert 'wait(on=["t4"])' in polled and 'after="t4"' in polled, polled
         seen = ""
         with anyio.fail_after(40):
-            while "t4: skipped" not in seen:
-                seen += text(await s.call_tool("wait", {"on": ["t1", "t2", "t3", "t4"], "timeout_s": 20}))
+            while "Held t4, t5" not in seen:
+                seen += text(await s.call_tool("wait", {"on": ["t1", "t2", "t3"], "timeout_s": 20}))
         assert "t1: ok: done a" in seen and "t2: ok: done b" in seen and "t3: failed" in seen, seen
-        assert "t4: skipped: t3 ended failed" in seen
-        late = await s.call_tool("run_script", {"code": step, "background": True, "after": "t3"})
+        assert "t3 code: failed" in text(await s.call_tool("task", {"id": "t3"}))
+        assert "t4 code: held (t3 ended failed)" in text(await s.call_tool("task", {"id": "t4"}))
+        late = await s.call_tool("run_script", bg(after="t3"))
         assert late.isError and "already ended failed" in text(late)
+        # Fix it, and run the held chain after the fix.
+        assert text(await s.call_tool("run_script", bg(args={"q": "fix"}))).startswith("started t6")
+        resumed = text(await s.call_tool("task", {"id": "t4", "resume": True, "after": "t6"}))
+        assert "t4 code: queued after t6" in resumed and "t5 code: queued after t4" in resumed, resumed
+        seen = ""
+        with anyio.fail_after(40):
+            while "t5: ok" not in seen:
+                seen += text(await s.call_tool("wait", {"on": ["t4", "t5", "t6"], "timeout_s": 20}))
+        assert seen.index("t6: ok") < seen.index("t4: ok") < seen.index("t5: ok"), seen
+        # A plan that no longer fits: dropping a held task drops what's behind it.
+        await s.call_tool("run_script", {"code": "raise SystemExit(1)", "background": True})            # t7
+        await s.call_tool("run_script", bg(args={"q": "x"}, after="t7"))                                 # t8
+        await s.call_tool("run_script", bg(args={"q": "y"}, after="t8"))                                 # t9
+        with anyio.fail_after(20):
+            while "held" not in text(await s.call_tool("task", {"id": "t9"})):
+                await anyio.sleep(0.2)
+        dropped = text(await s.call_tool("task", {"id": "t8", "stop": True}))
+        assert "t8 code: stopped" in dropped and "t9 code: stopped" in dropped, dropped
 
     anyio.run(_session, server["url"], body)
     ev = events(server["run"])
-    started = [e for e in ev if e["type"] == "task_started"]
-    assert [e["task"] for e in started] == ["t1", "t2", "t3"] and started[1]["after"] == "t1"
-    assert [e["task"] for e in ev if e["type"] == "task_queued"] == ["t2", "t3", "t4"]
+    started = [e["task"] for e in ev if e["type"] == "task_started"]
+    assert started[:3] == ["t1", "t2", "t3"] and "t8" not in started and "t9" not in started
+    assert [e["task"] for e in ev if e["type"] == "task_held"][:2] == ["t4", "t5"]
+    assert [e["task"] for e in ev if e["type"] == "task_resumed"] == ["t4", "t5"]
 
 
 def test_idle_note_after_a_while_without_acting(tmp_path):

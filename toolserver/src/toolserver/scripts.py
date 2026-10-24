@@ -136,9 +136,9 @@ on what an earlier call returned) should be one run_script call, decided once.
         nothing else can act meanwhile (one pair of hands); hands=false makes a task that only
         reads, which can run beside it. wake_on_end: wake you when it ends. If your hands are
         busy, a task that needs them is queued and starts as soon as they're free.
-  after: with background, a task id: queue this task to start when that one ends ok (it is
-        skipped if that one fails or is stopped). Line up your next chores this way, so your
-        hands keep working while you think.
+  after: with background, a task id: queue this task to start when that one ends ok. If that one
+        fails or is stopped, this one is held, with whatever is behind it, until you resume it or
+        drop it (task). Line up your next chores this way, so your hands keep working while you think.
 Inside the script:
   call("tool_name", arg=value, ...)  -> that tool's parsed JSON result (or text); raises ToolFailed
   log("text")       progress that task() shows while it runs
