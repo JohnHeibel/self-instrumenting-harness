@@ -295,7 +295,13 @@ async def execute(ext: "Extensions", code: str, timeout_s: float, file: str = ""
         return Result(False, out, handle.stop_reason, calls, seconds, stopped=True)
     if proc.returncode == 0:
         return Result(True, out, "", calls, seconds)
-    return Result(False, out, errors[-1] if errors else _tail("\n".join(rest)), calls, seconds)
+    detail = errors[-1] if errors else _tail("\n".join(rest))
+    if not detail.strip():      # it exited non-zero and said nothing on stderr: say what we know
+        rc = proc.returncode
+        how = f"killed by signal {-rc}" if rc is not None and rc < 0 else f"exited with status {rc}"
+        last = out.splitlines()[-1][:300] if out else ""
+        detail = f"{how}; its last output: {last}" if last else f"{how}, with no output and nothing on stderr"
+    return Result(False, out, detail, calls, seconds)
 
 
 async def run(ext: "Extensions", code: str, timeout_s: float, file: str = "", args: dict | None = None,

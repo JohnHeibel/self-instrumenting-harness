@@ -257,6 +257,8 @@ def test_run_script_composes_tool_calls_in_one_step(server):
         bad = await s.call_tool("run_script", {"code": "print('half')\nx = 1\nraise ValueError('boom')"})
         text = bad.content[0].text
         assert bad.isError and "half" in text and "ValueError: boom at line 3: raise ValueError('boom')" in text
+        quiet = await s.call_tool("run_script", {"code": "import os\nprint('{\"error\": \"no path\"}', flush=True)\nos._exit(4)"})
+        assert quiet.isError and 'exited with status 4; its last output: {"error": "no path"}' in quiet.content[0].text
 
         # A saved script, run again by file with args; main()'s return value comes back as JSON.
         (ws / "chores").mkdir()
@@ -283,7 +285,7 @@ def test_run_script_composes_tool_calls_in_one_step(server):
     assert len(inner) == 7 and [e["ok"] for e in inner] == [True, True, True, True, False, True, True]
     assert inner[0]["hook"]["extension"] == "probe_kit" and inner[0]["args"] == {"q": "0"}
     outer = [e for e in ev if e["type"] == "tool_call" and e["tool"] == "run_script"]
-    assert [e["ok"] for e in outer] == [True, False, True, False, True, True] and outer[0]["inner_calls"] == 5
+    assert [e["ok"] for e in outer] == [True, False, False, True, False, True, True] and outer[0]["inner_calls"] == 5
     scripted = [e["tool"] for e in ev if e["type"] == "tool_call" and e.get("via") == "script" and e["channel"] != "hook"]
     assert scripted == ["set_goal", "list_hooks"]
 
