@@ -13,6 +13,15 @@ Two people work on this repo, each with their own coding agents (Claude Code, Co
 - `set_state` refuses to overwrite a key you haven't read or that changed since you read it. Re-read, merge, and set again; never work around it.
 - Don't put secrets in the mailbox.
 
+## Generality rule (applies to every change)
+
+The harness is the product; Factorio is only the first host. Before finishing any change to the harness (tool server, runner, agent image, event log, UI), ask: **would this work unchanged if the host were Kerbal Space Program, Excel, a web app, or a program nobody has seen before?**
+
+- **No host names, file paths, window titles, key bindings or game concepts in harness code, defaults or tool descriptions.** All of it belongs in `hosts/<host>.toml` (data) or in what the agent writes itself.
+- **Human-written host-specific code is allowed only in measuring instruments:** the grader, test fixtures, fake runs and goal files. It never goes on the agent's path to the host.
+- **Tests exercise the generic path with a host that isn't a game.** If a feature only works because of something Factorio happens to do, the design is wrong.
+- When a host needs something the harness can't express generically, add a generic capability with the host's need as data. Don't add a special case.
+
 ## Project context
 
 See `docs/BRIEF.md` for goals and decisions.

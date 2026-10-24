@@ -162,10 +162,11 @@ def test_extension_lifecycle(server):
         # A broken manifest names every problem and changes nothing.
         bad = ws / "extensions" / "bad" / "extension.json"
         bad.parent.mkdir(parents=True)
-        bad.write_text(json.dumps({"name": "Bad Name", "tools": [{"name": "screenshot", "run": []}]}))
+        bad.write_text(json.dumps({"name": "Bad Name", "tools": [{"name": "screenshot", "run": [], "where": "host"}]}))
         res = await s.call_tool("load_extension", {"manifest": "extensions/bad/extension.json"})
         text = res.content[0].text
         assert res.isError and "name:" in text and "reason:" in text and "built-in" in text and "run:" in text
+        assert 'only "sandbox" is supported' in text
 
         # Paths can't escape the workspace.
         res = await s.call_tool("load_extension", {"manifest": "../events.jsonl"})
