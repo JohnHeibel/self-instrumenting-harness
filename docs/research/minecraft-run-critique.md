@@ -60,3 +60,7 @@ Fix: grader `agent_died` markers (needs a grader restart); runner interrupts and
 ## 2026-10-24 04:40 PDT, cycle 13
 Evidence: 6 deaths logged (5 drownings, 1 spider) in about 3 h; no milestone since iron_tools at 10:26Z (about 1 h 15 min); 46 Bash steps in the last 30 min, 87% skill calls, so the agent is working, but progress is repeatedly erased by deaths. Context after the handoff grew 62k -> 118k in 45 min (about 1.2k per step), so the next handoff is due near 150k, in about 25 min.
 Fix (Minecraft-only): goal paragraph on respawn point (bed), night shelter, armor and food. Bridge forwarder committed (fresh runs only). Cumulative uncached tokens about 320k at 11:35Z for 8 milestones; wall-clock for 8 milestones: 3 h.
+
+## 2026-10-24 05:25 PDT, cycle 14
+Evidence: 7 `agent_died` markers (5 drownings, spider, pillager) plus about 2 before the grader restart (NOTES says about 9 deaths); no milestone since iron_tools at 10:26Z (2 h); the second handoff happened (context back to 62k); the agent rebuilt from zero, waited a night in a sealed shaft, and keeps a danger-zone list in NOTES. Cumulative 46.6M total tokens, 421k uncached, 8 milestones in 3 h 45 min.
+Fix (Minecraft-only): goal paragraph "Safe breadth" (bank crafted_25/50 near the base, where dying cannot erase it) with a list of 25+ craftable items; NUDGE text sent to main.
