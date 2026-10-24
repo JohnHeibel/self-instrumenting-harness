@@ -338,7 +338,7 @@ def test_the_same_failure_twice_gets_an_urgent_nudge(tmp_path):
         log = Log()
         board = tm.Board(log, tmp_path)
         w = tm.Work(Ext(), log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
-        for i, pos in enumerate(("1.5", "7.25", "3")):
+        for i, pos in enumerate(("1.5 ab12cd34ef", "7.25 0f9e8d7c6b", "3 deadbeef00")):
             t = w.start(f"raise Exception('No path to target at x={pos}')", "", "walker", None, 1, True, False)
             await t.job
         texts = [n.text for n in board.items if n.source.startswith("t")]

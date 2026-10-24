@@ -414,7 +414,8 @@ class Work:
                        calls=len(r.calls), summary=summary)
         again = ""
         if t.status == "failed":
-            key = (t.name, re.sub(r"-?\d+(\.\d+)?", "#", summary))   # positions, ticks may differ
+            masked = re.sub(r"[0-9a-f]{8,}", "#", summary)           # ids, hashes
+            key = (t.name, re.sub(r"-?\d+(\.\d+)?", "#", masked))    # positions, ticks, counts
             self.failures[key] = n = self.failures.get(key, 0) + 1
             if n >= 2:
                 again = (f" This is the {n}{'nd' if n == 2 else 'rd' if n == 3 else 'th'} time {t.name} failed with "
