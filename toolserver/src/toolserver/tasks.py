@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -137,8 +138,8 @@ class Board:
     async def wait(self, sources: list[str], timeout_s: float) -> list[Notice]:
         """Unseen notices from `sources` (any source if empty), waiting up to timeout_s for one."""
         deadline = time.monotonic() + timeout_s
-        while True:
-            hits = [n for n in self.unseen() if not sources or _from(n, sources)]
+        while True:     # an urgent notice from anything ends the wait too: it shouldn't sit unseen
+            hits = [n for n in self.unseen() if not sources or _from(n, sources) or n.urgent]
             if hits:
                 self.mark_seen(hits)
                 return hits
@@ -149,6 +150,21 @@ class Board:
                 await asyncio.wait_for(self._changed.wait(), left)
             except asyncio.TimeoutError:
                 return []
+
+    async def until_done_or_urgent(self, job: asyncio.Future, timeout_s: float) -> bool:
+        """Wait for `job` to end, but return early (False) when an urgent notice is posted meanwhile,
+        so a wait on one task doesn't keep the agent from hearing that something needs it now."""
+        mark, deadline = len(self.items), time.monotonic() + timeout_s
+        while not job.done():
+            if any(n.urgent and not n.seen for n in self.items[mark:]):
+                return False
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            changed = asyncio.ensure_future(self._changed.wait())
+            await asyncio.wait({asyncio.shield(job), changed}, timeout=left, return_when=asyncio.FIRST_COMPLETED)
+            changed.cancel()
+        return True
 
     def _write_wake(self) -> None:
         urgent = [{"source": n.source, "text": n.text} for n in self.items if n.urgent and not n.seen]
@@ -241,6 +257,7 @@ class Work:
         self.ext, self.log, self.run_dir, self.hands, self.board = ext, log, run_dir, hands, board
         self.harness_url, self.builtins = harness_url, builtins
         self.tasks: dict[str, Task] = {}
+        self.failures: dict[tuple, int] = {}    # (task name, error with numbers masked) -> times
         self.rules: dict[str, Rule] = {}
         self._n = 0
         self._rules_path = run_dir / "rules.json"
@@ -395,7 +412,17 @@ class Work:
         summary = (r.out.strip().splitlines() or [""])[-1][:200] if r.ok else r.detail[:200]
         self.log.write("task_ended", task=t.id, name=t.name, status=t.status, duration_ms=round(r.seconds * 1000),
                        calls=len(r.calls), summary=summary)
-        self.board.post(t.id, f"{t.status}: {summary or '(no output)'}", urgent=t.wake_on_end and not r.stopped)
+        again = ""
+        if t.status == "failed":
+            key = (t.name, re.sub(r"-?\d+(\.\d+)?", "#", summary))   # positions, ticks may differ
+            self.failures[key] = n = self.failures.get(key, 0) + 1
+            if n >= 2:
+                again = (f" This is the {n}{'nd' if n == 2 else 'rd' if n == 3 else 'th'} time {t.name} failed with "
+                         f"this same error: running it again unchanged won't help. Look at why (read the state "
+                         f"where it fails) or change the approach.")
+                self.log.write("task_repeat_failure", task=t.id, name=t.name, times=n, summary=summary)
+        self.board.post(t.id, f"{t.status}: {summary or '(no output)'}{again}",
+                        urgent=(t.wake_on_end and not r.stopped) or bool(again))
         self.pump()
 
     async def stop(self, tid: str, why: str = "stopped") -> str:

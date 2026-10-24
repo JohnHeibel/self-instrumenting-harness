@@ -284,10 +284,7 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
             else:
                 t = work.tasks.get(id)
                 if t and t.status == "running" and wait_s > 0 and t.job:
-                    try:
-                        await asyncio.wait_for(asyncio.shield(t.job), min(float(wait_s), 900))
-                    except asyncio.TimeoutError:
-                        pass
+                    await board.until_done_or_urgent(t.job, min(float(wait_s), 900))
                 text = work.describe(id)
             res.set("text", len(text), summary=text.splitlines()[0][:200])
             return text

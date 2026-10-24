@@ -290,3 +290,59 @@ def test_stalled_task_holding_the_hands_is_reported_once_per_kind(tmp_path):
     assert len(board.posts) == 2 and "no acting call for 2.0 min (5 reads since)" in board.posts[1][1]
     assert [kw["kind"] for typ, kw in log.rows if typ == "task_stalled"] == ["repeat", "quiet"]
     assert "the most repeated 11x" in w.describe("t1")
+
+
+def test_waiting_on_a_task_ends_early_on_an_urgent_notice(tmp_path):
+    import asyncio
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    async def go():
+        board = tm.Board(Log(), tmp_path)
+        job = asyncio.ensure_future(asyncio.sleep(30))
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, board.post, "t9", "plain")              # not urgent: keeps waiting
+        loop.call_later(0.15, board.post, "t2", "stuck", True)        # urgent: ends the wait
+        t0 = loop.time()
+        assert await board.until_done_or_urgent(job, 10) is False
+        assert 0.1 < loop.time() - t0 < 2
+        board.mark_seen(board.unseen())
+        assert await board.until_done_or_urgent(asyncio.ensure_future(asyncio.sleep(0.01)), 10) is True
+        loop.call_later(0.05, board.post, "t9", "plain again")
+        loop.call_later(0.1, board.post, "t2", "again", True)
+        assert [n.text for n in await board.wait(["t7"], 5)] == ["again"]   # urgent ends a wait on others
+        job.cancel()
+
+    asyncio.run(go())
+
+
+def test_the_same_failure_twice_gets_an_urgent_nudge(tmp_path):
+    import asyncio
+    from toolserver import tasks as tm
+
+    class Log:
+        def __init__(self):
+            self.rows = []
+
+        def write(self, typ, **kw):
+            self.rows.append(typ)
+
+    class Ext:
+        def hook_info(self, name):
+            return None
+
+    async def go():
+        log = Log()
+        board = tm.Board(log, tmp_path)
+        w = tm.Work(Ext(), log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+        for i, pos in enumerate(("1.5", "7.25", "3")):
+            t = w.start(f"raise Exception('No path to target at x={pos}')", "", "walker", None, 1, True, False)
+            await t.job
+        texts = [n.text for n in board.items if n.source.startswith("t")]
+        assert "same error" not in texts[0] and "2nd time walker failed" in texts[1] and "3rd time" in texts[2]
+        assert board.items[1].urgent and log.rows.count("task_repeat_failure") == 2
+
+    asyncio.run(go())
