@@ -233,3 +233,43 @@ def test_tools_survive_a_tool_server_restart(server):
     ev = events(server["run"])
     assert [(e["extension"], e["version"]) for e in ev if e["type"] == "hook_restored"] == [("probe_kit", 1)]
     assert (server["run"] / "extensions" / "probe_kit" / "v1").exists()
+
+
+def test_run_script_composes_tool_calls_in_one_step(server):
+    ws = server["ws"]
+    m = write_ext(ws, "probe_kit", [tool("probe_state")], mod_text=None, reload=None)
+    code = textwrap.dedent("""
+        seen = [call("probe_state", q=str(i))["echo"]["q"] for i in range(3)]
+        try:
+            call("probe_state", fail=True)
+        except ToolFailed:
+            seen.append("caught")
+        print(",".join(seen))
+    """)
+
+    async def body(s, changes):
+        assert not (await s.call_tool("load_extension", {"manifest": m})).isError
+        res = await s.call_tool("run_script", {"code": code, "timeout_s": 60})
+        assert not res.isError, res.content[0].text
+        text = res.content[0].text
+        assert text.startswith("0,1,2,caught") and "4 tool calls" in text
+        bad = await s.call_tool("run_script", {"code": "print('half')\nx = 1\nraise ValueError('boom')"})
+        text = bad.content[0].text
+        assert bad.isError and "half" in text and "ValueError: boom at line 3: raise ValueError('boom')" in text
+
+        # A saved script, run again by file with args; main()'s return value comes back as JSON.
+        (ws / "chores").mkdir()
+        (ws / "chores" / "probe_many.py").write_text(
+            "def main(n):\n    return {'qs': [call('probe_state', q=str(i))['echo']['q'] for i in range(n)]}\n")
+        saved = await s.call_tool("run_script", {"file": "chores/probe_many.py", "args": {"n": 2}})
+        assert not saved.isError and saved.content[0].text.startswith('{"qs":["0","1"]}'), saved.content[0].text
+        assert (await s.call_tool("run_script", {"file": "../events.jsonl"})).isError
+        assert (await s.call_tool("run_script", {})).isError
+
+    anyio.run(_session, server["url"], body)
+    ev = events(server["run"])
+    inner = [e for e in ev if e["type"] == "tool_call" and e.get("via") == "script"]
+    assert len(inner) == 6 and [e["ok"] for e in inner] == [True, True, True, False, True, True]
+    assert inner[0]["hook"]["extension"] == "probe_kit" and inner[0]["args"] == {"q": "0"}
+    outer = [e for e in ev if e["type"] == "tool_call" and e["tool"] == "run_script"]
+    assert [e["ok"] for e in outer] == [True, False, True, False, False] and outer[0]["inner_calls"] == 4

@@ -35,14 +35,17 @@ def report(run_dir: Path, minutes: float = 60, now: datetime | None = None) -> s
     since = now - timedelta(minutes=minutes)
     calls = [r for r in _records(run_dir / "events.jsonl", since) if r.get("type") == "tool_call"]
     calls = [c for c in calls if c.get("tool") != "costs"]
-    lines = [f"Last {minutes:g} min: {len(calls)} tool calls, {sum(1 for c in calls if not c.get('ok'))} failed."]
+    steps = [c for c in calls if c.get("via") != "script"]   # calls inside run_script cost no step
+    inner = len(calls) - len(steps)
+    lines = [f"Last {minutes:g} min: {len(steps)} tool calls, {sum(1 for c in steps if not c.get('ok'))} failed"
+             + (f"; {inner} more calls ran inside scripts." if inner else ".")]
 
     usage = [r for r in _records(run_dir / "runner.jsonl", since) if r.get("type") == "usage"]
     if len(usage) >= 2:
         total = usage[-1].get("total_tokens", 0) - usage[0].get("total_tokens", 0)
         uncached = usage[-1].get("uncached_tokens", 0) - usage[0].get("uncached_tokens", 0)
-        per_call = f", about {total // max(len(calls), 1):,} per tool call" if calls else ""
-        lines.append(f"Model tokens: {total:,} ({uncached:,} not cached){per_call}. "
+        n = len(usage) - 1   # one usage record per model request: your steps, shell commands included
+        lines.append(f"Model: {n} steps, {total:,} tokens ({uncached:,} not cached), about {total // n:,} per step. "
                      f"Context now: {usage[-1].get('input_tokens', 0):,} tokens.")
 
     if calls:
@@ -67,7 +70,7 @@ def report(run_dir: Path, minutes: float = 60, now: datetime | None = None) -> s
             lines.append("Largest text results: " + "; ".join(
                 f"{c.get('tool')} {json.dumps(c.get('args', {}))[:80]} -> {_kb(c.get('result_bytes') or 0)}"
                 for c in texts))
-        stamps = sorted(datetime.fromisoformat(c["ts"].replace("Z", "+00:00")) for c in calls)
+        stamps = sorted(datetime.fromisoformat(c["ts"].replace("Z", "+00:00")) for c in steps)
         gaps = sorted((b - a).total_seconds() for a, b in zip(stamps, stamps[1:]))
         if gaps:
             lines.append(f"Time between calls (your thinking): median {gaps[len(gaps) // 2]:.0f} s, "

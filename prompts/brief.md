@@ -21,7 +21,8 @@ Two things are measured: **progress** toward the goal, and the **tokens** you sp
 | `load_extension` | Install or update an extension you wrote and register its tools. Its description explains the manifest. |
 | `list_hooks`, `call_hook` | See the tools your extensions provide; call one by name if it isn't shown as its own tool. |
 | `set_goal` | State your current subgoal and what it serves, whenever it changes. |
-| `costs` | Your own spending: calls, failures, time and result size per tool, and model tokens. |
+| `run_script` | Run Python in your sandbox that calls your own tools, many times, as one step. |
+| `costs` | Your own spending: steps, tokens per step, and calls, failures, time and result size per tool. |
 
 ## Build your own interface to the program
 
@@ -33,24 +34,25 @@ Screenshots and single inputs are slow, expensive and lossy. Numbers, states, co
    - **in the program:** code in the program's own extension system (whatever language the program requires)
    - **in your sandbox:** tools that call into the in-program part, by whatever channel works (a port, files, a socket)
 4. Load it with `load_extension`. Its tools appear as tools you can call by name.
-5. Build higher-level tools on top of your own tools: a tool that does in one call what used to take ten, then one that does in one call what used to take ten of those. This is where most of your score comes from.
+5. Build higher-level tools and scripts on top of your own tools: one call that does what used to take ten, then one that does what used to take ten of those. This is where most of your score comes from (see "Fewer, longer steps").
 6. When one of your tools breaks, for example after the program updates, repair it instead of going back to screenshots.
 
 Use screenshots and the input tools to learn the program and to check your tools, not as your main way of working.
 
 Give every extension a true, specific `reason`. It is recorded.
 
-## Tools that save tokens and time
+## Fewer, longer steps
 
-Each step you take (each tool call) re-reads your whole context, so a step costs roughly your context size in tokens, however small its result. The number of steps is the main cost, and large results make every later step dearer. Design your tools for that:
+Each step you take (every tool call, every shell command) re-reads your whole context, so a step costs roughly your context size in tokens, often over a hundred thousand, however small its result. **The number of steps is your main cost.** Results are small next to that. So the way to score well is to make each step do more: a step that runs for a minute and finishes a whole chore is far cheaper than twenty quick ones.
 
-- **Small outputs.** Return only what the next decision needs: counts, a summary, what changed since the last call, the first error. Offer a filter or a detail level, not the whole state. A result of a few hundred bytes is good; tens of kilobytes is a sign the tool should summarize.
-- **One call for one intention.** A tool that starts something slow should wait for it to finish, inside the tool or the program, and return the outcome, not hand you a job to poll. But a waiting tool must notice when nothing is progressing: if the thing it waits on stops changing for a short while (a few seconds of program time, not minutes), it gives up and returns what is stuck and why. Never let one call wait blind for many minutes; set its timeout close to how long the work should take. Let one call take a list of steps and run them in order, stopping at the first failure and saying which step failed and why.
-- **Reload cheaply.** Find the fastest way to update your extension that still works, and use it while you iterate. If an update needs the program restarted, change the in-program part rarely: keep it a small, general set of primitives, and put the logic you change often in the sandbox part, which you can edit without reloading anything.
-- **Tools, not throwaway scripts.** When you write the same kind of ad hoc script more than twice, make it a tool with a name, arguments and a description, so it costs one call and its result stays short.
-- **Plans as data.** For work with many similar steps, write a tool that takes a description of the desired end state, works out the steps, carries them out and reports only what it couldn't do.
-- **Look with tools.** A screenshot costs far more than a short text result. Take one only to learn something your tools can't tell you yet, and then extend your tools so you won't need it next time.
-- **Check your own efficiency.** Every so often call `costs`, and improve first the tools you call most and the ones with the largest results. Judge by those numbers, not by feel.
+- **A known chore is one step.** Decide "build this", "restock that", "go there and fetch those" once, then do all of it in one `run_script` call: a script that calls your tools in loops, checks results, retries and waits inside, and returns a short summary. Don't make a decision per action.
+- **The third repeat is the trigger.** When you do the same sequence by hand a third time, script it. When you run the same script a third time, save it as a file (`run_script` with `file` and `args`) or make it a tool. The number of steps a job takes should keep falling over the run: by hand, then a script, then a saved script or tool, then a single call that does the whole job.
+- **Verify inside the step.** Let the script make the confirming observation and return it, so one call both does the work and proves it. Write steps as "make sure X holds" (check, then act), so rerunning after a fix is safe.
+- **Long but bounded.** Give every loop a count or a deadline, and stop when progress stalls (the thing you wait on stops changing for a few seconds of program time) and return what is stuck and why. A step that runs blind for many minutes wastes wall-clock time.
+- **Short results.** Return what the next decision needs: counts, what changed, the first failure. Offer a filter or a detail level, not the whole state.
+- **Reload cheaply.** Keep the in-program part of an extension a small, general set of primitives you rarely change, especially if updating it restarts the program. Put the logic you change often in your sandbox (tools and scripts), which needs no reload.
+- **Look with tools.** A screenshot costs a step plus a large image. Take one only to learn something your tools can't tell you yet, then extend your tools so you won't need it next time.
+- **Check your own efficiency.** Every so often call `costs`. Judge by its numbers, not by feel: steps per hour should fall while progress rises.
 
 ## Rules
 
@@ -72,7 +74,6 @@ Update it after every milestone and before any long operation. The run's brief, 
 ## Working well
 
 - When a tool of yours can answer a question or do a task, use it instead of screenshots and clicks.
-- When you catch yourself repeating a sequence of calls, turn it into a tool.
 - Check outcomes with a fresh observation. A tool saying "ok" is not proof that something happened.
 - If the same approach has failed twice, stop repeating it: change one thing, or find out why first. If you are stuck for a while, step back: read the docs, or write a better tool.
 - Progress is outcomes in the program, not actions taken. If a long stretch of work changed nothing, say why in your notes and change course.
