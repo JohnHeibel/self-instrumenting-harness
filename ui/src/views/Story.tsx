@@ -9,7 +9,16 @@ import { SPEEDS, Timeline } from '../components/Timeline'
 /** Replay of a whole run: scrub, play at timelapse speed, jump between key moments, open any hook. */
 export function Story({ run, artifactUrl }: { run: Run; artifactUrl: (p: string) => string }) {
   const params = new URLSearchParams(location.hash.slice(1))
-  const [at, setAt] = useState(() => Number(params.get('t')) ? run.t0 + Number(params.get('t')) * 1000 : run.t0)
+  const [at, setAt] = useState(() => params.get('t') === 'live' ? run.t1
+    : Number(params.get('t')) ? run.t0 + Number(params.get('t')) * 1000 : run.live ? run.t1 : run.t0)
+  // Following: when you're at the newest moment and new records arrive, stay at the newest moment.
+  const lastEnd = useRef(run.t1)
+  useEffect(() => {
+    if (run.t1 !== lastEnd.current) {
+      setAt(a => (a >= lastEnd.current - 2000 ? run.t1 : a))
+      lastEnd.current = run.t1
+    }
+  }, [run.t1])
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(600)
   const [open, setOpen] = useState<string | null>(() => params.get('hook'))
@@ -49,21 +58,23 @@ export function Story({ run, artifactUrl }: { run: Run; artifactUrl: (p: string)
   // Follow links that change #t= while the page is open.
   useEffect(() => {
     const on = () => {
-      const t = Number(new URLSearchParams(location.hash.slice(1)).get('t'))
-      if (Number.isFinite(t)) setAt(run.t0 + t * 1000)
+      const raw = new URLSearchParams(location.hash.slice(1)).get('t')
+      if (raw === 'live') setAt(run.t1)
+      else if (Number.isFinite(Number(raw))) setAt(run.t0 + Number(raw) * 1000)
     }
     addEventListener('hashchange', on)
     return () => removeEventListener('hashchange', on)
-  }, [run.t0])
+  }, [run.t0, run.t1])
 
   // Keep the position in the URL so a moment can be linked or reloaded.
   useEffect(() => {
     const id = setTimeout(() => {
-      const p = new URLSearchParams(location.hash.slice(1)); p.set('t', String(Math.round((at - run.t0) / 1000)))
+      const p = new URLSearchParams(location.hash.slice(1))
+      p.set('t', run.live && at >= run.t1 - 2000 ? 'live' : String(Math.round((at - run.t0) / 1000)))
       history.replaceState(null, '', '#' + p.toString())
     }, 300)
     return () => clearTimeout(id)
-  }, [at, run.t0])
+  }, [at, run.t0, run.t1, run.live])
 
   const hooks = run.hooks(at)
   const openHook = open ? hooks.find(h => h.name === open) : undefined

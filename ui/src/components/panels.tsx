@@ -13,6 +13,8 @@ export function Header({ run, at }: { run: Run; at: number }) {
   return (
     <header className="head">
       <div className="brand">Sisyphus<em lang="grc">Σίσυφος</em><span>{run.title}</span></div>
+      {run.live && <span className="pill live" title="New records appear as the run writes them">
+        <i className="livedot" />{at >= run.t1 - 2000 ? 'Live' : 'Live run · behind'}</span>}
       <dl className="stats">
         <div><dt>Tool calls</dt><dd>{c.calls.toLocaleString()}</dd></div>
         <div className="fail"><dt>Failed</dt><dd>{c.failed}</dd></div>

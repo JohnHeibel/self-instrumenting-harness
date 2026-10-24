@@ -62,6 +62,11 @@ export class Run {
   }
   get goal(): string { return this.started?.goal ?? '' }
 
+  /** Still running: no run_ended yet and a record in the last two minutes. */
+  get live(): boolean {
+    return !this.of('run_ended').length && Date.now() - this.t1 < 120_000
+  }
+
   agentState(at: number): { label: string; state: string; since: number } {
     const s = this.latest('agent_state', at)
     if (!s) return { label: 'Starting', state: 'thinking', since: this.t0 }

@@ -8,7 +8,7 @@ const RUNS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../runs
 
 /** Serves local run directories (docs/interfaces/event-log.md) to the UI in development.
  *  GET /api/runs                  -> [{name, files}]
- *  GET /api/runs/<name>/records   -> all *.jsonl records in the run, merged and ordered
+ *  GET /api/runs/<name>/records   -> all *.jsonl records in the run (?since=<ISO ts>: only newer ones)
  *  GET /runs/<name>/shots/<img>   -> screenshot thumbnails; nothing else under runs/ is served */
 function localRuns(): Plugin {
   return {
@@ -29,10 +29,13 @@ function localRuns(): Plugin {
         if (m) {
           const dir = safeJoin(RUNS, m[1])
           if (!dir || !fs.existsSync(dir)) return send(res, 404, 'text/plain', 'no such run')
+          // ?since=<ISO ts>: only records at or after it, for live polling (clients dedupe by writer+seq).
+          const since = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('since') ?? ''
           const records = fs.readdirSync(dir).filter(f => f.endsWith('.jsonl')).flatMap(f =>
             fs.readFileSync(path.join(dir, f), 'utf8').split('\n').filter(Boolean).flatMap(line => {
               try { return [JSON.parse(line)] } catch { return [] }  // a line still being written
-            }))
+            })).filter(r => !since || (typeof r.ts === 'string' && r.ts >= since))
+          res.setHeader('Cache-Control', 'no-store')
           return send(res, 200, 'application/json', JSON.stringify(records))
         }
         // Saved artifacts only: screenshots under <run>/shots/. A run directory also holds

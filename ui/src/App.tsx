@@ -18,9 +18,37 @@ export default function App() {
   useEffect(() => {
     setRun(null); setError(null)
     if (!runName) { fetch('/api/runs').then(r => r.json()).then(setRuns, e => setError(String(e))); return }
-    fetch(`/api/runs/${encodeURIComponent(runName)}/records`)
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status} loading ${runName}`)))
-      .then((recs: Rec[]) => setRun(new Run(recs)), e => setError(String(e)))
+    // Load the run, then keep polling for new records so a running run updates live.
+    const url = `/api/runs/${encodeURIComponent(runName)}/records`
+    const seen = new Map<string, Rec>()
+    let stopped = false, timer = 0
+    const merge = (recs: Rec[]) => {
+      let added = 0
+      for (const r of recs) {
+        const key = `${r.writer}:${r.seq}`
+        if (!seen.has(key)) { seen.set(key, r); added++ }
+      }
+      return added
+    }
+    const poll = async () => {
+      if (stopped) return
+      let latest = ''
+      for (const r of seen.values()) if (r.ts > latest) latest = r.ts
+      // Re-ask for the last 30 s too: writers flush independently, so a record can land slightly late.
+      const since = latest ? new Date(Date.parse(latest) - 30_000).toISOString() : ''
+      try {
+        const r = await fetch(since ? `${url}?since=${encodeURIComponent(since)}` : url, { cache: 'no-store' })
+        if (!r.ok) throw new Error(`${r.status} loading ${runName}`)
+        const added = merge(await r.json())
+        if (added || !since) setRun(new Run([...seen.values()]))
+      } catch (e) {
+        if (!seen.size) { setError(String(e)); return }
+      }
+      const ended = [...seen.values()].some(x => x.type === 'run_ended')
+      timer = window.setTimeout(poll, ended ? 30_000 : 2_000)
+    }
+    poll()
+    return () => { stopped = true; clearTimeout(timer) }
   }, [runName])
 
   if (error) return <div className="picker">Couldn't load: {error}</div>
