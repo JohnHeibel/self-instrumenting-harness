@@ -57,6 +57,18 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 
 **`server_started`**: `host`, `port`.
 
+**Background work** (toolserver/src/toolserver/tasks.py). Calls made by a background task are `tool_call` records with `via` = `task:<id>`.
+
+| Type | Fields |
+|---|---|
+| `task_started` | `task` (`t1`, `t2`, …), `name` (kept script, file or `code`), `hands` (it may act, holding the agent's one pair of hands), `minutes`, `args`, `why` (e.g. which rule started it) |
+| `task_queued` | `task`, `name`, `hands`, `after` (the task it waits to end ok) or `behind` (who held the hands), `args`, `why`: a task waiting to start |
+| `task_held`, `task_resumed` | `task`, `name`, `after`; held adds `why` (e.g. `t3 ended failed`). A task waiting on one that failed or was stopped is held, with everything behind it, until the agent resumes it (optionally `after` another task) or drops it |
+| `task_ended` | `task`, `name`, `status` (`ok`, `failed`, `stopped`; a queued or held task the agent dropped ends `stopped` with `calls` 0), `duration_ms`, `calls`, `summary`. `task_started` of a queued task adds `after` and `queued_s` |
+| `rule_set`, `rule_removed`, `rules_restored` | `rule`, its `check` (a kept script name, or `code` with the code), `args`, `every_s`, `do` (`tell`, `wake`, `run:<script>`), `times`, `cooldown_s`; removal adds `why` and `fired` |
+| `rule_fired` | `rule`, `text` (what the check reported), `do`, `count` |
+| `notice` | `notice` (number), `source` (`t3`, `rule:<name>`, `script`), `text`, `urgent`: what was reported to the agent. Urgent notices also go to the run dir's `WAKE` file until delivered, and the runner wakes the agent for them |
+
 ### Fields any `tool_call` may carry, for the UI
 
 | Field | Meaning |
@@ -76,7 +88,7 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 | `usage` | After **every model request**: `total_tokens` (the thread total so far, including cached input), `context_window`, plus the deltas since the previous `usage`: `input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`. Turns can last hours, so per-request records keep the cost curve live |
 | `turn_started`, `turn_completed` | `turn`, `turn_id`. `turn_completed` adds `status` (`completed`, `interrupted`, `failed`, or `cut_off` when the runner died mid-turn and closed it on restart), `duration_ms`, `error`, and `turn_total_tokens` |
 | `checkpoint` | `label`, `ref` |
-| `marker` | `label`, `kind`: a moment worth a timeline marker that no other record implies. Kinds so far: `planted_break`, `runner_restart`, `interrupt` (with `reason`), `prompt_goal`, `prompt_continue`, `toolserver_restart` |
+| `marker` | `label`, `kind`: a moment worth a timeline marker that no other record implies. Kinds so far: `planted_break`, `runner_restart`, `interrupt` (with `reason`; `wake` when the agent was woken for an urgent notice), `prompt_goal`, `prompt_continue`, `prompt_wake`, `toolserver_restart` |
 | `run_ended` | `reason`, `turns`, `total_tokens` |
 
 ### Written by the grader
@@ -95,6 +107,7 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 - **Interface coverage** over a time window is hook observations ÷ (hook observations + screenshots), where a hook observation is a `tool_call` with `channel = "hook"`. Always show it next to the cost curve, because an agent can raise the ratio just by looking less.
 - **Cost per milestone** is the sum of `usage` tokens between consecutive `milestone` records.
 - **Leverage** over a time window is `program_actions` counts ÷ model steps (`usage` records), with tokens per action next to it: how much the program gets done per step. It's the number the agent's tools should raise: milestones get harder as a run goes on, but the cost of an equivalent action should fall. The `costs` tool reports it.
+- **Time use** over a window splits wall-clock time while the agent runs into *hands busy* (a background task holding the hands, a foreground `run_script` with `held_hands`, or an acting call made directly: `channel` `input`, or `hook` with `hook.acts` true), *tools only* (any other tool call or reading task running), and *idle* (nothing running: the model thinking between steps, or a shell command, which the tool server doesn't see). Time when the runner's `agent_state` isn't thinking/acting/compacting/waiting is *off*. Idle should fall as the agent overlaps its thinking with background work. `costs` reports it; `tools/time_use.py` bins a whole run.
 - **State coverage** comes from the grader, not this log: which kinds of game state have at least one working hook.
 
 All additions are backward compatible: readers ignore types and fields they don't know. Every writer uses the same `run_id`; `seq` counts per writer.

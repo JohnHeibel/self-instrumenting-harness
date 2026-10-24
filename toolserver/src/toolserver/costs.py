@@ -5,6 +5,11 @@ events.jsonl (tool calls: duration, result size, errors) and, when present, runn
 cumulative model tokens) in the run directory, and `program_actions` records from any log there
 (written by host-side code from the program's own counts): actions done in the program per step,
 the number that shows how much each step gets done.
+
+It also splits wall-clock time (time_use): how much of it the agent's hands were busy acting on the
+program, how much its tools were running with its hands free (reading, waiting), and how much nothing
+was running at all, which is the model thinking between steps (or a shell command). Idle hands while the
+model thinks is time the program could have been worked on.
 """
 
 from __future__ import annotations
@@ -56,6 +61,93 @@ def program_actions(run_dir: Path, since: datetime) -> tuple[int, dict[str, int]
     return (count, kinds) if found else None
 
 
+AGENT_STATES = {"thinking", "acting", "compacting", "waiting"}   # runner states while the agent runs
+
+
+def _t(r: dict) -> float:
+    return datetime.fromisoformat(r["ts"].replace("Z", "+00:00")).timestamp()
+
+
+def _all(path: Path) -> list[dict]:
+    return _records(path, datetime.min.replace(tzinfo=timezone.utc))
+
+
+def _covered(spans: list[tuple[float, float]], a: float, b: float) -> float:
+    """Seconds of [a, b] covered by the union of spans."""
+    total, end = 0.0, a
+    for s, e in sorted((max(s, a), min(e, b)) for s, e in spans if e > a and s < b):
+        if e > end:
+            total += e - max(s, end)
+            end = e
+    return total
+
+
+def _not_running(runner: list[dict], a: float, b: float) -> list[tuple[float, float]]:
+    """Spans of [a, b] where the runner said the agent wasn't running (host down, paused, backing off...)."""
+    states = [(_t(r), r.get("state")) for r in runner if r.get("type") == "agent_state"]
+    out = []
+    for (t0, st), nxt in zip(states, states[1:] + [(b, None)]):
+        if st not in AGENT_STATES:
+            out.append((t0, nxt[0]))
+    return out
+
+
+def spans(run_dir: Path, now: float) -> dict[str, list[tuple[float, float]]]:
+    """From events.jsonl: `hands` spans (something acting on the program: a background task holding the
+    hands, a foreground script that held them, an acting tool called directly) and `tools` spans (any
+    tool call of the agent's or background task running, acting or not)."""
+    hands, tools, open_tasks = [], [], {}
+    for r in _all(run_dir / "events.jsonl"):
+        typ = r.get("type")
+        if typ == "task_started":
+            open_tasks[r.get("task")] = (_t(r), bool(r.get("hands")))
+        elif typ == "task_ended" and r.get("task") in open_tasks:
+            start, held = open_tasks.pop(r.get("task"))
+            tools.append((start, _t(r)))
+            if held:
+                hands.append((start, _t(r)))
+        elif typ == "tool_call" and r.get("tool") != "costs":
+            via = r.get("via") or ""
+            if via == "script" or via.startswith("task:"):
+                continue                              # inside a script or task: already covered by it
+            end = _t(r)
+            span = (end - (r.get("duration_ms") or 0) / 1000, end)
+            tools.append(span)
+            if r.get("channel") == "input" or (r.get("channel") == "hook" and (r.get("hook") or {}).get("acts", True)):
+                hands.append(span)
+            elif r.get("tool") == "run_script" and r.get("held_hands", (r.get("inner_calls") or 0) > 0):
+                hands.append(span)
+    for start, held in open_tasks.values():           # still running
+        tools.append((start, now))
+        if held:
+            hands.append((start, now))
+    return {"hands": hands, "tools": tools}
+
+
+def time_use(run_dir: Path, a: float, b: float, sp: dict | None = None, runner: list[dict] | None = None) -> dict:
+    """Seconds of [a, b] by what was going on: hands (acting on the program), tools (running, hands free),
+    idle (nothing running while the agent ran: the model thinking), off (the agent wasn't running)."""
+    sp = sp or spans(run_dir, b)
+    runner = _all(run_dir / "runner.jsonl") if runner is None else runner
+    off_spans = _not_running(runner, a, b)
+    off = _covered(off_spans, a, b)
+    # Only while the agent ran: a task still going while the run is off doesn't count.
+    hands = _covered(sp["hands"] + off_spans, a, b) - off
+    busy = _covered(sp["hands"] + sp["tools"] + off_spans, a, b) - off
+    idle = max(0.0, (b - a) - _covered(sp["hands"] + sp["tools"] + off_spans, a, b))
+    return {"wall": b - a, "hands": hands, "tools": busy - hands, "idle": idle, "off": off,
+            "off_spans": off_spans}
+
+
+def longest_idle(sp: dict, off_spans: list, a: float, b: float) -> float:
+    """The longest stretch of [a, b] with nothing running and the agent running."""
+    longest, end = 0.0, a
+    for s, e in sorted((max(s, a), min(e, b)) for s, e in sp["hands"] + sp["tools"] + off_spans if e > a and s < b):
+        longest = max(longest, s - end)
+        end = max(end, e)
+    return max(longest, b - end)
+
+
 def _kb(n: float) -> str:
     return f"{n / 1024:.1f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
 
@@ -88,6 +180,16 @@ def report(run_dir: Path, minutes: float = 60, now: datetime | None = None) -> s
         if n:
             line += f", {count / n:.1f} per step" + (f", about {total // count:,} tokens per action" if count else "")
         lines.append(line + ".")
+
+    a, b = since.timestamp(), now.timestamp()
+    sp = spans(run_dir, b)
+    use = time_use(run_dir, a, b, sp)
+    active = use["wall"] - use["off"]
+    if active > 0 and (sp["hands"] or sp["tools"]):
+        pct = lambda k: f"{use[k] / active:.0%}"
+        lines.append(f"Time (while you ran): hands busy {pct('hands')} (acting on the program), tools running "
+                     f"with hands free {pct('tools')}, nothing running {pct('idle')} (you thinking between "
+                     f"steps); longest stretch with nothing running {longest_idle(sp, use['off_spans'], a, b) / 60:.1f} min.")
 
     if calls:
         by: dict[str, dict] = {}

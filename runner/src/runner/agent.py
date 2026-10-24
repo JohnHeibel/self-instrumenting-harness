@@ -4,7 +4,7 @@ Each run gets its own Codex home under the run dir (`codex-home/`), mounted over
 /home/agent/.codex, so thread history survives container restarts and `thread/resume`
 finds it. The agent's workspace (`workspace/`, mounted at /home/agent/work) holds its
 notes and also survives. The host's auth.json is bind-mounted, not copied, so a token
-refresh can't fork the login (ModdedBench lesson).
+refresh can't fork the login.
 """
 
 from __future__ import annotations

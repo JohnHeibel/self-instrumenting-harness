@@ -16,7 +16,11 @@ It owns the run directory and the tool server's lifecycle, writes runner.jsonl
   Codex reports a rate limit reached with a reset time, the backoff waits until then instead.
   A completed turn, or any turn longer than 10 minutes, resets the count.
 - No turn starts while the host is down; a host that goes down mid-turn interrupts it.
-- Every turn after the first gets the same fixed CONTINUE_PROMPT.
+- Every turn after the first gets the same fixed CONTINUE_PROMPT, except a wake-up: when the tool
+  server writes WAKE (an urgent notice from one of the agent's own rules or tasks), the runner
+  interrupts the agent's thinking and starts a turn that tells it what happened. While the agent is
+  in a tool call, the notice reaches it on that call's result, so the runner waits (wake_grace)
+  before interrupting; wake-ups are at least wake_cooldown apart.
 
 Run commands: runner/README.md.
 """
@@ -51,9 +55,14 @@ CONTINUE_PROMPT = (
     "Keep working toward the run goal. Your context may have been compacted or reset, so first "
     "rebuild your picture of where things stand: re-read the brief, goal and host notes in "
     "/home/agent/work/run/ (BRIEF.md, GOAL.md, HOST.md) and your notes in /home/agent/work/NOTES.md, "
-    "check which hooks and tools you have (list_hooks), and take a fresh observation of the host before "
+    "call status (your goal, running tasks and rules, notices), check which hooks and tools you have "
+    "(list_hooks), and take a fresh observation of the host before "
     "you act. Restate your current goal with set_goal. Then continue from where your notes say "
     "you are, and keep the notes current.")
+WAKE_PROMPT = (
+    "You were interrupted because something you asked to be woken for happened:\n{notices}\n"
+    "Your context is intact. Deal with it if it needs you, then carry on with what you were doing.")
+WAKE = "WAKE"   # written by the tool server while urgent notices wait for the agent
 DEFAULT_BRIEF = agent.REPO / "prompts" / "brief.md"
 RUN_FILES = "run"   # workspace/run/: BRIEF.md, GOAL.md, HOST.md, rewritten on every runner start
 RATE_LIMIT_MARGIN_S = 60
@@ -86,6 +95,7 @@ class Config:
     until: float | None = None                # wall-clock deadline (epoch seconds): end then
     update_note: str | None = None            # told to the agent with the next prompt (why things changed)
     update_instructions: bool = False         # on resume, replace the run's brief/goal with these
+    reopen: bool = False                      # continue a run that already ended (same thread)
     checkpoint_every: float = 1800
     backoff_base: float = 30
     backoff_cap: float = 3600
@@ -96,6 +106,8 @@ class Config:
     start_retry: float = 600                  # after a failed [host] start, wait this long to retry
     stall_timeout: float = 1800               # no message at all for this long: kill and retry
     interrupt_grace: float = 60               # turn/interrupt must end the turn within this
+    wake_grace: float = 60                    # a WAKE during a tool call waits this long for its result
+    wake_cooldown: float = 60                 # least time between wake-up interrupts
     request_timeout: float = 120
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.time
@@ -127,6 +139,7 @@ class Runner:
         self.log: EventLog
         self.mapper: Mapper
         self._last_tick: float | None = None   # active-time clock; None after a (re)start
+        self._last_wake = 0.0
         self._counting = True
 
     # Top level ------------------------------------------------------------------
@@ -153,8 +166,12 @@ class Runner:
         self.mapper.on_usage = self._save_usage
         if existing:
             self.state = existing
-            if self.state.status == "ended":
-                print(f"run already ended: {self.state.ended_reason}")
+            if self.state.status == "ended" and self.cfg.reopen:
+                self.log.write("marker", label=f"reopened the run (it had ended: {self.state.ended_reason})",
+                               kind="reopen")
+                self.state.status, self.state.ended_reason = "running", None
+            elif self.state.status == "ended":
+                print(f"run already ended: {self.state.ended_reason} (--reopen continues it)")
                 return self.state.ended_reason or "ended"
             self.mapper.total = dict(self.state.extra.get("usage_total") or {})
             lost = f"; turn {self.state.turns} was cut off" if self.state.active_turn_id else ""
@@ -226,7 +243,8 @@ class Runner:
                     self.state.active_turn_id = None
                 self._close_session()
 
-            if outcome.interrupt in ("host_down", "input_blocked", "paused", "stop", "budget_time", "budget_tokens"):
+            if outcome.interrupt in ("host_down", "input_blocked", "paused", "stop", "budget_time", "budget_tokens",
+                                     "wake", "deadline"):
                 continue  # not a failure; the loop top decides what happens next
             if outcome.duration_s is not None and outcome.duration_s > self.cfg.long_turn_seconds:
                 self.state.failures = 0
@@ -257,7 +275,10 @@ class Runner:
 
     def _run_turn(self) -> Outcome:
         assert self.srv
-        if self.state.goal_sent:
+        wake = self.state.extra.pop("pending_wake", None)
+        if self.state.goal_sent and wake:
+            prompt, kind = WAKE_PROMPT.format(notices=wake), "wake"
+        elif self.state.goal_sent:
             prompt, kind = CONTINUE_PROMPT, "continue"
             update = self.state.extra.pop("pending_update", None)
             if update:
@@ -298,6 +319,10 @@ class Runner:
                 if check_host:
                     next_host = now + self.cfg.host_poll
                 interrupt = self._interrupt_reason(check_host)
+                if interrupt == "wake":
+                    self.state.extra["pending_wake"] = self._take_wake()
+                    self._last_wake = now
+                    self._save()
                 if interrupt:
                     self.srv.send_request("turn/interrupt", {"threadId": self.state.thread_id,
                                                              "turnId": turn_id})
@@ -330,12 +355,35 @@ class Runner:
             return "paused"
         if self._input_blocked() is not None:
             return "input_blocked"
+        if self._wake_due():
+            return "wake"
         if check_host:
             up, detail = self.host_check()
             if not up:
                 self.mapper.state("host_down", detail)
                 return "host_down"
         return None
+
+    def _wake_due(self) -> bool:
+        """An urgent notice is waiting: wake the agent now if it is thinking, or once a tool call
+        has had wake_grace to deliver it on its result."""
+        p = self.run_dir / WAKE
+        try:
+            age = self.cfg.clock() - p.stat().st_mtime
+        except OSError:
+            return False
+        if self.cfg.clock() - self._last_wake < self.cfg.wake_cooldown:
+            return False
+        return self.mapper.current != "acting" or age >= self.cfg.wake_grace
+
+    def _take_wake(self) -> str:
+        p = self.run_dir / WAKE
+        try:
+            items = json.loads(p.read_text(encoding="utf-8"))
+            p.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            return "- (the notice could not be read; call status)"
+        return "\n".join(f"- {i.get('source', '?')}: {i.get('text', '')}" for i in items)[:2000]
 
     def _input_blocked(self) -> str | None:
         """The tool server's INPUT_BLOCKED detail while input can't reach the host, else None."""
@@ -625,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="on resume: replace the run's brief and goal with --brief-file/--goal-file and tell the agent")
     ap.add_argument("--update-note", help="on resume: a note told to the agent with the next prompt, e.g. why "
                     "the brief changed")
+    ap.add_argument("--reopen", action="store_true", help="continue a run that already ended, on the same thread")
     ap.add_argument("--no-toolserver", action="store_true")
     ap.add_argument("--agent-cmd", help="JSON list; replaces the agent container (tests, fakes)")
     ap.add_argument("--stall-timeout", type=float, default=1800)
@@ -650,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
                  host_check=hostcheck.resolve(args.host_check, hc) if args.host_check else None, stall_timeout=args.stall_timeout,
                  budget_seconds=args.budget_hours * 3600 if args.budget_hours else None,
                  budget_tokens=args.budget_tokens, update_note=args.update_note,
-                 update_instructions=args.update_instructions,
+                 update_instructions=args.update_instructions, reopen=args.reopen,
                  until=datetime.fromisoformat(args.until.replace("Z", "+00:00")).timestamp() if args.until else None)
     print(f"run dir: {run_dir}")
     reason = Runner(cfg).run()

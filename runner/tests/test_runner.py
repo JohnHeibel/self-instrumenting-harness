@@ -119,6 +119,19 @@ def test_runner_restart_resumes_from_state_file(h):
     assert [t["turn_total_tokens"] for t in h.records("turn_completed")] == [500, 600]
 
 
+def test_reopen_continues_an_ended_run_on_its_thread(h):
+    h.run_dir.mkdir(parents=True)
+    (h.run_dir / "runner-state.json").write_text(json.dumps({
+        "run_id": "r1", "started_at": time.time(), "thread_id": "thr_C", "goal_sent": True,
+        "run_started_logged": True, "turns": 2, "status": "ended", "ended_reason": "stop",
+        "extra": {"goal": "g", "host": "factorio", "usage_total": {"totalTokens": 900}}}))
+    script = {"thread_id": "thr_C", "processes": [{"resume_total": 900, "turns": [[{"usage": 1500}]]}]}
+    assert h.runner(script).run() == "stop"                     # ended runs stay ended
+    assert h.runner(script, budget_tokens=1400, reopen=True).run() == "budget_tokens"
+    assert [r["params"]["threadId"] for r in h.requests("thread/resume")] == ["thr_C"]
+    assert any(m["kind"] == "reopen" for m in h.records("marker"))
+
+
 def test_usage_total_is_saved_on_every_update(h):
     script = {"processes": [{"turns": [[{"usage": 700}, {"hang": True}]]}]}
     r = h.runner(script)
@@ -220,3 +233,23 @@ def test_second_runner_on_same_run_dir_is_refused(h):
     (h.run_dir / "runner.lock").write_text(str(os.getppid()))  # a live process that isn't us
     with pytest.raises(SystemExit):
         RunLock(h.run_dir / "runner.lock").acquire()
+
+
+def test_wake_file_interrupts_thinking_and_prompts_with_the_notices(h):
+    script = {"processes": [{"turns": [[{"hang": True}], [{"usage": 100}]]}]}
+    wake = '[{"source": "rule:low_iron", "text": "iron below 50"}]'
+    threading.Timer(0.3, lambda: (h.run_dir / "WAKE").write_text(wake)).start()
+    assert h.runner(script, budget_tokens=50).run() == "budget_tokens"
+    assert any(m["kind"] == "interrupt" and "wake" in m["label"] for m in h.records("marker"))
+    assert not [s for s in h.records("agent_state") if s["state"] == "backing_off"]
+    second = h.requests("turn/start")[1]["params"]["input"][0]["text"]
+    assert "rule:low_iron: iron below 50" in second and "context is intact" in second
+    assert not (h.run_dir / "WAKE").exists()
+
+
+def test_deadline_mid_turn_ends_without_backing_off(h):
+    script = {"processes": [{"turns": [[{"hang": True}]]}]}
+    t0 = time.monotonic()
+    assert h.runner(script, until=time.time() + 0.5).run() == "deadline"
+    assert time.monotonic() - t0 < 10
+    assert not [r for r in h.records("agent_state") if r["state"] == "backing_off"]

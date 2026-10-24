@@ -42,7 +42,7 @@ class RunState:
 
 
 class RunLock:
-    """One runner per run dir (ModdedBench lesson: two runners on one checkout)."""
+    """One runner per run dir (two runners on one run dir would fight over it)."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
