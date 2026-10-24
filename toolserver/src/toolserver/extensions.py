@@ -14,6 +14,7 @@ manifest, `extension.json` in its workspace:
         "description": "...",
         "input_schema": {"type": "object", "properties": {...}},     # optional
         "run": ["python3", "tools/assembler_status.py"],            # runs in the agent's sandbox
+        "where": "sandbox",                          # optional; reserved for host-side helpers later
         "timeout_s": 30, "read_only": true, "depends_on": ["..."]
       }],
       "health_check": {"tool": "get_assembler_status", "args": {}}  # optional
@@ -195,6 +196,8 @@ def parse_manifest(workspace: Path, manifest_rel: str, host: HostConfig, builtin
         schema = t.get("input_schema", {"type": "object", "properties": {}})
         if not isinstance(schema, dict) or schema.get("type", "object") != "object":
             problems.append(f'{where}.input_schema: a JSON Schema object with "type": "object"')
+        if t.get("where", "sandbox") != "sandbox":
+            problems.append(f'{where}.where: only "sandbox" is supported (your container); host-side helpers come later')
         desc = t.get("description", "")
         if not isinstance(desc, str) or not desc.strip():
             problems.append(f"{where}.description: say what it returns")

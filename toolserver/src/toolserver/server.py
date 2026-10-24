@@ -34,7 +34,7 @@ LOAD_EXTENSION_DOC = """Load or update one of your extensions, and register its 
   "reload": "<a reload action of this host, optional>",
   "tools": [{"name": "get_assembler_status", "description": "what it returns",
              "input_schema": {"type": "object", "properties": {"area": {"type": "string"}}},
-             "run": ["python3", "tools/assembler_status.py"], "timeout_s": 30, "read_only": true,
+             "run": ["python3", "tools/assembler_status.py"], "where": "sandbox", "timeout_s": 30, "read_only": true,
              "depends_on": ["other_tool"]}],
   "health_check": {"tool": "get_assembler_status", "args": {}}
 }
