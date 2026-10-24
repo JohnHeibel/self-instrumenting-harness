@@ -43,16 +43,19 @@ from .mapping import Mapper
 from .state import RunLock, RunState, kill_tree, pid_alive
 from .toolserver_proc import ToolServer, ToolServerError
 
-NOTES_HINT = ("\n\nKeep notes on your progress in /home/agent/work (it survives restarts). "
-              "Your session may be interrupted and resumed at any time.")
+NOTES_HINT = ("\n\nKeep notes on your progress in /home/agent/work/NOTES.md (/home/agent/work survives "
+              "restarts). Your session may be interrupted and resumed at any time.")
 
 CONTINUE_PROMPT = (
     "Your previous turn has ended: it finished, was interrupted, or the harness restarted. "
     "Keep working toward the run goal. Your context may have been compacted or reset, so first "
-    "rebuild your picture of where things stand: re-read your notes in /home/agent/work, check "
-    "which hooks and tools you have (list_hooks), and take a fresh observation of the host before "
+    "rebuild your picture of where things stand: re-read the brief, goal and host notes in "
+    "/home/agent/work/run/ (BRIEF.md, GOAL.md, HOST.md) and your notes in /home/agent/work/NOTES.md, "
+    "check which hooks and tools you have (list_hooks), and take a fresh observation of the host before "
     "you act. Restate your current goal with set_goal. Then continue from where your notes say "
     "you are, and keep the notes current.")
+DEFAULT_BRIEF = agent.REPO / "prompts" / "brief.md"
+RUN_FILES = "run"   # workspace/run/: BRIEF.md, GOAL.md, HOST.md, rewritten on every runner start
 RATE_LIMIT_MARGIN_S = 60
 
 
@@ -65,6 +68,7 @@ class Config:
     run_dir: Path
     host_config: Path                         # hosts/<host>.toml: which program, how to check it
     goal: str | None = None
+    brief: str | None = None                  # how the agent works here; comes before the goal
     run_id: str | None = None
     agent_cmd: list[str] | None = None        # None: the agent container (docker)
     auth_json: Path = field(default_factory=lambda: Path.home() / ".codex" / "auth.json")
@@ -161,8 +165,9 @@ class Runner:
             if not self.cfg.goal:
                 raise SystemExit("a new run needs --goal or --goal-file")
             self.state = RunState(run_id=run_id, started_at=self.cfg.clock(),
-                                  extra={"goal": self.cfg.goal, "host": self.host.name})
+                                  extra={"goal": self.cfg.goal, "brief": self._brief(), "host": self.host.name})
             self._save()
+        self._write_run_files()
 
         if self.cfg.toolserver:
             old = self.state.extra.get("toolserver_pid")
@@ -239,9 +244,9 @@ class Runner:
     def _run_turn(self) -> Outcome:
         assert self.srv
         if self.state.goal_sent:
-            prompt, kind = CONTINUE_PROMPT + self._host_notes(), "continue"
+            prompt, kind = CONTINUE_PROMPT, "continue"
         else:
-            prompt, kind = self.state.extra["goal"] + self._host_notes() + NOTES_HINT, "goal"
+            prompt, kind = self.first_prompt(), "goal"
         res = self.srv.request("turn/start", {"threadId": self.state.thread_id,
                                               "input": [{"type": "text", "text": prompt}]},
                                timeout=self.cfg.request_timeout)
@@ -443,8 +448,30 @@ class Runner:
 
     # The host ----------------------------------------------------------------------
 
-    def _host_notes(self) -> str:
-        return f"\n\nAbout this host: {self.host.notes}" if self.host.notes else ""
+    def _brief(self) -> str:
+        if self.cfg.brief is not None:
+            return self.cfg.brief
+        return DEFAULT_BRIEF.read_text(encoding="utf-8") if DEFAULT_BRIEF.exists() else ""
+
+    def first_prompt(self) -> str:
+        """Brief, then goal, then host notes, then the notes hint."""
+        brief = self.state.extra.get("brief")
+        parts = [(brief if brief is not None else self._brief()).strip(), self.state.extra["goal"].strip()]
+        if self.host.notes:
+            parts.append("## About this host\n\n" + self.host.notes)
+        return "\n\n".join(p for p in parts if p) + NOTES_HINT
+
+    def _write_run_files(self) -> None:
+        """workspace/run/: the brief, goal and host notes, restored on every runner start so the
+        agent can re-read them after a reset (its own edits there don't stick)."""
+        d = self.run_dir / "workspace" / RUN_FILES
+        d.mkdir(parents=True, exist_ok=True)
+        brief = self.state.extra.get("brief")
+        files = {"BRIEF.md": brief if brief is not None else self._brief(),
+                 "GOAL.md": self.state.extra.get("goal") or "",
+                 "HOST.md": self.host.notes or "(no notes for this host)"}
+        for name, text in files.items():
+            (d / name).write_text(text.strip() + "\n", encoding="utf-8")
 
     def _start_host(self, why: str) -> bool:
         """Run the host config's start command; True if it succeeded. Time spent starting isn't
@@ -520,6 +547,8 @@ def main(argv: list[str] | None = None) -> int:
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--goal", help="the run's objective (first prompt)")
     g.add_argument("--goal-file", type=Path)
+    ap.add_argument("--brief-file", type=Path, default=DEFAULT_BRIEF,
+                    help="how the agent works here; the first prompt is brief, goal, host notes")
     ap.add_argument("--host-config", type=Path, required=True,
                     help="hosts/<host>.toml: the program the agent works in, how to see it and check it is up")
     ap.add_argument("--host-check", help="override the host config's up_check: "
@@ -549,6 +578,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     hc = HostConfig.load(args.host_config, run_dir)
     cfg = Config(run_dir=run_dir, host_config=args.host_config, goal=goal, model=args.model,
+                 brief=args.brief_file.read_text(encoding="utf-8"),
                  reasoning_summary=args.reasoning_summary, port=args.port, image=args.image,
                  auth_json=args.auth_json, toolserver=not args.no_toolserver,
                  agent_cmd=json.loads(args.agent_cmd) if args.agent_cmd else None,

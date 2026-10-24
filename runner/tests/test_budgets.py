@@ -137,9 +137,9 @@ def test_workspace_snapshots_periodically_and_at_end(h):
         path = h.run_dir / s["artifact"]
         assert path.parent == h.run_dir / "checkpoints"          # outside the mounted workspace
         with tarfile.open(path) as tar:
-            assert tar.getnames() == ["notes/NOTES.md"]
+            assert tar.getnames() == ["notes/NOTES.md", "run/BRIEF.md", "run/GOAL.md", "run/HOST.md"]
             assert tar.extractfile("notes/NOTES.md").read() == b"plan"
-        assert s["files"] == 1 and s["bytes"] == path.stat().st_size
+        assert s["files"] == 4 and s["bytes"] == path.stat().st_size
     assert snaps[0]["ref"] == "/"                                 # before the thread existed
     assert snaps[1]["ref"].startswith("thr_fake/turn_")
 
@@ -190,7 +190,7 @@ def test_runner_starts_a_down_host_and_stops_it_at_the_end(h):
     assert kinds == [("host_start", True), ("host_stop", True)]
     assert "started" in (h.run_dir / "raw" / "host.log").read_text()
     goal = h.requests("turn/start")[0]["params"]["input"][0]["text"]
-    assert f"About this host: Read {h.run_dir.resolve()}/up" in goal
+    assert f"## About this host\n\nRead {h.run_dir.resolve()}/up" in goal
 
 
 def test_failed_host_start_waits_before_retrying(h):
@@ -210,3 +210,38 @@ def test_failed_host_start_waits_before_retrying(h):
     assert [m["ok"] for m in starts] == [False] * 4                 # t = 0, 300, 600, 900
     assert "exited 3" in starts[0]["label"]
     assert h.records("run_ended")[0]["active_s"] == 0
+
+
+# The brief, goal and host notes ------------------------------------------------------------
+
+def test_first_prompt_is_brief_goal_host_notes_then_hint_and_run_files_are_restored(h):
+    from runner.run import CONTINUE_PROMPT, NOTES_HINT
+    toml = '[host]\nname = "test-host"\nup_check = "always"\nnotes = "The port is 9."\n'
+    script = {"processes": [{"turns": [[{"usage": 100}]]}]}
+    r = h.runner(script, host_toml=toml, brief="# How you work\n\nBe careful.\n", budget_tokens=50)
+    assert r.run() == "budget_tokens"
+    first = h.requests("turn/start")[0]["params"]["input"][0]["text"]
+    assert first == ("# How you work\n\nBe careful.\n\nReach the goal.\n\n## About this host\n\n"
+                     "The port is 9." + NOTES_HINT)
+    run = h.run_dir / "workspace" / "run"
+    assert (run / "BRIEF.md").read_text() == "# How you work\n\nBe careful.\n"
+    assert (run / "GOAL.md").read_text() == "Reach the goal.\n"
+    assert (run / "HOST.md").read_text() == "The port is 9.\n"
+    assert "/home/agent/work/run/" in CONTINUE_PROMPT and "NOTES.md" in CONTINUE_PROMPT
+    # The agent edits them; a runner restart puts them back (the brief from the run's state,
+    # even if a different brief is passed on resume).
+    (run / "GOAL.md").write_text("Do something else.")
+    (run / "BRIEF.md").unlink()
+    state = h.run_dir / "runner-state.json"
+    state.write_text(state.read_text().replace('"status": "ended"', '"status": "running"'))
+    h.runner(script, host_toml=toml, brief="other brief", budget_tokens=50).run()
+    assert (run / "GOAL.md").read_text() == "Reach the goal.\n"
+    assert (run / "BRIEF.md").read_text() == "# How you work\n\nBe careful.\n"
+
+
+def test_default_brief_is_the_repo_brief(h):
+    from runner.run import DEFAULT_BRIEF
+    r = h.runner({"processes": [{"turns": [[{"usage": 100}]]}]}, brief=None, budget_tokens=50)
+    r.run()
+    first = h.requests("turn/start")[0]["params"]["input"][0]["text"]
+    assert first.startswith(DEFAULT_BRIEF.read_text(encoding="utf-8").strip() + "\n\nReach the goal.")

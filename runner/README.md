@@ -30,7 +30,13 @@ Control a running run from another shell:
 
 Useful flags: `--model`, `--budget-hours H` (active time), `--budget-tokens N` (uncached input +
 output), `--host-check` (overrides the host config's `up_check`: `window`, `always`,
-`cmd:<command>`, `py:<module>:<fn>`), `--port` (tool server, default 8765), `--reasoning-summary`.
+`cmd:<command>`, `py:<module>:<fn>`), `--port` (tool server, default 8765), `--reasoning-summary`,
+`--brief-file` (default `prompts/brief.md`).
+
+The first prompt is the brief, then the goal, then the host notes ("## About this host"), then a
+line about keeping notes. On every runner start, `workspace/run/` gets `BRIEF.md`, `GOAL.md` and
+`HOST.md` (overwriting any edits; the brief is the one the run started with), and the continue
+prompt tells the agent to re-read them and its `NOTES.md` after a reset.
 
 The host config's `[host]` table: `name`, `window_title` and/or `process` (exe name) to find the
 program, `capture` (`window`: its main window's client area; `process`: the bounding box of all its
