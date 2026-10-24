@@ -9,7 +9,7 @@ const RUNS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../runs
 /** Serves local run directories (docs/interfaces/event-log.md) to the UI in development.
  *  GET /api/runs                  -> [{name, files}]
  *  GET /api/runs/<name>/records   -> all *.jsonl records in the run, merged and ordered
- *  GET /runs/<name>/<artifact>    -> saved files such as screenshot thumbnails */
+ *  GET /runs/<name>/shots/<img>   -> screenshot thumbnails; nothing else under runs/ is served */
 function localRuns(): Plugin {
   return {
     name: 'local-runs',
@@ -35,14 +35,17 @@ function localRuns(): Plugin {
             }))
           return send(res, 200, 'application/json', JSON.stringify(records))
         }
-        const a = url.match(/^\/runs\/(.+)$/)
+        // Saved artifacts only: screenshots under <run>/shots/. A run directory also holds
+        // credentials (codex-home/auth.json, host/rcon.json), so nothing else is served.
+        const a = url.match(/^\/runs\/([^/]+)\/(shots\/[A-Za-z0-9_.-]+\.(?:png|jpe?g))$/)
         if (a) {
-          const file = safeJoin(RUNS, a[1])
+          const file = safeJoin(RUNS, `${a[1]}/${a[2]}`)
           if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) return send(res, 404, 'text/plain', 'not found')
-          const type = file.endsWith('.png') ? 'image/png' : file.endsWith('.jpg') ? 'image/jpeg' : 'application/octet-stream'
+          const type = file.endsWith('.png') ? 'image/png' : 'image/jpeg'
           res.setHeader('Cache-Control', 'max-age=3600')
           return send(res, 200, type, fs.readFileSync(file))
         }
+        if (url.startsWith('/runs/')) return send(res, 404, 'text/plain', 'not found')
         next()
       })
     },
