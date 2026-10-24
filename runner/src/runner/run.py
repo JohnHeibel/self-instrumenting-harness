@@ -10,8 +10,10 @@ It owns the run directory and the tool server's lifecycle, writes runner.jsonl
   backoff. Tokens are uncached input plus output (thread totals from Codex).
 - The agent's workspace is snapshotted to checkpoints/ (not mounted into the container)
   every 30 minutes and at the end of the run.
-- A STOP file in the run dir ends the run cleanly. A PAUSE file holds it (interrupting
-  the current turn) until removed.
+- A STOP file in the run dir ends the run cleanly: the runner writes STOPPING (the tool server then
+  starts no new task, and a task the stop kills ends "stopped", not "failed"), and waits up to
+  stop_grace for the tasks listed in RUNNING to end before it stops the host. A PAUSE file holds
+  the run (interrupting the current turn) until removed.
 - Failures back off 30 s, 60 s, ... up to 1 h, and the run gives up after 12 in a row. When
   Codex reports a rate limit reached with a reset time, the backoff waits until then instead.
   A completed turn, or any turn longer than 10 minutes, resets the count.
@@ -113,6 +115,7 @@ class Config:
     host_poll: float = 30                     # how often the host is checked
     start_retry: float = 600                  # after a failed [host] start, wait this long to retry
     stall_timeout: float = 1800               # no message at all for this long: kill and retry
+    stop_grace: float = 600                   # on STOP, wait this long for running tasks to end
     interrupt_grace: float = 60               # turn/interrupt must end the turn within this
     wake_grace: float = 60                    # a WAKE during a tool call waits this long for its result
     wake_cooldown: float = 60                 # least time between wake-up interrupts
@@ -201,6 +204,8 @@ class Runner:
                                   extra={"goal": self.cfg.goal, "brief": self._brief(), "host": self.host.name})
             self._save()
         self._write_run_files()
+        for f in ("STOPPING", "RUNNING"):      # left by the last stop, or by a tool server that died
+            (self.run_dir / f).unlink(missing_ok=True)
 
         if self.cfg.toolserver:
             old = self.state.extra.get("toolserver_pid")
@@ -570,6 +575,9 @@ class Runner:
         self._save()
 
     def _end(self, reason: str) -> str:
+        (self.run_dir / "STOPPING").write_text(reason, encoding="utf-8")
+        if reason == "stop":
+            self._wait_for_tasks()
         self._maybe_snapshot(force="end")
         if self.host.stop:
             ok, what = self._host_cmd(self.host.stop, "stop", 120)
@@ -652,6 +660,20 @@ class Runner:
             except OSError as e:
                 return False, f"`{shown}` could not run: {e}"
         return rc == 0, f"`{shown}` exited {rc} after {time.monotonic() - t0:.0f} s (output in raw/host.log)"
+
+    def _wait_for_tasks(self) -> None:
+        """Let the agent's running tasks finish before the host goes down, so a restart doesn't cut
+        one off halfway (no new ones start: STOPPING is written)."""
+        running = self.run_dir / "RUNNING"
+        if not running.exists():
+            return
+        t0 = self.cfg.clock()
+        self.mapper.state("stopping", f"waiting up to {self.cfg.stop_grace:.0f} s for running tasks to end")
+        while running.exists() and self.cfg.clock() - t0 < self.cfg.stop_grace:
+            self.cfg.sleep(min(1.0, self.cfg.poll))
+        left = running.read_text(encoding="utf-8").strip() if running.exists() else ""
+        self.log.write("marker", label=f"waited {self.cfg.clock() - t0:.0f} s for running tasks"
+                       + (f"; still running, cut off: {left}" if left else ""), kind="stop_wait")
 
     def _wait(self, seconds: float) -> None:
         """Sleep, waking early if STOP appears."""

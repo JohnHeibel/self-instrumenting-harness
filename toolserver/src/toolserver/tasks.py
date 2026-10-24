@@ -34,6 +34,9 @@ if TYPE_CHECKING:
     from .extensions import Extensions
 
 WAKE = "WAKE"                  # run-dir file the runner watches; holds the urgent notices not yet seen
+STOPPING = "STOPPING"          # the runner is ending or restarting the run: start nothing new, and a task the
+                               # stop kills ended "stopped", not "failed"
+RUNNING = "RUNNING"            # ids of the tasks running now, for the runner to wait on before it stops
 WAKE_TAKEN = "WAKE_TAKEN"      # keys of notices the runner delivered in a wake prompt: they count as seen
 MAX_TASK_MINUTES = 480
 MAX_TASKS = 8
@@ -335,6 +338,9 @@ class Work:
             raise ToolError(f"after: {after} has already ended {self.tasks[after].status}, so this wouldn't run; "
                             "start it without after, or after another task")
         waiting_for_hands = any(q.hands and q.status == "queued" for q in queued)   # held ones don't count
+        if self.stopping():
+            raise ToolError("the harness is stopping or restarting the run, so no new task can start; "
+                            "start it again after the restart")
         must_queue = (after and self.tasks[after].status in ("queued", "held", "running")) or \
             (hands and (not self.hands.free_for(None) or waiting_for_hands))
         if must_queue and len(queued) >= MAX_QUEUED:
@@ -367,6 +373,23 @@ class Work:
                        args=args or {}, why=why or None, after=t.after or None,
                        queued_s=round(waited, 1) if waited >= 0.5 else None)
         t.job = asyncio.create_task(self._run(t, code, file, args))
+        self._publish_running()
+
+    def stopping(self) -> bool:
+        return (self.run_dir / STOPPING).exists()
+
+    def _publish_running(self) -> None:
+        running = [x.id for x in self.tasks.values() if x.status == "running"]
+        p = self.run_dir / RUNNING
+        try:
+            if running:
+                tmp = p.with_suffix(".tmp")
+                tmp.write_text(json.dumps(running), encoding="utf-8")
+                tmp.replace(p)
+            else:
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass                                # the runner then just doesn't wait
 
     def _behind(self, tid: str) -> list[Task]:
         """Queued or held tasks that wait on `tid`, directly or through others, in queue order."""
@@ -419,6 +442,8 @@ class Work:
         needs the hands gets them once they're free. One queued behind a task that didn't end ok is
         held, with everything behind it, and the agent is told once per chain."""
         self._hold_behind_failures()
+        if self.stopping():
+            return                              # they start after the restart, if the agent starts them again
         for t in [x for x in self.tasks.values() if x.status == "queued"]:
             dep = self.tasks.get(t.after) if t.after else None
             if dep is not None and dep.status != "ok":
@@ -459,8 +484,12 @@ class Work:
         finally:
             self.hands.release(t.id)
         t.result = r
-        t.status = "ok" if r.ok else ("stopped" if r.stopped else "failed")
+        killed = not r.ok and not r.stopped and self.stopping()
+        t.status = "ok" if r.ok else ("stopped" if r.stopped or killed else "failed")
         summary = (r.out.strip().splitlines() or [""])[-1][:200] if r.ok else _ends(r.detail, t.id)
+        if killed:
+            summary = "stopped by the harness ending or restarting the run: " + summary
+        self._publish_running()
         self.log.write("task_ended", task=t.id, name=t.name, status=t.status, duration_ms=round(r.seconds * 1000),
                        calls=len(r.calls), summary=summary)
         again = ""

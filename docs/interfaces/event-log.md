@@ -84,7 +84,7 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 | Type | Fields |
 |---|---|
 | `run_started` | `agent` (`codex`, `claude-code`), `model`, `host` (`factorio`, …), `goal` (the run's overall objective) |
-| `agent_state` | `state`: `thinking`, `acting`, `waiting`, `compacting`, `host_down`, `input_blocked` (the tool server wrote `INPUT_BLOCKED`: input can't reach the host), `backing_off` (with `delay_s`, `failures`), `paused` or `ended`; plus `text` |
+| `agent_state` | `state`: `thinking`, `acting`, `waiting`, `compacting`, `host_down`, `input_blocked` (the tool server wrote `INPUT_BLOCKED`: input can't reach the host), `backing_off` (with `delay_s`, `failures`), `paused`, `stopping` (on STOP, waiting for running tasks to end) or `ended`; plus `text` |
 | `reasoning` | `title`, `text`: the model's reasoning summary when one is available |
 | `agent_message` | `text`, `phase` (`commentary` or `final_answer`): what the agent said |
 | `goal` | `text`, `serves`: the agent's current subgoal and what it is for (from a `set_goal` tool, planned) |

@@ -505,3 +505,46 @@ def test_the_review_carries_what_happened_since_the_last_one(tmp_path):
     assert "my_read 30.0k" in text and "small_tool" not in text
     assert w.since["looks"] == 0 and w.since["tasks"] == 0      # starts over after each review
     assert [kw["facts"] for k, kw in log.rows if k == "tool_review_suggested"][0][0].startswith("tasks:")
+
+
+def test_a_task_the_harness_stop_kills_ends_stopped_and_nothing_new_starts(tmp_path):
+    import asyncio
+    import json
+    import sys
+    from mcp.server.fastmcp.exceptions import ToolError
+    from toolserver import tasks as tm
+    from toolserver.extensions import LocalExecutor
+
+    class Log:
+        def __init__(self):
+            self.rows = []
+
+        def write(self, typ, **kw):
+            self.rows.append((typ, kw))
+
+    class Ext:
+        loaded = {}
+        executor = LocalExecutor(tmp_path)
+        executor_python = sys.executable
+
+        def hook_info(self, name):
+            return None
+
+    async def go():
+        log = Log()
+        w = tm.Work(Ext(), log, tmp_path, tm.Hands(), tm.Board(log, tmp_path), lambda: "", lambda: [])
+        t = w.start("import time\ntime.sleep(0.5)\nraise SystemExit(137)", "", "build", None, 1, True, False)
+        assert json.loads((tmp_path / tm.RUNNING).read_text()) == ["t1"]       # the runner waits on this
+        (tmp_path / tm.STOPPING).write_text("stop")                            # the runner is stopping
+        await t.job
+        assert t.status == "stopped" and not (tmp_path / tm.RUNNING).exists()
+        ended = [kw for typ, kw in log.rows if typ == "task_ended"][0]
+        assert ended["status"] == "stopped" and ended["summary"].startswith("stopped by the harness")
+        assert w.failures == {} and w.since["failures"] == {}
+        try:
+            w.start("print(1)", "", "late", None, 1, True, False)
+            raise AssertionError("a task started while stopping")
+        except ToolError as e:
+            assert "stopping" in str(e)
+
+    asyncio.run(go())

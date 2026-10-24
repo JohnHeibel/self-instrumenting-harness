@@ -289,3 +289,28 @@ def test_host_down_mid_turn_shows_the_agent_what_the_host_wrote(h):
     assert second.startswith("The program went down") and "mod.lua:9: attempt to index nil" in second, second
     assert "after 29" in second and "line 3\n" not in second and "binary" not in second
     assert [m["files"] for m in h.records("marker") if m["kind"] == "host_log"] == [["server/prog.log"]]
+
+
+def test_stop_waits_for_running_tasks_before_ending(h):
+    script = {"processes": [{"turns": [[{"hang": True}]]}]}
+    r = h.runner(script)
+    running = h.run_dir / "RUNNING"
+    threading.Timer(0.2, lambda: running.write_text('["t3"]')).start()     # the tool server's list
+    threading.Timer(0.4, lambda: (h.run_dir / "STOP").write_text("")).start()
+    threading.Timer(1.5, lambda: running.unlink()).start()                 # the task ends
+    t0 = time.monotonic()
+    assert r.run() == "stop"
+    assert time.monotonic() - t0 >= 1.4
+    assert (h.run_dir / "STOPPING").read_text() == "stop"
+    wait = [m for m in h.records("marker") if m.get("kind") == "stop_wait"][0]
+    assert "cut off" not in wait["label"]
+
+
+def test_stop_cuts_off_a_task_that_outlasts_the_grace(h):
+    script = {"processes": [{"turns": [[{"hang": True}]]}]}
+    r = h.runner(script, stop_grace=0.3)
+    threading.Timer(0.2, lambda: (h.run_dir / "RUNNING").write_text('["t3"]')).start()
+    threading.Timer(0.4, lambda: (h.run_dir / "STOP").write_text("")).start()
+    assert r.run() == "stop"
+    wait = [m for m in h.records("marker") if m.get("kind") == "stop_wait"][0]
+    assert "cut off: [\"t3\"]" in wait["label"]
