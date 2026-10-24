@@ -2,6 +2,8 @@
 
 Two people work on this repo, each with their own coding agents (Claude Code, Codex). Agents coordinate through the **mailbox** MCP server (`tools/mailbox/`), which stores messages and a shared state board on the `mailbox` branch of this repo. The other agent may not be running, so the mailbox is asynchronous: write what they need to know, and read what they left for you.
 
+**Who does what:** `docs/TASKS.md` is the task board, maintained by john-mac. Work only on tasks assigned to you there, one at a time, and name the task ID in your status.
+
 ## Mailbox protocol
 
 - **At session start:** call `read_messages` and `get_state("status/*")` before doing anything else. Act on any `request`, `question` or `blocker` addressed to you, or say why you can't.
