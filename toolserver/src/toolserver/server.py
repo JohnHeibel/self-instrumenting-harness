@@ -375,6 +375,14 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
     return mcp
 
 
+def _text_chars(result) -> int:
+    """How much text a tool result puts in the agent's context."""
+    content = result[0] if isinstance(result, tuple) else result
+    if not isinstance(content, list):
+        return 0
+    return sum(len(getattr(c, "text", "") or "") for c in content)
+
+
 def _deliver_notices(mcp: FastMCP, board: "tasks_mod.Board", work: "tasks_mod.Work") -> None:
     """Every tool result the agent gets carries the notices it hasn't seen yet, as a last text block.
     (Not inside scripts: their results are parsed.) Also restores saved rules on the first call."""
@@ -389,7 +397,11 @@ def _deliver_notices(mcp: FastMCP, board: "tasks_mod.Board", work: "tasks_mod.Wo
         result = await original(name, arguments, context=context, convert_result=convert_result)
         if VIA.get() is not None or not convert_result or name in ("wait", "status"):
             return result
-        work.stall_check()             # posts to the board, so before its footer
+        work.stall_check()             # these post to the board, so before its footer
+        work.review_check()
+        own = (arguments or {}).get("name") if name == "call_hook" else name
+        if own and work.ext.hook_info(str(own)):
+            work.note_result(str(own), _text_chars(result))
         footer = "\n".join(x for x in (board.footer(), work.idle_note()) if x)
         if not footer:
             return result

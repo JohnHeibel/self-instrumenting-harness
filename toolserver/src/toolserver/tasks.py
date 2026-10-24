@@ -42,6 +42,12 @@ QUIET = {"", "none", "null", "false", "0", "[]", "{}", '""'}
 FOOTER_CHARS = 800
 MAX_QUEUED = 8
 IDLE_NOTE_AFTER_S = 90          # hands idle this long: say so on the agent's tool results
+BIG_RESULT_CALLS, BIG_RESULT_CHARS = 5, 10_000   # one of the agent's tools averaging this much over this many calls
+REVIEW_EVERY_S = 2 * 3600       # suggest a tool review this often when no milestone has come
+REVIEW_TEXT = ("{why} A good moment to review your own tools: against the brief's foundation (get anywhere, "
+               "get anything, change many things at once, see an area), which is weakest, or which failed or "
+               "cost the most since the last review (costs shows calls, failures and result size per tool)? "
+               "Improve that one before pushing on.")
 IDLE_NOTE_EVERY_S = 180         # ...at most this often
 STALL_REPEAT = 10               # a task holding the hands made the same acting call this many times...
 STALL_NO_ACT_S = 120            # ...or has made no acting call for this long: tell the agent, once each
@@ -297,6 +303,9 @@ class Work:
         self.rules: dict[str, Rule] = {}
         self._n = 0
         self._rules_path = run_dir / "rules.json"
+        self.results: dict[str, list[int]] = {}       # agent's own tool -> [direct calls, result chars]
+        self.big_told: set[str] = set()
+        self.last_review = time.time()
         hands.on_release = self.pump
 
     def can_act(self, who: str | None) -> bool:
@@ -555,7 +564,7 @@ class Work:
         """(whether the host counts actions in the program at all, time of the latest sign of the user
         doing something), from `program_actions` and `program_activity` records in the run's logs, read
         incrementally."""
-        st = self.__dict__.setdefault("_prog", {"counted": False, "last": 0.0, "pos": {}, "checked": 0.0})
+        st = self.__dict__.setdefault("_prog", {"counted": False, "last": 0.0, "pos": {}, "checked": 0.0, "scanned": False})
         if time.time() - st["checked"] < 5:
             return st["counted"], st["last"]
         st["checked"] = time.time()
@@ -576,7 +585,7 @@ class Work:
             end = chunk.rfind(b"\n") + 1               # leave a half-written last line for next time
             st["pos"][path.name] = pos + end
             for line in chunk[:end].splitlines():
-                if b'"program_actions"' not in line and b'"program_activity"' not in line:
+                if b'"program_actions"' not in line and b'"program_activity"' not in line and b'"milestone"' not in line:
                     continue
                 try:
                     r = json.loads(line)
@@ -589,7 +598,39 @@ class Work:
                         st["last"] = max(st["last"], ts)
                 elif r.get("type") == "program_activity" and r.get("kinds"):
                     st["last"] = max(st["last"], ts)     # busy (moving, moving items), though not an action
+                elif r.get("type") == "milestone" and st["scanned"]:   # not those from before this server
+                    st.setdefault("new_milestones", []).append(str(r.get("id", "?")))
+        st["scanned"] = True
         return st["counted"], st["last"]
+
+    def note_result(self, tool: str, chars: int) -> None:
+        """A result of one of the agent's own tools, returned straight into its context: once such a tool's
+        results run large on average, suggest it return less (results re-read on every later step)."""
+        c = self.results.setdefault(tool, [0, 0])
+        c[0], c[1] = c[0] + 1, c[1] + chars
+        avg = c[1] / c[0]
+        if c[0] >= BIG_RESULT_CALLS and avg >= BIG_RESULT_CHARS and tool not in self.big_told:
+            self.big_told.add(tool)
+            self.log.write("big_results", tool=tool, calls=c[0], avg_chars=round(avg))
+            self.board.post("harness", f"Your tool {tool} has returned {avg / 1000:.0f}k characters on average over "
+                            f"{c[0]} calls, and every result stays in your context. Give it a summary by default "
+                            f"(what's wrong first, counts, what changed) with filters or a detail level for the rest, "
+                            f"or call it inside run_script and return only what you need.")
+
+    def review_check(self, now: float | None = None) -> None:
+        """Suggest a review of the agent's tools at each milestone, or every REVIEW_EVERY_S without one."""
+        now = now or time.time()
+        self.program_activity()
+        new = self._prog.pop("new_milestones", [])
+        if new:
+            why = f"Milestone reached ({', '.join(new)})."
+        elif now - self.last_review >= REVIEW_EVERY_S:
+            why = f"It has been {(now - self.last_review) / 3600:.0f} h since the last milestone or tool review."
+        else:
+            return
+        self.last_review = now
+        self.log.write("tool_review_suggested", why=why)
+        self.board.post("harness", REVIEW_TEXT.format(why=why))
 
     def _stalled(self, t: Task, kind: str, text: str) -> None:
         self.log.write("task_stalled", task=t.id, name=t.name, kind=kind, acts=t.acts, calls=t.calls,

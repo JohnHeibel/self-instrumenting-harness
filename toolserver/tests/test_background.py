@@ -420,3 +420,55 @@ def test_a_long_failure_keeps_its_start_and_end():
     assert s.startswith("RuntimeError: {'state':") and "blocked at 3,4 by tree" in s
     assert 'task("t7") shows all' in s and len(s) < 400
     assert tm._ends("short error", "t7") == "short error"
+
+
+def test_large_results_from_an_agent_tool_get_one_suggestion(tmp_path):
+    from toolserver import tasks as tm
+
+    class Log:
+        def __init__(self):
+            self.rows = []
+
+        def write(self, kind, **kw):
+            self.rows.append(kind)
+
+    log = Log()
+    board = tm.Board(log, tmp_path)
+    w = tm.Work(None, log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    for _ in range(tm.BIG_RESULT_CALLS - 1):
+        w.note_result("my_read", 30_000)
+    assert not board.items                          # too few calls yet
+    w.note_result("small_tool", 200)
+    w.note_result("my_read", 30_000)
+    w.note_result("my_read", 30_000)
+    texts = [n.text for n in board.items]
+    assert len(texts) == 1 and "my_read" in texts[0] and "summary by default" in texts[0]
+    assert log.rows.count("big_results") == 1
+
+
+def test_a_tool_review_is_suggested_at_new_milestones_and_after_a_long_gap(tmp_path):
+    import json
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    def milestone(name):
+        with (tmp_path / "grader.jsonl").open("a") as f:
+            f.write(json.dumps({"ts": "2026-10-24T18:00:00Z", "type": "milestone", "id": name}) + "\n")
+
+    milestone("old_one")                            # reached before this server started: no review
+    board = tm.Board(Log(), tmp_path)
+    w = tm.Work(None, Log(), tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    w.review_check()
+    assert not board.items
+    milestone("red_auto")
+    w._prog["checked"] = 0
+    w.review_check()
+    w._prog["checked"] = 0
+    w.review_check()                                # once per milestone
+    assert [n.text.split(")")[0] for n in board.items] == ["Milestone reached (red_auto"]
+    assert "get anywhere" in board.items[0].text
+    w.review_check(now=w.last_review + tm.REVIEW_EVERY_S + 1)
+    assert len(board.items) == 2 and "since the last milestone or tool review" in board.items[1].text
