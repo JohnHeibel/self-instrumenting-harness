@@ -1,10 +1,12 @@
 """Generate a believable fake run in the event-log format (docs/interfaces/event-log.md).
 
 For building and testing the UI without a real run. Deterministic per seed. The
-scenario (milestones, hooks, narration) is data at the bottom of this file; the
-generator itself knows nothing about any particular host.
+scenario (milestones, hooks, narration, thumbnails) is data further down in this file;
+the generator itself knows nothing about any particular host. Scenarios: factorio
+(a game) and spreadsheet (a desktop spreadsheet app, not a game).
 
-    uv run --project toolserver python tools/fakerun/generate.py --out runs/fake-factorio [--seed 7] [--hours 14]
+    uv run --project toolserver python tools/fakerun/generate.py --out runs/fake-factorio [--scenario factorio] [--seed 7] [--hours 14]
+    uv run --project toolserver python tools/fakerun/generate.py --out runs/fake-spreadsheet --scenario spreadsheet
 """
 
 from __future__ import annotations
@@ -37,11 +39,11 @@ def generate(out: Path, seed: int, hours: float, scenario: dict) -> None:
     run_id = out.name
     tools, runner, grader = (Writer(out / f, run_id, w) for f, w in
                              [("events.jsonl", "toolserver"), ("runner.jsonl", "runner"), ("grader.jsonl", "grader")])
-    t0 = datetime(2026, 10, 24, 4, 0, tzinfo=timezone.utc)
+    t0 = datetime(*scenario.get("start", (2026, 10, 24, 4, 0)), tzinfo=timezone.utc)
     end = t0 + timedelta(hours=hours)
     at = lambda frac: t0 + timedelta(seconds=frac * hours * 3600)
 
-    runner(t0, "run_started", agent="codex", model="gpt-6.1-sol", host=scenario["host"], goal=scenario["goal"])
+    runner(t0, "run_started", agent=scenario.get("agent", "codex"), model=scenario.get("model", "gpt-6.1-sol"), host=scenario["host"], goal=scenario["goal"])
     tools(t0, "server_started", host="127.0.0.1", port=8765)
     grader(t0, "milestones_defined", milestones=[{"id": m["id"], "name": m["name"]} for m in scenario["milestones"]])
 
@@ -58,7 +60,7 @@ def generate(out: Path, seed: int, hours: float, scenario: dict) -> None:
     timeline.append((at(brk["at"]) + timedelta(minutes=19), lambda t: (
         _load_hook(tools, t, {**_hook(scenario, brk["hook"]), "reason": brk["repair_reason"],
                               "source": brk["repaired_source"]}, version=2),
-        tools(t, "hook_status", hook=brk["hook"], status="repaired", detail="health check passes on the new game version"))))
+        tools(t, "hook_status", hook=brk["hook"], status="repaired", detail=brk.get("repaired_detail", "health check passes on the new game version")))))
     for frac, text, serves in scenario["goals"]:
         timeline.append((at(frac), lambda t, x=text, s=serves: runner(t, "goal", text=x, serves=s)))
     for frac, title, text in scenario["reasoning"]:
@@ -97,16 +99,16 @@ def generate(out: Path, seed: int, hours: float, scenario: dict) -> None:
                 artifact = None
                 if shot_n % 6 == 1:
                     artifact = f"shots/{shot_n:06d}.jpg"
-                    _shot(out / artifact, (t - t0).total_seconds() / (hours * 3600), rng)
+                    scenario["shot"](out / artifact, (t - t0).total_seconds() / (hours * 3600), rng)
                 tools(t, "tool_call", tool="screenshot", channel="screenshot", args={}, ok=True, error=None,
                       duration_ms=rng.randint(40, 90), result_kind="image", result_bytes=rng.randint(180_000, 260_000),
                       source="window", captured_size=[2560, 1440], image_size=[1280, 720],
-                      summary="screenshot of the game window", **({"artifact": artifact} if artifact else {}))
+                      summary=scenario.get("shot_summary", "screenshot of the game window"), **({"artifact": artifact} if artifact else {}))
         elif r < 0.9:  # act
             act = rng.choice(scenario["actions"])
             ok = rng.random() > 0.04
             tools(t, "tool_call", tool=act[0], channel="input", args=act[1], ok=ok,
-                  error=None if ok else "TimeoutError: game did not respond", duration_ms=rng.randint(30, 400),
+                  error=None if ok else scenario.get("action_error", "TimeoutError: game did not respond"), duration_ms=rng.randint(30, 400),
                   result_kind="text", result_bytes=40, summary=act[2])
         else:
             tools(t, "tool_call", tool="read_docs", channel="docs", args={"query": rng.choice(scenario["doc_queries"])},
@@ -134,7 +136,7 @@ def _hook(scenario: dict, name: str) -> dict:
 
 
 def _load_hook(tools: Writer, t: datetime, h: dict, version: int) -> None:
-    ext = {"lua": "lua", "python": "py"}[h["language"]]
+    ext = {"lua": "lua", "python": "py", "javascript": "js"}[h["language"]]
     tools(t, "tool_call", tool="load_extension", channel="extension", args={"name": h["name"]}, ok=True, error=None,
           duration_ms=900 if h["kind"] == "in_host" else 120, result_kind="text", result_bytes=80,
           summary=f"loaded {h['name']} v{version}")
@@ -168,8 +170,9 @@ def _shot(path: Path, progress: float, rng: random.Random) -> None:
     img.save(path, "JPEG", quality=70)
 
 
-SCENARIO = {
+FACTORIO = {
     "host": "factorio",
+    "shot": _shot,
     "goal": "Reach blue science: produce the first chemical science pack",
     "milestones": [
         {"id": "first_assembler", "name": "First assembler", "at": 0.05, "evidence": "1 assembling-machine-1 placed"},
@@ -251,11 +254,154 @@ SCENARIO = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Scenario "spreadsheet": an agent in a desktop spreadsheet app, reconciling and
+# cleaning a large workbook into a finished report. Not a game.
+# ---------------------------------------------------------------------------
+
+def _sheet_shot(path: Path, progress: float, rng: random.Random) -> None:
+    """A stand-in spreadsheet frame: a grid whose rows get cleaned and filled as the session progresses."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (640, 360), (255, 255, 255))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, 640, 22], fill=(33, 115, 70))
+    d.text((8, 6), "Q3 Ledger Reconciliation.xlsx", fill=(255, 255, 255))
+    d.rectangle([0, 22, 640, 42], fill=(240, 240, 240))
+    d.text((8, 28), "fx", fill=(90, 90, 90))
+    cols = [60, 180, 300, 400, 500, 640]
+    for i, name in enumerate("ABCDE"):
+        d.rectangle([cols[i], 44, cols[i + 1], 62], fill=(232, 232, 232), outline=(190, 190, 190))
+        d.text((cols[i] + 50, 49), name, fill=(60, 60, 60))
+    local = random.Random(int(progress * 40))
+    for r in range(15):
+        y = 62 + r * 20
+        d.rectangle([0, y, 60, y + 20], fill=(232, 232, 232), outline=(190, 190, 190))
+        d.text((20, y + 5), str(r + 1), fill=(60, 60, 60))
+        clean = local.random() < 0.15 + progress * 0.85
+        for c in range(5):
+            fill = (255, 255, 255) if clean else (255, 226, 226) if local.random() < 0.4 else (255, 255, 255)
+            d.rectangle([cols[c], y, cols[c + 1], y + 20], fill=fill, outline=(215, 215, 215))
+            if c == 0:
+                d.text((cols[c] + 6, y + 5), f"INV-{1000 + r * 7}", fill=(30, 30, 30))
+            elif c == 4:
+                d.text((cols[c] + 6, y + 5), "OK" if clean else "#N/A", fill=(20, 110, 50) if clean else (190, 40, 40))
+            else:
+                d.rectangle([cols[c] + 6, y + 7, cols[c] + 6 + local.randrange(30, 80), y + 13], fill=(150, 150, 150))
+    d.rectangle([0, 346, 640, 360], fill=(240, 240, 240))
+    d.text((8, 348), f"Ready    Unmatched: {max(0, int(1840 * (1 - progress) ** 2) + rng.randint(0, 3))}", fill=(60, 60, 60))
+    img.save(path, "JPEG", quality=70)
+
+
+_SHEET_LOOKUP_V1 = (
+    "function match_rows(sheet, keyCol, otherSheet) {\n"
+    "  const idx = new Map(otherSheet.getRange('A:A').getValues().map((r, i) => [r[0], i + 1]));\n"
+    "  const out = [];\n"
+    "  sheet.getRange(keyCol).getValues().forEach((r, i) => out.push({row: i + 1, match: idx.get(r[0]) || null}));\n"
+    "  return JSON.stringify(out);\n"
+    "}\n")
+_SHEET_LOOKUP_V2 = (
+    "// The app update replaced Range.getValues() with Range.values() and made it async.\n"
+    "async function match_rows(sheet, keyCol, otherSheet) {\n"
+    "  const idx = new Map((await otherSheet.range('A:A').values()).map((r, i) => [r[0], i + 1]));\n"
+    "  const out = [];\n"
+    "  (await sheet.range(keyCol).values()).forEach((r, i) => out.push({row: i + 1, match: idx.get(r[0]) || null}));\n"
+    "  return JSON.stringify(out);\n"
+    "}\n")
+
+SPREADSHEET = {
+    "host": "spreadsheet-app",
+    "agent": "claude-code",
+    "model": "claude-sonnet-5-5",
+    "start": (2026, 10, 25, 6, 0),
+    "shot": _sheet_shot,
+    "shot_summary": "screenshot of the spreadsheet window",
+    "action_error": "TimeoutError: the app did not respond",
+    "goal": "Reconcile the bank export against the ledger and produce a clean, formatted summary report",
+    "milestones": [
+        {"id": "read_cells", "name": "Read cell ranges via hook", "at": 0.03, "evidence": "Sheet 'Ledger' A1:F2000 read through a hook: 1,987 data rows"},
+        {"id": "dupes_removed", "name": "Duplicates removed", "at": 0.17, "evidence": "142 duplicate invoice rows removed; row count 1,845"},
+        {"id": "types_fixed", "name": "Dates and amounts normalized", "at": 0.30, "evidence": "0 text-formatted dates and 0 text-formatted amounts remain in Ledger"},
+        {"id": "matched_90", "name": "90% of rows reconciled", "at": 0.50, "evidence": "1,662 of 1,845 ledger rows matched to the bank export"},
+        {"id": "pivot", "name": "Summary pivot built", "at": 0.74, "evidence": "Pivot 'By Vendor' totals equal Ledger total: 1,284,310.55"},
+        {"id": "report_done", "name": "Report formatted and exported", "at": 0.98, "evidence": "Report.xlsx saved with 3 sheets; 0 formula errors"},
+    ],
+    "hooks": [
+        {"name": "read_range", "at": 0.02, "language": "javascript", "kind": "in_host",
+         "reason": "Reading numbers off screenshots of a grid is slow and I misread digits. The app has a macro console; read the cells directly.",
+         "args": {"sheet": "Ledger", "range": "A1:F50"},
+         "summaries": ["Ledger A1:F50: 49 rows, 6 columns", "Bank A1:D50: 49 rows, 4 columns", "selected range: 120 cells"],
+         "source": "function read_range(sheet, range) {\n  return JSON.stringify(app.workbook.sheet(sheet).getRange(range).getValues());\n}\n"},
+        {"name": "find_duplicates", "at": 0.10, "language": "python", "kind": "helper", "depends_on": ["read_range"],
+         "reason": "Spotting duplicate invoices by eye misses near-duplicates. Group rows by normalized invoice number and amount.",
+         "summaries": ["31 duplicate groups, 142 rows", "no duplicates in the new import"],
+         "source": "def find_duplicates(rows):\n    seen, dupes = {}, []\n    for i, r in enumerate(rows):\n        key = (str(r[0]).strip().upper(), round(float(r[3]), 2))\n        if key in seen:\n            dupes.append(i)\n        seen[key] = i\n    return dupes\n"},
+        {"name": "column_profile", "at": 0.22, "language": "javascript", "kind": "in_host", "depends_on": ["read_range"],
+         "reason": "Mixed text and number cells hide in columns that look uniform. Count cell types per column.",
+         "summaries": ["Date: 1,702 dates, 143 text", "Amount: 1,845 numbers", "Vendor: 1,845 text, 37 blank"],
+         "source": "function column_profile(sheet, col) {\n  const t = {};\n  for (const [v] of app.workbook.sheet(sheet).getRange(col).getValues()) t[typeof v] = (t[typeof v] || 0) + 1;\n  return JSON.stringify(t);\n}\n"},
+        {"name": "match_rows", "at": 0.38, "language": "javascript", "kind": "in_host", "depends_on": ["read_range"],
+         "reason": "Matching ledger rows to the bank export one lookup at a time is far too slow. Build an index of the bank sheet and match in one pass.",
+         "args": {"sheet": "Ledger", "keyCol": "A2:A2000", "otherSheet": "Bank"},
+         "summaries": ["1,310 of 1,845 matched", "1,662 of 1,845 matched, 183 unmatched", "no new unmatched rows"],
+         "source": _SHEET_LOOKUP_V1},
+        {"name": "explain_unmatched", "at": 0.52, "language": "python", "kind": "helper", "depends_on": ["match_rows", "read_range"],
+         "reason": "The leftover rows have causes, not noise. Group unmatched rows by likely reason: amount off by a fee, date shifted, or missing.",
+         "summaries": ["183 unmatched: 96 fee differences, 51 date shifts, 36 missing", "36 unmatched, all missing from the bank export"],
+         "source": "def explain_unmatched(unmatched, bank):\n    out = {'fee': [], 'date_shift': [], 'missing': []}\n    for r in unmatched:\n        near = [b for b in bank if abs(b['amount'] - r['amount']) <= 3.0]\n        out['fee' if near else 'missing'].append(r['row'])\n    return out\n"},
+        {"name": "check_totals", "at": 0.68, "language": "javascript", "kind": "in_host", "depends_on": ["read_range"],
+         "reason": "Before sending a report I want proof that the summary equals the source. Compare the pivot grand total with the ledger sum.",
+         "summaries": ["pivot total equals ledger total", "difference 0.00, 0 formula errors", "difference 12.40 in row group 'Misc'"],
+         "source": "function check_totals() {\n  const led = app.workbook.sheet('Ledger').getRange('D2:D2000').getValues().flat().reduce((a, b) => a + (+b || 0), 0);\n  const piv = app.workbook.sheet('By Vendor').getRange('B2:B200').getValues().flat().reduce((a, b) => a + (+b || 0), 0);\n  return JSON.stringify({ledger: led, pivot: piv, diff: +(led - piv).toFixed(2)});\n}\n"},
+    ],
+    "break": {"at": 0.55, "hook": "match_rows", "label": "Spreadsheet app updated mid-run (planted change: range API replaced)",
+              "detail": "error: getRange(...).getValues is not a function; the macro API changed in app version 4.2",
+              "repair_reason": "The app update replaced Range.getValues() with an async Range.values(). Rewrote the lookup against the new calls.",
+              "repaired_source": _SHEET_LOOKUP_V2, "repaired_detail": "health check passes with the new range API"},
+    "goals": [
+        (0.01, "Get exact cell values out of the workbook", "every later step depends on correct numbers"),
+        (0.10, "Remove duplicate invoices", "duplicates would double-count spend"),
+        (0.24, "Normalize dates and amounts", "text-formatted cells break sorting and sums"),
+        (0.36, "Reconcile the ledger against the bank export", "the main task"),
+        (0.54, "Fix the lookup macro after the app update", "matching by hand would take hours"),
+        (0.62, "Explain and resolve unmatched rows", "the report needs a reason for each"),
+        (0.72, "Build the summary pivot", "readers want totals by vendor"),
+        (0.90, "Format and export the report", "the deliverable"),
+    ],
+    "reasoning": [
+        (0.04, "Exact cells, not screenshots", "I misread a 3 as an 8 in a screenshot of the grid. The app's macro console can return the cell values as JSON, which is exact and cheaper than another screenshot."),
+        (0.12, "Duplicates that don't look identical", "Some invoice numbers differ only by trailing spaces or case. Grouping by a normalized key and the amount catches them without removing legitimate repeat purchases."),
+        (0.31, "Why do the sums disagree?", "143 dates are stored as text, so the date filter silently skips them. Profiling the columns shows this directly; I'll convert them before matching."),
+        (0.56, "The matching macro stopped working after the update", "The error says getValues is not a function. The update changed the range API. I'll read the new docs and port the macro rather than go back to matching by eye."),
+        (0.76, "Check the totals before formatting", "A pivot can look right and still drop rows. I'll compare its grand total with the ledger sum, then format."),
+        (0.88, "Fewer screenshots now", "Nearly everything I need comes back from macros and helpers. I only take screenshots to check formatting."),
+    ],
+    "messages": [
+        (0.17, "Removed 142 duplicate invoice rows. 1,845 rows remain."),
+        (0.31, "All dates and amounts are now real dates and numbers."),
+        (0.57, "match_rows broke when the app update changed its range API. I ported it to the new calls, and the health check passes."),
+        (0.98, "The report is exported: 3 sheets, totals match the ledger, no formula errors."),
+    ],
+    "compactions": [0.28, 0.58, 0.83],
+    "actions": [
+        ("click", {"x": 302, "y": 148}, "selected a cell"), ("type", {"text": "=SUMIF(A:A,F2,D:D)"}, "entered a formula"),
+        ("key", {"key": "ctrl+shift+L"}, "toggled the filter"), ("click", {"x": 520, "y": 82}, "opened the sort menu"),
+        ("drag", {"from": [180, 62], "to": [300, 62]}, "widened a column"), ("type", {"text": "2026-09-30"}, "typed a date"),
+    ],
+    "doc_queries": ["Range.getValues", "Range.values", "pivot table API", "conditional formatting"],
+}
+
+SCENARIOS = {"factorio": FACTORIO, "spreadsheet": SPREADSHEET}
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, default=Path("runs/fake-factorio"))
+    ap.add_argument("--scenario", choices=sorted(SCENARIOS), default="factorio")
+    ap.add_argument("--out", type=Path, default=None, help="default: runs/fake-<scenario>")
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--hours", type=float, default=14)
+    ap.add_argument("--hours", type=float, default=None, help="default: 14 for factorio, 24 for spreadsheet")
     a = ap.parse_args()
-    generate(a.out, a.seed, a.hours, SCENARIO)
-    print(f"wrote {a.out}")
+    out = a.out or Path(f"runs/fake-{a.scenario}")
+    hours = a.hours if a.hours is not None else {"factorio": 14, "spreadsheet": 24}[a.scenario]
+    generate(out, a.seed, hours, SCENARIOS[a.scenario])
+    print(f"wrote {out}")
