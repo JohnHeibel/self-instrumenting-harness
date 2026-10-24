@@ -2,6 +2,8 @@
 
 **The single source of truth for who does what.** Only john-mac edits this file. Assignments and changes to them happen here, not in chat. When an assignment changes, john-mac updates this file and sends a short message pointing to it.
 
+**Project name:** Sisyphus (Nazeem's pick).
+
 **Roles:** john-mac is John's main point of contact and the coordinator. john-pc is the powerful machine, with Factorio (and room for more games) next to it. Nazeem's side owns the UI and the Minecraft host.
 
 Decisions live in `docs/BRIEF.md` ("Decisions already made"). Interfaces live in `docs/interfaces/`.
@@ -47,10 +49,10 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 |---|---|---|---|
 | N1 | **Story view redesign** on one branch (pick one of `ui-story-redesign`, `ui-variant-b`, `ui-variant-c` and delete the others), in Nazeem's direction: clean, official, nothing decorative, not stock AI-generated UI | in progress | John signs off on the look |
 | N2 | **Non-game fake-run scenario** (PR #2), so the UI is proven generic | done (merged 54806f1) | merged |
-| N3 | **SpacetimeDB module and publisher.** The publisher tails a run's top-level `*.jsonl` and batches writes; tested against fake runs; john-pc runs it on the PC | queued | Story replays a run from SpacetimeDB |
+| N3 | **SpacetimeDB module and publisher.** The publisher tails a run's top-level `*.jsonl` and batches writes; tested against fake runs; john-pc runs it on the PC | in review (PR #3, john-mac) | Story replays a run from SpacetimeDB |
 | N4 | **Stage overlay** (live, over the game screen) | later | |
 | N5 | **Ops view** (health, alerts, STOP/PAUSE controls through reducers) | later | |
-| N6 | **Minecraft host** on Nazeem's Mac, the second host: get the modded game running, then `hosts/minecraft.toml` (data only, per the generality rule), then live plumbing tests (state out, reload) and a grader. It must work with the unchanged harness; anything the harness can't express generically goes to john-mac as a `request`. | in progress (setup) | the harness loads an agent-written extension into Minecraft and calls its tool |
+| N6 | **Minecraft host** on Nazeem's Mac, the second host: get the modded game running, then `hosts/minecraft.toml` (data only, per the generality rule), then live plumbing tests (state out, reload) and a grader. It must work with the unchanged harness; anything the harness can't express generically goes to john-mac as a `request`. | in progress: NeoForge 1.21.1 instance set up, first launch | the harness loads an agent-written extension into Minecraft and calls its tool |
 | — | **No Factorio host work.** PR #1 was closed: the Factorio setup is built against the real game by john-pc. | — | |
 
 ## john-mac (coordination, design, review)
@@ -67,4 +69,4 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 
 | Question | Waiting on |
 |---|---|
-| Real-world showcase: Tennessee Eastman chemical-plant control room vs Odoo vs Business Central. John defers to Nazeem, who is still deciding | Nazeem |
+| Real-world showcase: Nazeem will bring his own ideas to John. The research in docs/research/ is reference only, not a proposal | Nazeem |
