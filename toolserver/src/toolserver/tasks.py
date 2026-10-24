@@ -45,6 +45,7 @@ IDLE_NOTE_AFTER_S = 90          # hands idle this long: say so on the agent's to
 IDLE_NOTE_EVERY_S = 180         # ...at most this often
 STALL_REPEAT = 10               # a task holding the hands made the same acting call this many times...
 STALL_NO_ACT_S = 120            # ...or has made no acting call for this long: tell the agent, once each
+REPEAT_KEY_CHARS = 90             # failures alike over this many leading characters count as the same error
 
 
 class HandsBusy(ToolError):
@@ -450,7 +451,8 @@ class Work:
         again = ""
         if t.status == "failed":
             masked = re.sub(r"[0-9a-f]{8,}", "#", summary)           # ids, hashes
-            key = (t.name, re.sub(r"-?\d+(\.\d+)?", "#", masked))    # positions, ticks, counts
+            # positions, ticks, counts; and only the start, where the error is (state dumps after it vary)
+            key = (t.name, re.sub(r"-?\d+(\.\d+)?", "#", masked)[:REPEAT_KEY_CHARS])
             self.failures[key] = n = self.failures.get(key, 0) + 1
             if n >= 2:
                 again = (f" This is the {n}{'nd' if n == 2 else 'rd' if n == 3 else 'th'} time {t.name} failed with "
