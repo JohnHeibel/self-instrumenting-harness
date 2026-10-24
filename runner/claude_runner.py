@@ -82,6 +82,15 @@ BACKLOG_FILE = "BACKLOG.md"
 BACKLOG_CAP = 2500
 
 
+def time_note(until: float | None, now: float | None = None) -> str:
+    """The wall-clock budget left, shown with every prompt so the agent can trade tool-building against play."""
+    if not until:
+        return ""
+    left = max(0, int(until - (now if now is not None else time.time())))
+    end = datetime.fromtimestamp(until, timezone.utc).strftime("%H:%M UTC")
+    return f"Time budget: {left // 3600}h {left % 3600 // 60:02d}m left of the run (it ends at {end})."
+
+
 def backlog_note(workspace: Path) -> str:
     """The top of the agent's own backlog (/home/agent/work/BACKLOG.md), added to every continue prompt (which
     also follows an idle interrupt or a wake from a death), so a restart, reset or stall lands on the next chore instead of on a re-plan. The queue itself
@@ -553,6 +562,9 @@ class ClaudeRunner:
             note = skills_note(self.run_dir / "workspace")
             if note:
                 prompt += "\n\n" + note
+        tn = time_note(self.a.until)
+        if tn:
+            prompt += "\n\n" + tn
         if not first:
             bl = backlog_note(self.run_dir / "workspace")
             if bl:
@@ -693,7 +705,10 @@ class ClaudeRunner:
                 if not st.run_started_logged:
                     st.run_started_logged = True
                     self.log.write("run_started", agent="claude-code", model=st.model, host=self.host.name,
-                                   goal=st.extra["goal"].strip()[:500])
+                                   goal=st.extra["goal"].strip()[:500],
+                                   agent_version=ev.get("claude_code_version"),
+                                   deadline=(datetime.fromtimestamp(self.a.until, timezone.utc).isoformat()
+                                             if self.a.until else None))
                     self.save()
                 servers = ev.get("mcp_servers") or []
                 bad = [s for s in servers if s.get("status") not in ("connected", None)]
