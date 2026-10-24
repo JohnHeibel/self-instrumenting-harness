@@ -64,6 +64,7 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 | `task_started` | `task` (`t1`, `t2`, …), `name` (kept script, file or `code`), `hands` (it may act, holding the agent's one pair of hands), `minutes`, `args`, `why` (e.g. which rule started it) |
 | `task_queued` | `task`, `name`, `hands`, `after` (the task it waits to end ok) or `behind` (who held the hands), `args`, `why`: a task waiting to start |
 | `task_held`, `task_resumed` | `task`, `name`, `after`; held adds `why` (e.g. `t3 ended failed`). A task waiting on one that failed or was stopped is held, with everything behind it, until the agent resumes it (optionally `after` another task) or drops it |
+| `task_stalled` | `task`, `name`, `kind` (`repeat`: the same acting call made 10+ times; `quiet`: no acting call for 2+ min), `acts`, `calls`, `held_s`. A running task holding the hands that seems stuck; the agent gets an urgent notice, once per kind per task |
 | `task_ended` | `task`, `name`, `status` (`ok`, `failed`, `stopped`; a queued or held task the agent dropped ends `stopped` with `calls` 0), `duration_ms`, `calls`, `summary`. `task_started` of a queued task adds `after` and `queued_s` |
 | `rule_set`, `rule_removed`, `rules_restored` | `rule`, its `check` (a kept script name, or `code` with the code), `args`, `every_s`, `do` (`tell`, `wake`, `run:<script>`), `times`, `cooldown_s`; removal adds `why` and `fired` |
 | `rule_fired` | `rule`, `text` (what the check reported), `do`, `count` |

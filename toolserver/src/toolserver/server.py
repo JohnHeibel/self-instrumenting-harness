@@ -392,6 +392,7 @@ def _deliver_notices(mcp: FastMCP, board: "tasks_mod.Board", work: "tasks_mod.Wo
         result = await original(name, arguments, context=context, convert_result=convert_result)
         if VIA.get() is not None or not convert_result or name in ("wait", "status"):
             return result
+        work.stall_check()             # posts to the board, so before its footer
         footer = "\n".join(x for x in (board.footer(), work.idle_note()) if x)
         if not footer:
             return result

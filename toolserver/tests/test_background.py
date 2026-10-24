@@ -252,3 +252,41 @@ def test_idle_note_after_a_while_without_acting(tmp_path):
     assert w.idle_note() == ""                       # not again right away
     h.check(None)                                    # acting resets the clock
     assert h.idle_s() < 1
+
+
+def test_stalled_task_holding_the_hands_is_reported_once_per_kind(tmp_path):
+    from toolserver import tasks as tm
+
+    class Log:
+        def __init__(self):
+            self.rows = []
+
+        def write(self, typ, **kw):
+            self.rows.append((typ, kw))
+
+    class Board:
+        def __init__(self):
+            self.posts = []
+
+        def post(self, source, text, urgent=False):
+            self.posts.append((source, text, urgent))
+
+    log, board = Log(), Board()
+    w = tm.Work(None, log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    t = tm.Task(id="t1", name="build", hands=True, started=1000.0, deadline_s=600, wake_on_end=False)
+    w.tasks["t1"] = t
+    for i in range(tm.STALL_REPEAT - 1):
+        w.watch_call(t, "act", {"op": "take", "n": 1}, acts=True, now=1001.0 + i)
+        w.watch_call(t, "look", {}, acts=False, now=1001.5 + i)
+    assert board.posts == []
+    w.watch_call(t, "act", {"n": 1, "op": "take"}, acts=True, now=1020.0)    # same call, keys reordered
+    assert len(board.posts) == 1 and "same acting call (10 times" in board.posts[0][1] and board.posts[0][2]
+    w.watch_call(t, "act", {"op": "take", "n": 1}, acts=True, now=1021.0)
+    assert len(board.posts) == 1                                               # once per kind
+    for i in range(5):
+        w.watch_call(t, "look", {}, acts=False, now=1030.0 + i)
+    assert len(board.posts) == 1                                               # reading, but not for long
+    w.stall_check(now=1021.0 + tm.STALL_NO_ACT_S + 1)
+    assert len(board.posts) == 2 and "no acting call for 2.0 min (5 reads since)" in board.posts[1][1]
+    assert [kw["kind"] for typ, kw in log.rows if typ == "task_stalled"] == ["repeat", "quiet"]
+    assert "the most repeated 11x" in w.describe("t1")

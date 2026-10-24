@@ -40,6 +40,8 @@ FOOTER_CHARS = 800
 MAX_QUEUED = 8
 IDLE_NOTE_AFTER_S = 90          # hands idle this long: say so on the agent's tool results
 IDLE_NOTE_EVERY_S = 180         # ...at most this often
+STALL_REPEAT = 10               # a task holding the hands made the same acting call this many times...
+STALL_NO_ACT_S = 120            # ...or has made no acting call for this long: tell the agent, once each
 
 
 class HandsBusy(ToolError):
@@ -186,6 +188,11 @@ class Task:
     logs: list[str] = field(default_factory=list)
     calls: int = 0
     job: asyncio.Task | None = None
+    acts: int = 0                  # acting calls it made
+    reads: int = 0                 # calls since its last acting call
+    last_act: float = 0.0
+    repeats: dict = field(default_factory=dict)   # acting call -> times made
+    stall_told: set = field(default_factory=set)  # which stall notices it got
 
     def brief(self) -> str:
         if self.status == "queued":
@@ -362,10 +369,12 @@ class Work:
         def on_event(kind: str, data: dict) -> None:
             if kind == "call":
                 t.calls += 1
+                hook = self.ext.hook_info(data.get("tool", ""))
                 self.log.write("tool_call", tool=data.get("tool"), channel="hook", args=data.get("args"),
                                ok=data.get("ok"), error=data.get("error"), duration_ms=data.get("ms"),
                                result_kind="text", result_bytes=data.get("bytes"), summary=data.get("summary"),
-                               via=f"task:{t.id}", hook=self.ext.hook_info(data.get("tool", "")))
+                               via=f"task:{t.id}", hook=hook)
+                self.watch_call(t, data.get("tool", ""), data.get("args"), bool(hook and hook["acts"]))
             elif kind == "log":
                 t.logs = (t.logs + [data.get("text", "")])[-20:]
             elif kind == "notify":
@@ -420,6 +429,10 @@ class Work:
         if t is None:
             raise ToolError(f"no task {tid!r}. " + self.listing())
         lines = [t.brief()]
+        if t.status == "running" and t.hands:
+            top = max(t.repeats.values(), default=0)
+            lines.append(f"acting calls: {t.acts} ({len(t.repeats)} different, the most repeated {top}x); "
+                         f"{t.reads} reads since the last one")
         if t.logs:
             lines.append("log: " + " | ".join(t.logs[-8:]))
         if t.result is not None:
@@ -431,6 +444,45 @@ class Work:
             lines.append(f"(Checking again costs a step. wait(on=[\"{t.id}\"]) returns when it ends; meanwhile "
                          f"queue the next chore with run_script(..., background=True, after=\"{t.id}\").)")
         return "\n".join(lines)
+
+    def watch_call(self, t: Task, tool: str, args: Any, acts: bool, now: float | None = None) -> None:
+        """Track what a task does with the hands, to spot one that holds them without getting anywhere."""
+        now = now or time.time()
+        if acts:
+            t.acts, t.reads, t.last_act = t.acts + 1, 0, now
+            key = f"{tool} {json.dumps(args, sort_keys=True, default=str)[:300]}"
+            t.repeats[key] = t.repeats.get(key, 0) + 1
+        else:
+            t.reads += 1
+        self.stall_check(now)
+
+    def stall_check(self, now: float | None = None) -> None:
+        """Tell the agent, once per kind, when a task holding the hands seems stuck: it keeps making the
+        same acting call, or it has gone a while with only reads (waiting, polling) or nothing at all."""
+        now = now or time.time()
+        for t in self.tasks.values():
+            if t.status != "running" or not t.hands:
+                continue
+            held = (now - t.started) / 60
+            key, n = max(t.repeats.items(), key=lambda kv: kv[1], default=("", 0))
+            if n >= STALL_REPEAT and "repeat" not in t.stall_told:
+                t.stall_told.add("repeat")
+                self._stalled(t, "repeat", f"{t.id} ({t.name}) has held your hands {held:.1f} min and keeps making "
+                              f"the same acting call ({n} times: {key[:160]}). It may be stuck in a retry loop. "
+                              f"Check what it is waiting for and stop it (task(\"{t.id}\", stop=True)) if it "
+                              f"isn't getting anywhere.")
+            quiet = now - (t.last_act or t.started)
+            if quiet >= STALL_NO_ACT_S and "quiet" not in t.stall_told:
+                t.stall_told.add("quiet")
+                self._stalled(t, "quiet", f"{t.id} ({t.name}) has held your hands {held:.1f} min but made no acting "
+                              f"call for {quiet / 60:.1f} min ({t.reads} reads since). If it is waiting or polling, "
+                              f"the hands sit idle meanwhile: stop it and do the waiting outside the hands (a "
+                              f"hands=False task, or a rule), or let it finish if the wait is nearly over.")
+
+    def _stalled(self, t: Task, kind: str, text: str) -> None:
+        self.log.write("task_stalled", task=t.id, name=t.name, kind=kind, acts=t.acts, calls=t.calls,
+                       held_s=round(time.time() - t.started))
+        self.board.post(t.id, text, urgent=True)
 
     def idle_note(self) -> str:
         """A line for the agent's tool results when nothing has acted for a while and nothing is queued."""
