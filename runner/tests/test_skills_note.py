@@ -24,3 +24,21 @@ def test_update_note_is_delivered_once(tmp_path):
     assert "wait in long steps" in cr.take_update_note(tmp_path)
     assert cr.take_update_note(tmp_path) == ""
     assert (tmp_path / "UPDATE_NOTE.md.sent").exists()
+
+
+def test_idle_watch(tmp_path):
+    now = [0.0]
+    w = cr.IdleWatch(tmp_path, 60, clock=lambda: now[0])
+    (tmp_path / "live").mkdir()
+    (tmp_path / "live" / "latest.jpg").write_bytes(b"a")
+    w.reset()
+    now[0] = 59
+    assert not w.idle()
+    now[0] = 61
+    assert w.idle()                                   # nothing changed for 61 s
+    (tmp_path / "live" / "latest.jpg").write_bytes(b"b")
+    assert not w.idle()                               # the picture changed: activity
+    now[0] = 130
+    (tmp_path / "events.jsonl").write_text("x")       # a tool call was logged: activity
+    assert not w.idle()
+    assert not cr.IdleWatch(tmp_path, 0).idle()       # off

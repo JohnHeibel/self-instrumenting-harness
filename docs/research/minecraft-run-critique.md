@@ -37,3 +37,8 @@ Watch next: behaviour across the compaction; whether the 90 s hook cap bites (ag
 ## 2026-10-24 03:00 PDT, cycle 6 (observation)
 Evidence: no new milestone for 30 min after crafted_10 (09:21Z); agent mining iron in a dark cave (live frame shows inventory open, dark screen), 1 raw iron after about 25 min. Skill functions are growing in prelude.py (wood_start, stone_start, get_ore, tunnel_to) and INDEX.md is kept, which is the intended behaviour.
 Fix (Minecraft-only, goals/minecraft.md): efficiency hints (torches, branch tunnel at y=16, batch smelting). Frozen at run start, so it needs delivery via NUDGE/UPDATE_NOTE; text for main is in the message sent this cycle.
+
+## 2026-10-24 03:20 PDT, cycle 7: idle stall
+Evidence: 42 min after 09:21Z with no milestone; 22.8 min (55%) in model gaps over 60 s (background-job waits). The player lost the stone tools and chest contents (inventory back to wooden tools at 09:53; likely died near the lava the agent noted) and re-ran stone_start. A bridge job (`get_blocks(..., 20, 60)`) held the main thread 8+ min; because the bridge has a single queue, reads timed out and the agent diagnosed with screenshots, then `\killjob` and restart (about 6 min).
+Cost: about 25 min of 42 wall-clock; tokens were cheap (waits are one step each) but progress was zero.
+Fixes: runner IdleWatch + idle note (restart needed, default on at 8 min); brief bullet on progress reporting; goal paragraph on sliced jobs and heartbeat in the bridge.

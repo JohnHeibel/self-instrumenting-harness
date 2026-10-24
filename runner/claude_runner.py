@@ -78,6 +78,47 @@ def skills_note(workspace: Path) -> str:
             + text[:SKILLS_CAP] + ("\n... (index cut; read the file for the rest)" if cut else ""))
 
 
+IDLE_NOTE = ("Idle check: for {m:.0f} minutes nothing on the host screen changed and you called no harness tool. "
+             "If you are waiting on a background job, assume it is stuck until it proves otherwise: your shell "
+             "jobs were stopped by this restart, so look at the host now (a screenshot or a state read) and see "
+             "what is really happening. Run actions in the foreground with progress printed every few seconds, "
+             "give any background job a progress line you check within 60 seconds, and kill a job that shows no "
+             "progress in 2 minutes. Never wait more than about 2 minutes without observing the host.")
+
+
+class IdleWatch:
+    """Notices a stall that the agent's own waiting hides: the host's picture (live/latest.jpg) is unchanged
+    and the tool server logged no call for `idle_s` seconds. Host-generic; off when idle_s <= 0."""
+
+    def __init__(self, run_dir: Path, idle_s: float, clock=time.monotonic) -> None:
+        self.run_dir, self.idle_s, self.clock = run_dir, idle_s, clock
+        self.sig = None
+        self.since = clock()
+
+    def _signature(self):
+        try:
+            ev = (self.run_dir / "events.jsonl").stat().st_size
+        except OSError:
+            ev = 0
+        try:
+            pic = hash((self.run_dir / "live" / "latest.jpg").read_bytes())
+        except OSError:
+            pic = None
+        return ev, pic
+
+    def reset(self) -> None:
+        self.sig, self.since = self._signature(), self.clock()
+
+    def idle(self) -> bool:
+        if self.idle_s <= 0:
+            return False
+        sig = self._signature()
+        if sig != self.sig:
+            self.sig, self.since = sig, self.clock()
+            return False
+        return self.clock() - self.since >= self.idle_s
+
+
 def take_update_note(run_dir: Path) -> str:
     """Advice for the agent written by a human or critic into <run>/UPDATE_NOTE.md. Delivered once, with the
     next continue prompt, then renamed to UPDATE_NOTE.md.sent so it is kept for the record."""
@@ -155,6 +196,7 @@ class ClaudeRunner:
         self.active_s = float(self.state.extra.get("active_s", 0))
         self.uncached = int(self.state.extra.get("uncached_tokens", 0))
         self.total_tokens = int(self.state.extra.get("total_tokens", 0))
+        self.pending_note = ""
         self.last_state: tuple | None = None
         self._tick_at = time.monotonic()
 
@@ -377,6 +419,10 @@ class ClaudeRunner:
             note = skills_note(self.run_dir / "workspace")
             if note:
                 prompt += "\n\n" + note
+        if not first and self.pending_note:
+            prompt += "\n\n" + self.pending_note
+            self.pending_note = ""
+            self.log.write("marker", label="idle nudge delivered", kind="idle_nudge")
         if not first:
             un = take_update_note(self.run_dir)
             if un:
@@ -403,6 +449,8 @@ class ClaudeRunner:
         turn_tokens = 0
         status, error, interrupt = "completed", None, None
         self.agent_state("thinking", "starting turn")
+        idle = IdleWatch(self.run_dir, self.a.idle_minutes * 60)
+        idle.reset()
         t = Turn(self.docker_cmd(None if first else st.thread_id), prompt,
                  self.run_dir / "raw" / "claude-stream.jsonl", self.run_dir / "raw" / "claude.stderr.log")
         seen_msgs: set[str] = set()
@@ -414,6 +462,9 @@ class ClaudeRunner:
             why = self.end_reason() or ("pause" if self.paused() else None)
             if not why and (self.run_dir / "NUDGE").exists():
                 why = "nudge"
+            if not why and idle.idle():
+                why = "idle"
+                self.pending_note = IDLE_NOTE.format(m=self.a.idle_minutes)
             if not why and time.monotonic() - last_host_check > self.a.host_poll:
                 last_host_check = time.monotonic()
                 up, detail = self.check()
@@ -554,6 +605,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--budget-tokens", type=int, help="uncached input + output tokens")
     ap.add_argument("--until", help="wall-clock deadline, ISO 8601, e.g. 2026-10-24T15:00:00Z")
     ap.add_argument("--stall-timeout", type=float, default=1800)
+    ap.add_argument("--idle-minutes", type=float, default=8,
+                    help="interrupt and nudge when the host screen is unchanged and no tool was called this long (0 = off)")
     ap.add_argument("--host-poll", type=float, default=30)
     ap.add_argument("--backoff-base", type=float, default=30)
     ap.add_argument("--backoff-cap", type=float, default=3600)

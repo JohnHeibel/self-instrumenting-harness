@@ -85,3 +85,10 @@ Note on overlap (critic, cycle 5): `NUDGE` interrupts the running turn and resum
 ## 2026-10-24 (critic, cycle 5: milestone costs in `costs`) toolserver/src/toolserver/costs.py
 The brief tells the agent to "judge by numbers", but `costs` only showed a time window. It now ends with the last 8 grader milestones: minutes since the previous one, model requests and
 uncached tokens in between (milestones found in the same pass are grouped). Generic: it only reads `milestone` records in grader.jsonl (Factorio's too). Test: `toolserver/tests/test_costs.py`. Effective at tool server restart.
+
+## 2026-10-24 (critic, cycle 6: idle-stall watch) runner/claude_runner.py, prompts/brief.md
+Evidence (mc-overnight-01, 09:21-10:03Z): 42 min with no milestone; 23 min of it (55%) were gaps over 60 s between model messages, spent "waiting for the job notification" on background shell jobs
+(`sk.wait(580)` in `run_in_background`, Monitor timers of 280-590 s). The in-host bridge queues every call behind the running job, so state reads timed out (10-40 s) while a long
+get_blocks/scan job held the main thread (one job, 8+ minutes, no progress record), and the agent could only see it by screenshot. The agent's own waiting hides the stall from the supervisor.
+Change: (1) `IdleWatch`: if `live/latest.jpg` is byte-identical and `events.jsonl` has not grown for `--idle-minutes` (default 8, 0 = off), the runner interrupts the turn (which also stops stuck background shell jobs), logs `marker kind=interrupt reason=idle`, and the continue prompt carries an idle note (`kind=idle_nudge`). Generic: needs only the spectator image the tool server already writes. (2) Brief bullet "Long jobs report progress". Tests: `runner/tests/test_skills_note.py`.
+Caveat: a restart costs a re-read of the context (cached if under 5 min old).
