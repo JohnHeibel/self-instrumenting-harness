@@ -46,6 +46,15 @@ def server(tmp_path: Path):
     """))
     run_dir = tmp_path / "run"
     port = _free_port()
+    proc = _start(port, run_dir, host_toml)
+    info = {"url": f"http://127.0.0.1:{port}/mcp", "run": run_dir, "ws": run_dir / "workspace", "host": host_dir,
+            "port": port, "toml": host_toml, "proc": proc}
+    yield info
+    info["proc"].terminate()
+    info["proc"].wait(10)
+
+
+def _start(port: int, run_dir: Path, host_toml: Path) -> subprocess.Popen:
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(SRC), os.environ.get("PYTHONPATH")]))}
     proc = subprocess.Popen([sys.executable, "-m", "toolserver.server", "--port", str(port), "--run-dir", str(run_dir),
                              "--run-id", "test", "--host-config", str(host_toml), "--agent-container", "local"], env=env)
@@ -53,15 +62,11 @@ def server(tmp_path: Path):
     while time.monotonic() < deadline:
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
-            break
+            return proc
         except OSError:
             time.sleep(0.2)
-    else:
-        proc.kill()
-        pytest.fail("tool server did not start")
-    yield {"url": f"http://127.0.0.1:{port}/mcp", "run": run_dir, "ws": run_dir / "workspace", "host": host_dir}
-    proc.terminate()
-    proc.wait(10)
+    proc.kill()
+    pytest.fail("tool server did not start")
 
 
 def write_ext(ws: Path, name: str, tools: list[dict], *, mod_text: str | None = "-- v1", reload: str | None = "ok",
@@ -202,3 +207,29 @@ def test_accepts_docker_host_header(server):
     assert ok.status_code == 200, ok.text
     bad = httpx.post(url, json=init, headers={**headers, "Host": f"evil.example:{port}"})
     assert bad.status_code == 421
+
+
+def test_tools_survive_a_tool_server_restart(server):
+    ws = server["ws"]
+    m = write_ext(ws, "probe_kit", [tool("probe_state")])
+
+    async def load(s, changes):
+        res = await s.call_tool("load_extension", {"manifest": m})
+        assert not res.isError, res.content[0].text
+
+    anyio.run(_session, server["url"], load)
+    server["proc"].terminate()
+    server["proc"].wait(10)
+    server["proc"] = _start(server["port"], server["run"], server["toml"])
+
+    async def after(s, changes):
+        assert "probe_state" in await names(s)
+        out = await s.call_tool("probe_state", {"q": "back"})
+        assert not out.isError and "back" in out.content[0].text
+        res = await s.call_tool("load_extension", {"manifest": m})
+        assert not res.isError and "v2" in res.content[0].text   # counting continues; v1's archive is kept
+
+    anyio.run(_session, server["url"], after)
+    ev = events(server["run"])
+    assert [(e["extension"], e["version"]) for e in ev if e["type"] == "hook_restored"] == [("probe_kit", 1)]
+    assert (server["run"] / "extensions" / "probe_kit" / "v1").exists()

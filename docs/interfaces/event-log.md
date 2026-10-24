@@ -53,6 +53,8 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 
 **`hook_status`**: `hook`, `status` (`ok`, `broken` or `repaired`), `detail`. Written by health checks and repairs.
 
+**`hook_restored`**: `extension`, `version`, `hooks`. Written when a restarted tool server registers an extension's tools again (the last version loaded; nothing is reinstalled). Versions keep counting across restarts, so `hook_loaded` versions never repeat within a run.
+
 **`server_started`**: `host`, `port`.
 
 ### Fields any `tool_call` may carry, for the UI
