@@ -342,6 +342,15 @@ class ClaudeRunner:
         prompt = self.first_prompt() if first else CONTINUE_PROMPT
         if not first and self.state.extra.get("update_note"):
             prompt += "\n\n" + self.state.extra.pop("update_note")
+        nudge = self.run_dir / "NUDGE"
+        if not first and nudge.exists():
+            # A supervisor (human or agent) wrote a note for the agent; the running turn was
+            # interrupted for it, and it is delivered once with this continue prompt.
+            note = nudge.read_text(encoding="utf-8").strip()
+            nudge.unlink()
+            if note:
+                prompt += "\n\nNote from your supervisor:\n" + note
+                self.log.write("marker", label="supervisor nudge", kind="supervisor_nudge", text=note[:500])
         st.turns += 1
         turn_id = f"t{st.turns}"
         st.active_turn_id = turn_id
@@ -362,6 +371,8 @@ class ClaudeRunner:
         while True:
             self.tick()
             why = self.end_reason() or ("pause" if self.paused() else None)
+            if not why and (self.run_dir / "NUDGE").exists():
+                why = "nudge"
             if not why and time.monotonic() - last_host_check > self.a.host_poll:
                 last_host_check = time.monotonic()
                 up, detail = self.check()
