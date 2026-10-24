@@ -13,6 +13,7 @@ Background research gathered Oct 23–24, 2026, while waiting for the work split
 | [real-world-applications.md](real-world-applications.md) | Non-game showcase: ERP-Bench on Odoo 19 (recommended), other professional domains ranked, a proposed experiment, an open policy question |
 | [long-horizon-showcase.md](long-horizon-showcase.md) | **Proposal (replaces the two above as the non-game showcase):** the agent works a 24–48 h shift alone as the board operator of the Tennessee Eastman chemical plant behind an Ignition SCADA HMI, building its own hooks and supervisory scripts; verified tep-studio and Ignition Maker facts, published TE costs, measured trip times under instrument and valve faults |
 | [other-hosts-and-sponsors.md](other-hosts-and-sponsors.md) | Odoo + OCA reconcile, Minecraft and KSP reload costs, SpacetimeDB 2.0, Hyphenate |
+| [minecraft.md](minecraft.md) | **Minecraft as a local host on Nazeem's Mac:** versions and loaders (NeoForge 1.21.1 for Create/Mekanism, 26.3 Fabric for the newest), reload options (Minescript, KubeJS, hotswap, Muto), bridge mods, macOS capture and input, modpack and milestone ideas, prior art, and a first spike |
 
 ## Top findings
 

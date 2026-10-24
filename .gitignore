@@ -16,3 +16,6 @@ build/
 # Run artifacts and machine-local settings
 runs/
 .claude/settings.local.json
+
+# Built per machine by hosts/factorio/hostctl.py make-start-save
+hosts/factorio/saves/
