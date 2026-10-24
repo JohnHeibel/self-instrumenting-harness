@@ -28,3 +28,18 @@ we'd like John to consider so the two paths converge. Append new entries at the 
    `<run>/mcp.json` with the real `--port` and mounts it, so the image's baked URL is only a default.
 6. **P6 (container freedom)** is not done for the Claude image: it has passwordless sudo, but no egress
    proxy or resource caps. It should follow whatever P6 settles on for the Codex image.
+
+## 2026-10-24 (Minecraft on macOS: things the harness can't do generically yet)
+
+1. **Stale "frontmost app" in `macos.py` `focus()`.** `NSWorkspace.frontmostApplication()` is cached per process and only
+   refreshes while a run loop is pumped, so in the long-lived tool server it returns whatever was frontmost at the first call.
+   Result: "could not bring the program's window to the front" on every input if the host wasn't front at that first call, and a
+   silent skip of activation if it was (clicks then go to whatever window is on top). Fix: pump `NSRunLoop.currentRunLoop()`
+   (e.g. `runUntilDate_` 0.05 s) inside `front()`, or ask the window list for the front-most layer-0 window instead.
+   Also: `activateWithOptions_` from a background process is ignored on current macOS; a synthetic click on the title bar does raise it.
+2. **Window capture shows what is on top.** `grab()` is `screencapture -R` on the window's rectangle, so a covering window ends up
+   in the screenshot. `screencapture -l<windowID>` (id from `kCGWindowNumber`) captures the window itself, covered or not.
+3. **`--run-dir` with a symlink prefix** (`/tmp/x` on macOS is `/private/tmp/x`): `load_extension` fails with
+   "is not in the subpath of" because the workspace path isn't resolved. Resolve `run_dir` once in `server.main`.
+4. **Starting an in-host part.** Minescript scripts only start when typed in game chat. Today the agent types it (T, `\name`, Enter),
+   which works with `key`/`type`. A generic "start an in-host program" reload action would need host-specific input, so we left it to the agent.
