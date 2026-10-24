@@ -11,9 +11,12 @@
 
 [host]
 name = "odoo"
-# Odoo is a web app; a browser window is optional (see notes). With no matching window a screenshot reports
-# that; everything else works through the API.
-window_title = "Odoo"
+# Odoo is a web app and everything here works through the API; there is no program window to show. The title
+# below matches no window on purpose, so the tool server never picks the user's browser window by accident.
+# Caveat: when no window matches, the tool server's screenshot tool falls back to the WHOLE monitor (there is no
+# config switch for "no screenshots" yet), so the notes tell the agent not to take screenshots, and a run should
+# happen on a machine whose screen holds nothing private.
+window_title = "sisyphus-odoo-no-browser-window"
 process = ""
 capture = "window"
 up_check = ["{python}", "odoo/hostctl.py", "check", "--run-dir", "{run_dir}"]
@@ -34,6 +37,8 @@ Limit: call only the public methods the interface itself calls (read, search, cr
 button_*), never a method whose name starts with an underscore, and use no other login. Fields and methods are
 discoverable with fields_get and the docs. The web client is the same Odoo at the same address, but you have
 no password for it.
+Do not take screenshots: this host has no window, so a screenshot would show whatever else is on this machine's screen.
+Mouse and keyboard tools have nothing to act on either.
 """
 
 [extensions]
