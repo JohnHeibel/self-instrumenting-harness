@@ -139,3 +139,9 @@ The harness itself is the product. Each sponsor track is one demo of it.
 - Token budget for long runs.
 - Licenses for Minecraft and KSP 1 on the demo machine.
 - The denominator for "interface coverage".
+- **UI is central and visual.** One web app with three views over the same data:
+  - **Stage:** a broadcast overlay over the game screen, in the style of ModdedBench's overlay. It shows the goal, the agent's state and reasoning, a plain-language feed, pop-ups of what the agent just observed, coverage and cost curves, and the hook library growing.
+  - **Story:** a replay timeline with key-moment markers and timelapse playback. Clicking a hook shows its source, diffs and the reason it was written. **This view is built first**; it doubles as the demo video.
+  - **Ops:** dense health, alerts and controls for the two of us.
+  The UI only knows generic concepts (runs, tool calls by channel, hooks, reasoning, milestones); hosts supply data, not UI code. It runs on John's Mac.
+- **SpacetimeDB is the UI's real-time backend.** The JSONL event log stays the source of truth. A publisher on the PC mirrors it into SpacetimeDB, and the UI subscribes for live views and queries time ranges for replay. Control actions from the Ops view go through SpacetimeDB reducers to the runner.
