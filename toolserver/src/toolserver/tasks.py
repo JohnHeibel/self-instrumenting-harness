@@ -5,6 +5,10 @@ hands lock (one pair of hands: only one actor at a time).
 Nothing here knows the program. A task is the agent's own script; a rule's check is the agent's
 own script that calls the agent's own tools; the harness only schedules, waits, delivers and logs.
 
+A task that needs the hands while they are busy waits in a queue and starts as soon as they are
+free; a task started with `after` waits for that task to end well (and is skipped if it doesn't). So
+the agent can line up its next chores and think while they run, instead of leaving its hands idle.
+
 Notices reach the agent three ways: as a footer on its next tool result, from wait(), and, for
 urgent ones, by the runner waking it (the WAKE file in the run dir, which the runner watches).
 """
@@ -32,6 +36,9 @@ MAX_TASKS = 8
 MAX_RULES = 32
 QUIET = {"", "none", "null", "false", "0", "[]", "{}", '""'}
 FOOTER_CHARS = 800
+MAX_QUEUED = 8
+IDLE_NOTE_AFTER_S = 90          # hands idle this long: say so on the agent's tool results
+IDLE_NOTE_EVERY_S = 180         # ...at most this often
 
 
 class HandsBusy(ToolError):
@@ -46,20 +53,31 @@ class Hands:
     def __init__(self) -> None:
         self.holder: str | None = None
         self.what = ""
+        self.last_busy = time.time()       # when something last acted or held the hands
+        self.on_release: Callable[[], None] | None = None   # Work starts the next queued task
 
     def take(self, who: str, what: str) -> None:
         if self.holder not in (None, who):
             raise HandsBusy(self.busy_note())
         self.holder, self.what = who, what
+        self.last_busy = time.time()
 
     def release(self, who: str) -> None:
         if self.holder == who:
             self.holder, self.what = None, ""
+            self.last_busy = time.time()
+            if self.on_release:
+                self.on_release()
 
     def check(self, who: str | None) -> None:
         """Before an acting call by `who` (None: the agent directly)."""
         if self.holder not in (None, who):
             raise HandsBusy(self.busy_note())
+        self.last_busy = time.time()
+
+    def idle_s(self) -> float:
+        """How long nothing has acted or held the hands (0 while something holds them)."""
+        return 0.0 if self.holder else time.time() - self.last_busy
 
     def free_for(self, who: str | None) -> bool:
         return self.holder in (None, who)
@@ -158,13 +176,21 @@ class Task:
     deadline_s: float
     wake_on_end: bool
     handle: scripts.Handle = field(default_factory=scripts.Handle)
-    status: str = "running"        # running | ok | failed | stopped
+    status: str = "running"        # queued | running | ok | failed | stopped | skipped
+    after: str = ""                # queued until this task ends ok
+    queued_at: float = 0.0
+    start_args: tuple = ()         # (code, file, args, why) kept while queued
     result: scripts.Result | None = None
     logs: list[str] = field(default_factory=list)
     calls: int = 0
     job: asyncio.Task | None = None
 
     def brief(self) -> str:
+        if self.status == "queued":
+            behind = f"after {self.after}" if self.after else "for your hands"
+            return f"{self.id} {self.name}: queued {behind} ({time.time() - self.queued_at:.0f} s)"
+        if self.status == "skipped":
+            return f"{self.id} {self.name}: skipped ({self.after} didn't end ok)"
         took = time.time() - self.started if self.result is None else self.result.seconds
         hands = ", hands" if self.hands and self.status == "running" else ""
         return f"{self.id} {self.name}: {self.status} ({took:.0f} s, {self.calls} calls{hands})"
@@ -209,6 +235,7 @@ class Work:
         self.rules: dict[str, Rule] = {}
         self._n = 0
         self._rules_path = run_dir / "rules.json"
+        hands.on_release = self.pump
 
     def can_act(self, who: str | None) -> bool:
         """May `who` act at all? Rules' checks and tasks started without hands only read."""
@@ -222,20 +249,67 @@ class Work:
     # ------------------------------------------------------------------ tasks
 
     def start(self, code: str, file: str, name: str, args: dict | None, minutes: float, hands: bool,
-              wake_on_end: bool = False, why: str = "") -> Task:
-        running = [t for t in self.tasks.values() if t.status == "running"]
+              wake_on_end: bool = False, why: str = "", after: str = "") -> Task:
+        """Start a task now, or queue it: behind `after` (a task id), or for the hands if they're busy."""
+        if after and after not in self.tasks:
+            raise ToolError(f"after: no task {after!r}. " + self.listing())
+        queued = [t for t in self.tasks.values() if t.status == "queued"]
+        must_queue = (after and self.tasks[after].status in ("queued", "running")) or \
+            (hands and (not self.hands.free_for(None) or any(q.hands for q in queued)))
+        if must_queue and len(queued) >= MAX_QUEUED:
+            raise ToolError(f"{len(queued)} tasks are already queued (at most {MAX_QUEUED}). " + self.listing())
+        if after and not must_queue and self.tasks[after].status != "ok":
+            raise ToolError(f"after: {after} has already ended {self.tasks[after].status}, so this wouldn't run")
+        self._n += 1
+        tid = f"t{self._n}"
+        t = Task(tid, name, hands, time.time(), max(1.0, min(float(minutes), MAX_TASK_MINUTES)) * 60, wake_on_end,
+                 after=after, queued_at=time.time(), start_args=(code, file, args, why))
+        self.tasks[tid] = t
+        if must_queue:
+            t.status = "queued"
+            self.log.write("task_queued", task=tid, name=name, hands=hands, after=after or None,
+                           behind=None if after else self.hands.holder, args=args or {}, why=why or None)
+            return t
+        self._begin(t)
+        return t
+
+    def _begin(self, t: Task) -> None:
+        running = [x for x in self.tasks.values() if x.status == "running"]
         if len(running) >= MAX_TASKS:
             raise ToolError(f"{len(running)} tasks are already running (at most {MAX_TASKS}); stop one first")
-        tid = f"t{self._n + 1}"
-        if hands:
-            self.hands.take(tid, name)       # raises HandsBusy
-        self._n += 1
-        t = Task(tid, name, hands, time.time(), max(1.0, min(float(minutes), MAX_TASK_MINUTES)) * 60, wake_on_end)
-        self.tasks[tid] = t
-        self.log.write("task_started", task=tid, name=name, hands=hands, minutes=t.deadline_s / 60,
-                       args=args or {}, why=why or None)
+        if t.hands:
+            self.hands.take(t.id, t.name)       # raises HandsBusy
+        code, file, args, why = t.start_args
+        t.status, t.started = "running", time.time()
+        waited = t.started - t.queued_at
+        self.log.write("task_started", task=t.id, name=t.name, hands=t.hands, minutes=t.deadline_s / 60,
+                       args=args or {}, why=why or None, after=t.after or None,
+                       queued_s=round(waited, 1) if waited >= 0.5 else None)
         t.job = asyncio.create_task(self._run(t, code, file, args))
-        return t
+
+    def pump(self) -> None:
+        """Start queued tasks whose turn has come: in the order they were queued, the first one that
+        needs the hands gets them once they're free; one queued behind a task that didn't end ok is
+        skipped."""
+        for t in [x for x in self.tasks.values() if x.status == "queued"]:
+            dep = self.tasks.get(t.after) if t.after else None
+            if dep is not None and dep.status in ("queued", "running"):
+                continue
+            if dep is not None and dep.status != "ok":
+                t.status = "skipped"
+                self.log.write("task_ended", task=t.id, name=t.name, status="skipped", duration_ms=0, calls=0,
+                               summary=f"{dep.id} ended {dep.status}")
+                self.board.post(t.id, f"skipped: {dep.id} ended {dep.status}", urgent=t.wake_on_end)
+                continue
+            if t.hands and not self.hands.free_for(None):
+                return                          # keep the order: nothing jumps a task waiting for the hands
+            try:
+                self._begin(t)
+            except ToolError as e:
+                t.status = "failed"
+                self.log.write("task_ended", task=t.id, name=t.name, status="failed", duration_ms=0, calls=0,
+                               summary=str(e)[:200])
+                self.board.post(t.id, f"failed to start: {e}", urgent=True)
 
     async def _run(self, t: Task, code: str, file: str, args: dict | None) -> None:
         def on_event(kind: str, data: dict) -> None:
@@ -266,11 +340,18 @@ class Work:
         self.log.write("task_ended", task=t.id, name=t.name, status=t.status, duration_ms=round(r.seconds * 1000),
                        calls=len(r.calls), summary=summary)
         self.board.post(t.id, f"{t.status}: {summary or '(no output)'}", urgent=t.wake_on_end and not r.stopped)
+        self.pump()
 
     async def stop(self, tid: str, why: str = "stopped") -> str:
-        ids = [k for k, t in self.tasks.items() if t.status == "running"] if tid == "all" else [tid]
+        ids = [k for k, t in self.tasks.items() if t.status in ("running", "queued")] if tid == "all" else [tid]
         if tid != "all" and tid not in self.tasks:
             raise ToolError(f"no task {tid!r}. " + self.listing())
+        for k in ids:                           # unqueue first, so stopping a running one starts nothing
+            t = self.tasks[k]
+            if t.status == "queued":
+                t.status = "stopped"
+                self.log.write("task_ended", task=t.id, name=t.name, status="stopped", duration_ms=0, calls=0,
+                               summary="stopped while queued")
         for k in ids:
             t = self.tasks[k]
             if t.status == "running":
@@ -293,7 +374,21 @@ class Work:
             lines.append("log: " + " | ".join(t.logs[-8:]))
         if t.result is not None:
             lines.append(t.result.text())
+        elif t.status in ("running", "queued"):
+            lines.append(f"(Checking again costs a step. wait(on=[\"{t.id}\"]) returns when it ends; meanwhile "
+                         f"queue the next chore with run_script(..., background=True, after=\"{t.id}\").)")
         return "\n".join(lines)
+
+    def idle_note(self) -> str:
+        """A line for the agent's tool results when nothing has acted for a while and nothing is queued."""
+        idle = self.hands.idle_s()
+        if idle < IDLE_NOTE_AFTER_S or any(t.status == "queued" and t.hands for t in self.tasks.values()):
+            return ""
+        if time.time() - getattr(self, "_last_idle_note", 0.0) < IDLE_NOTE_EVERY_S:
+            return ""
+        self._last_idle_note = time.time()
+        return (f"[hands idle {idle / 60:.1f} min: nothing is acting on the program. Start or queue the next "
+                f"chore (run_script(..., background=True)) and plan the one after while it runs.]")
 
     def listing(self) -> str:
         if not self.tasks:
@@ -369,7 +464,8 @@ class Work:
             try:
                 t = self.start("", f"{scripts.KEPT_DIR}/{script}.py", script, {**r.args, "event": text[:500]},
                                20, hands=True, why=f"rule {r.name} fired")
-                self.board.post(who, f"{text[:200]} -> started {t.id} ({script})")
+                verb = "queued" if t.status == "queued" else "started"
+                self.board.post(who, f"{text[:200]} -> {verb} {t.id} ({script})")
             except ToolError as e:
                 self.board.post(who, f"{text[:200]} -> couldn't start {script}: {e}", urgent=True)
         else:

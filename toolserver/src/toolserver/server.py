@@ -159,11 +159,11 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
               description=scripts.DOC)
     async def run_script(code: str = "", keep: str = "", name: str = "", file: str = "", args: dict | None = None,
                          timeout_s: float = 300, background: bool = False, hands: bool = True,
-                         minutes: float = 60, wake_on_end: bool = False) -> str:
+                         minutes: float = 60, wake_on_end: bool = False, after: str = "") -> str:
         logged = {k: v for k, v in {"code": code, "keep": keep, "name": name, "file": file, "args": args,
                                     "timeout_s": timeout_s, "background": background,
                                     "hands": None if hands else False, "minutes": minutes if background else None,
-                                    "wake_on_end": wake_on_end}.items() if v}
+                                    "wake_on_end": wake_on_end, "after": after}.items() if v}
         with log.call("run_script", "script", logged) as res:
             if not (code or name or file):
                 text = scripts.listing(ext.workspace)
@@ -184,15 +184,22 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
                 file = f"{scripts.KEPT_DIR}/{name}.py"
             if file.startswith(("/", "\\")) or ".." in file.replace("\\", "/").split("/"):
                 raise ToolError("file is a path inside your workspace, relative to it")
+            if after and not background:
+                raise ToolError("after goes with background=True: the task starts when that one ends ok")
             if background:
                 if keep:
                     raise ToolError("keep a script by running it once in the foreground; start kept scripts "
                                     "in the background with name=")
-                t = work.start(code, file, name or file or "code", args, minutes, hands, wake_on_end)
-                text = (f"started {t.id} ({t.name}{', holding your hands' if hands else ', reading only'}; "
-                        f"ends within {t.deadline_s / 60:g} min). Its end arrives as a notice; "
-                        f"task(\"{t.id}\") shows its progress, wait(on=[\"{t.id}\"]) waits for it.")
-                res.set("text", len(text), summary=f"started {t.id} {t.name}", task=t.id)
+                t = work.start(code, file, name or file or "code", args, minutes, hands, wake_on_end, after=after)
+                if t.status == "queued":
+                    text = (f"queued {t.id} ({t.name}): it starts by itself "
+                            f"{'when ' + after + ' ends ok (skipped if it does not)' if after else 'when your hands are free'}"
+                            f". Its end arrives as a notice.")
+                else:
+                    text = (f"started {t.id} ({t.name}{', holding your hands' if hands else ', reading only'}; "
+                            f"ends within {t.deadline_s / 60:g} min). Its end arrives as a notice; "
+                            f"queue what comes next with after=\"{t.id}\", or wait(on=[\"{t.id}\"]).")
+                res.set("text", len(text), summary=f"{t.status} {t.id} {t.name}", task=t.id)
                 return text
             free = hands_free = work.hands.free_for(None)
             if free:
@@ -330,7 +337,10 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
             running = [t for t in work.tasks.values() if t.status == "running"]
             lines.append("Tasks running: " + ("; ".join(t.brief() for t in running) if running else "none"))
             lines.append(work.rule_listing().replace("\n  ", "\n  - "))
-            lines.append(f"Hands: {'free' if work.hands.holder is None else work.hands.busy_note()}")
+            running += [t for t in work.tasks.values() if t.status == "queued"]
+            lines[-1] = "Tasks running or queued: " + ("; ".join(t.brief() for t in running) if running else "none")
+            lines.append(f"Hands: free for {work.hands.idle_s() / 60:.1f} min" if work.hands.holder is None
+                         else f"Hands: {work.hands.busy_note()}")
             new = board.unseen()
             if new:
                 board.mark_seen(new)
@@ -375,7 +385,7 @@ def _deliver_notices(mcp: FastMCP, board: "tasks_mod.Board", work: "tasks_mod.Wo
         result = await original(name, arguments, context=context, convert_result=convert_result)
         if VIA.get() is not None or not convert_result or name in ("wait", "status"):
             return result
-        footer = board.footer()
+        footer = "\n".join(x for x in (board.footer(), work.idle_note()) if x)
         if not footer:
             return result
         block = types.TextContent(type="text", text=footer)

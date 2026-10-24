@@ -81,16 +81,17 @@ def test_one_pair_of_hands(server):
         assert not (await s.call_tool("probe_read", {"q": "x"})).isError
         res = await s.call_tool("run_script", {"code": fg})
         assert "['r', 'refused']" in text(res), text(res)
-        second = await s.call_tool("run_script", {"code": busy, "background": True})
-        assert second.isError and "hands are busy" in text(second)
+        second = await s.call_tool("run_script", {"code": 'print("second")', "background": True})
+        assert not second.isError and text(second).startswith("queued t2"), text(second)   # waits for the hands
         # A reading task can run beside it, but can't act.
         reader = 'call("probe_read")\ntry:\n    call("probe_act")\nexcept ToolFailed:\n    print("read only")\n'
         assert text(await s.call_tool("run_script", {"code": reader, "background": True,
-                                                     "hands": False})).startswith("started t2")
-        assert "t2: ok: read only" in text(await s.call_tool("wait", {"on": ["t2"], "timeout_s": 20}))
+                                                     "hands": False})).startswith("started t3")
+        assert "t3: ok: read only" in text(await s.call_tool("wait", {"on": ["t3"], "timeout_s": 20}))
         with anyio.fail_after(30):
             stopped = await s.call_tool("task", {"id": "t1", "stop": True})
         assert "t1 code: stopped" in text(stopped), text(stopped)
+        assert "t2: ok: second" in text(await s.call_tool("wait", {"on": ["t2"], "timeout_s": 20}))
         assert not (await s.call_tool("probe_act", {"q": "after"})).isError
 
     anyio.run(_session, server["url"], body)
@@ -180,3 +181,51 @@ def test_status_says_where_things_stand(server):
         assert "Hands: free" in st and "NOTES.md: # Notes | ## Now | ## Next" in st, st
 
     anyio.run(_session, server["url"], body)
+
+
+def test_queue_runs_chores_in_order_and_skips_after_a_failure(server):
+    ws = server["ws"]
+    m = ext_with_reader_and_actor(ws)
+    step = 'import time\ncall("probe_act", q=args["q"])\ntime.sleep(0.5)\nprint("done", args["q"])\n'
+
+    async def body(s, changes):
+        assert not (await s.call_tool("load_extension", {"manifest": m})).isError
+        first = text(await s.call_tool("run_script", {"code": step, "args": {"q": "a"}, "background": True}))
+        assert first.startswith("started t1") and 'after="t1"' in first, first
+        q2 = await s.call_tool("run_script", {"code": step, "args": {"q": "b"}, "background": True, "after": "t1"})
+        assert text(q2).startswith("queued t2") and "when t1 ends ok" in text(q2), text(q2)
+        bad = await s.call_tool("run_script", {"code": "raise SystemExit(3)", "background": True, "after": "t2"})
+        assert text(bad).startswith("queued t3")
+        never = await s.call_tool("run_script", {"code": step, "args": {"q": "z"}, "background": True, "after": "t3"})
+        assert text(never).startswith("queued t4")
+        st = text(await s.call_tool("status", {}))
+        assert "t2 code: queued after t1" in st and "t4 code: queued after t3" in st, st
+        polled = text(await s.call_tool("task", {"id": "t4"}))
+        assert 'wait(on=["t4"])' in polled and 'after="t4"' in polled, polled
+        seen = ""
+        with anyio.fail_after(40):
+            while "t4: skipped" not in seen:
+                seen += text(await s.call_tool("wait", {"on": ["t1", "t2", "t3", "t4"], "timeout_s": 20}))
+        assert "t1: ok: done a" in seen and "t2: ok: done b" in seen and "t3: failed" in seen, seen
+        assert "t4: skipped: t3 ended failed" in seen
+        late = await s.call_tool("run_script", {"code": step, "background": True, "after": "t3"})
+        assert late.isError and "already ended failed" in text(late)
+
+    anyio.run(_session, server["url"], body)
+    ev = events(server["run"])
+    started = [e for e in ev if e["type"] == "task_started"]
+    assert [e["task"] for e in started] == ["t1", "t2", "t3"] and started[1]["after"] == "t1"
+    assert [e["task"] for e in ev if e["type"] == "task_queued"] == ["t2", "t3", "t4"]
+
+
+def test_idle_note_after_a_while_without_acting(tmp_path):
+    from toolserver import tasks as tm
+    h = tm.Hands()
+    w = tm.Work(None, None, tmp_path, h, None, lambda: "", lambda: [])
+    assert w.idle_note() == ""                       # just started
+    h.last_busy -= tm.IDLE_NOTE_AFTER_S + 30
+    note = w.idle_note()
+    assert note.startswith("[hands idle 2.0 min") and "background=True" in note, note
+    assert w.idle_note() == ""                       # not again right away
+    h.check(None)                                    # acting resets the clock
+    assert h.idle_s() < 1

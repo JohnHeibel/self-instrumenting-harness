@@ -62,7 +62,8 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 | Type | Fields |
 |---|---|
 | `task_started` | `task` (`t1`, `t2`, …), `name` (kept script, file or `code`), `hands` (it may act, holding the agent's one pair of hands), `minutes`, `args`, `why` (e.g. which rule started it) |
-| `task_ended` | `task`, `name`, `status` (`ok`, `failed`, `stopped`), `duration_ms`, `calls`, `summary` |
+| `task_queued` | `task`, `name`, `hands`, `after` (the task it waits to end ok) or `behind` (who held the hands), `args`, `why`: a task waiting to start |
+| `task_ended` | `task`, `name`, `status` (`ok`, `failed`, `stopped`, `skipped`: the task it was queued after didn't end ok), `duration_ms`, `calls`, `summary`. `task_started` of a queued task adds `after` and `queued_s` |
 | `rule_set`, `rule_removed`, `rules_restored` | `rule`, its `check` (a kept script name, or `code` with the code), `args`, `every_s`, `do` (`tell`, `wake`, `run:<script>`), `times`, `cooldown_s`; removal adds `why` and `fired` |
 | `rule_fired` | `rule`, `text` (what the check reported), `do`, `count` |
 | `notice` | `notice` (number), `source` (`t3`, `rule:<name>`, `script`), `text`, `urgent`: what was reported to the agent. Urgent notices also go to the run dir's `WAKE` file until delivered, and the runner wakes the agent for them |
