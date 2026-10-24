@@ -23,7 +23,7 @@ Decisions live in `docs/BRIEF.md` ("Decisions already made"). Interfaces live in
 | `hosts/factorio*`, `graders/factorio/` (Factorio host setup and grader) | john-pc |
 | `ui/` (all views), the SpacetimeDB module and publisher, `tools/fakerun/` | nazeemkamel1 |
 | `hosts/minecraft*`, `graders/minecraft/` (Minecraft host setup, testing and grader) | nazeemkamel1 |
-| `docs/BRIEF.md`, `docs/TASKS.md`, `docs/interfaces/`, `AGENTS.md`, `tools/mailbox/` | john-mac |
+| `docs/BRIEF.md`, `docs/TASKS.md`, `docs/interfaces/`, `AGENTS.md`, `tools/mailbox/`, `prompts/`, `goals/` | john-mac |
 | `docs/research/` | anyone (append-only notes) |
 
 ## john-pc (Windows PC, next to the game), in order
@@ -57,7 +57,7 @@ If something needs John (e.g. the launch design hits Steam's prompt), stop and r
 |---|---|---|
 | M1 | Keep this board, BRIEF and the interfaces current; review PRs into `main`  | ongoing |
 | M2 | Generic `read_docs` design: the host config lists doc sources, and the tool searches them | done (toolserver/src/toolserver/docs.py) |
-| M3 | A generic agent brief and goal-file format (host notes come from the host config), plus the Factorio goal file | in progress |
+| M3 | A generic agent brief and goal-file format (host notes come from the host config), plus the Factorio goal file | content done (prompts/brief.md, goals/factorio-blue-science.md); runner wiring requested from john-pc |
 | M4 | Evaluation plan: screenshot-only baseline, ablation, planted break, held-out tasks | queued |
 | M5 | **macOS screenshot and input backend** (`toolserver/src/toolserver/macos.py`, plus dispatch edits in capture.py, inputs.py and io_tools.py, agreed with john-pc), so hosts can run on a Mac (Nazeem's Minecraft). Tests with a fake, plus a live check on John's Mac | in progress |
 
