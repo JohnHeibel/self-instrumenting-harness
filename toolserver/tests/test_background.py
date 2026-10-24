@@ -330,7 +330,14 @@ def test_the_same_failure_twice_gets_an_urgent_nudge(tmp_path):
         def write(self, typ, **kw):
             self.rows.append(typ)
 
-    class Ext:
+    import sys
+    from toolserver.extensions import LocalExecutor
+
+    class Ext:                                       # just enough to run plain scripts locally
+        loaded = {}
+        executor = LocalExecutor(tmp_path)
+        executor_python = sys.executable
+
         def hook_info(self, name):
             return None
 
@@ -339,12 +346,16 @@ def test_the_same_failure_twice_gets_an_urgent_nudge(tmp_path):
         board = tm.Board(log, tmp_path)
         w = tm.Work(Ext(), log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
         stuff = ("{'wood': 1}", "{'coal': 15, 'iron-plate': 200}", "{'stone': 3, 'belt': 9, 'pole': 2}")
+        names = ("walker", "code", "walker")             # a kept script, then a one-off copy of it
         for i, pos in enumerate(("1.5 ab12cd34ef", "7.25 0f9e8d7c6b", "3 deadbeef00")):   # the state after differs
-            t = w.start(f"raise Exception(\"No path to target at x={pos}; inventory: {stuff[i]}\")", "", "walker",
+            t = w.start(f"raise Exception(\"No path to target at x={pos}; inventory: {stuff[i]}\")", "", names[i],
                         None, 1, True, False)
             await t.job
+        t = w.start("raise Exception('placement blocked')", "", "walker", None, 1, True, False)
+        await t.job                                      # another error: not a repeat
         texts = [n.text for n in board.items if n.source.startswith("t")]
-        assert "same error" not in texts[0] and "2nd time walker failed" in texts[1] and "3rd time" in texts[2]
+        assert "same error" not in texts[0] and "2nd time a task failed" in texts[1] and "3rd time" in texts[2]
+        assert "same error" not in texts[3]
         assert board.items[1].urgent and log.rows.count("task_repeat_failure") == 2
 
     asyncio.run(go())
@@ -482,7 +493,7 @@ def test_the_review_carries_what_happened_since_the_last_one(tmp_path):
     w.note_result("my_read", 30_000)
     w.note_result("small_tool", 200)
     w.since["tasks"] = 4
-    key = ("build", "blocked at # by tree")
+    key = "blocked at # by tree"
     w.since["failures"][key], w.since["examples"][key] = 3, "blocked at 3,4 by tree (build)"
     assert not board.items                           # nothing is posted between reviews
     w.review_check(now=w.last_review + tm.REVIEW_EVERY_S + 1)

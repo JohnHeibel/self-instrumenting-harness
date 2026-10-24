@@ -50,7 +50,7 @@ REVIEW_ASK = ("Against the brief's foundation (get anywhere, get anything, chang
 IDLE_NOTE_EVERY_S = 180         # ...at most this often
 STALL_REPEAT = 10               # a task holding the hands made the same acting call this many times...
 STALL_NO_ACT_S = 120            # ...or has made no acting call for this long: tell the agent, once each
-REPEAT_KEY_CHARS = 90             # failures alike over this many leading characters count as the same error
+REPEAT_KEY_WORDS = 5              # failures whose first words match count as the same error (numbers, ids ignored)
 
 
 class HandsBusy(ToolError):
@@ -302,7 +302,7 @@ class Work:
         self.ext, self.log, self.run_dir, self.hands, self.board = ext, log, run_dir, hands, board
         self.harness_url, self.builtins = harness_url, builtins
         self.tasks: dict[str, Task] = {}
-        self.failures: dict[tuple, int] = {}    # (task name, error with numbers masked) -> times
+        self.failures: dict[str, int] = {}      # error with numbers masked -> times, whichever task hit it
         self.rules: dict[str, Rule] = {}
         self._n = 0
         self._rules_path = run_dir / "rules.json"
@@ -464,14 +464,15 @@ class Work:
         self.since["tasks"] += 1
         if t.status == "failed":
             masked = re.sub(r"[0-9a-f]{8,}", "#", summary)           # ids, hashes
-            # positions, ticks, counts; and only the start, where the error is (state dumps after it vary)
-            key = (t.name, re.sub(r"-?\d+(\.\d+)?", "#", masked)[:REPEAT_KEY_CHARS])
+            # Only the first words, where the error is: positions, counts and state dumps after it vary.
+            # The error alone, not the task's name: a kept script and a one-off copy of it fail alike.
+            key = " ".join(re.findall(r"[A-Za-z_][\w./-]*", masked)[:REPEAT_KEY_WORDS])
             self.failures[key] = n = self.failures.get(key, 0) + 1
             self.since["failures"][key] = self.since["failures"].get(key, 0) + 1
             self.since["examples"][key] = f"{summary} ({t.name})"
             if n >= 2:
-                again = (f" This is the {n}{'nd' if n == 2 else 'rd' if n == 3 else 'th'} time {t.name} failed with "
-                         f"this same error: running it again unchanged won't help. Look at why (read the state "
+                again = (f" This is the {n}{'nd' if n == 2 else 'rd' if n == 3 else 'th'} time a task failed with "
+                         f"this same error: running it again unchanged, or a copy of it, won't help. Look at why (read the state "
                          f"where it fails) or change the approach.")
                 self.log.write("task_repeat_failure", task=t.id, name=t.name, times=n, summary=summary)
         self.board.post(t.id, f"{t.status}: {summary or '(no output)'}{again}",
