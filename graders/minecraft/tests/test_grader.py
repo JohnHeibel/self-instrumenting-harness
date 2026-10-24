@@ -94,6 +94,50 @@ def test_program_actions_are_deltas_from_stats(tmp_path):
     assert len([x for x in (run / "grader.jsonl").read_text().splitlines() if "program_actions" in x]) == 2
 
 
+def _acts(run):
+    import json
+    return [json.loads(x) for x in (run / "grader.jsonl").read_text().splitlines() if "program_activity" in x]
+
+
+def test_program_activity_from_travel_pickups_and_pose(tmp_path):
+    run = tmp_path / "run"; run.mkdir()
+    new = lambda: g.Grader(run, tmp_path / "world", log_file=tmp_path / "none.log")   # noqa: E731
+    gr = new()
+    pl = {"Dimension": "minecraft:overworld", "Pos": [0.0, 64.0, 0.0], "Rotation": [0.0, 0.0]}
+    st = {"stats": {"minecraft:custom": {"minecraft:walk_one_cm": 500, "minecraft:sprint_one_cm": 100,
+                                         "minecraft:jump": 3, "minecraft:play_time": 999},
+                    "minecraft:picked_up": {"minecraft:stone": 4}}, "level": {"Time": 7}, "player": pl}
+    gr._activity(st)
+    assert _acts(run)[0]["kinds"] == {"move": 600, "jump": 3, "inventory": 4}      # play_time isn't activity
+    gr._activity(st)                                                             # nothing new: no record
+    assert len(_acts(run)) == 1
+    st["player"] = {**pl, "Pos": [5.0, 64.0, 0.0], "Rotation": [90.0, 0.0]}     # moved and turned between saves
+    gr._activity(st)
+    assert _acts(run)[1]["kinds"] == {"position": 1, "look": 1}
+    st["player"] = {**pl, "Pos": [5.2, 64.0, 0.0], "Rotation": [90.5, 0.0]}     # sub-block drift: not activity
+    gr._activity(st)
+    assert len(_acts(run)) == 2
+    st["stats"]["minecraft:dropped"] = {"minecraft:dirt": 2}
+    gr._activity(st)
+    last = _acts(run)[-1]
+    assert last["kinds"] == {"inventory": 2} and last["totals"]["move"] == 600
+    new()._activity({**st, "player": {}})                                        # restart: no repeat
+    assert len(_acts(run)) == 3
+
+
+def test_activity_restart_midrun_without_prior_records_sets_baseline(tmp_path):
+    run = tmp_path / "run"; run.mkdir()
+    gr = g.Grader(run, tmp_path / "world", log_file=tmp_path / "none.log")
+    gr.log.write("program_actions", count=1, kinds={"mine": 1}, totals={"mine": 1}, tick=1, source="x")
+    st = {"stats": {"minecraft:custom": {"minecraft:walk_one_cm": 90000}}, "level": {}, "player": {}}
+    gr = g.Grader(run, tmp_path / "world", log_file=tmp_path / "none.log")       # the live run's situation
+    gr._activity(st)
+    assert _acts(run) == []                                                      # backlog is not new activity
+    st["stats"]["minecraft:custom"]["minecraft:walk_one_cm"] = 90100
+    gr._activity(st)
+    assert _acts(run)[0]["kinds"] == {"move": 100}
+
+
 # ---- nether goal ------------------------------------------------------------------------------
 
 def nreached(s):

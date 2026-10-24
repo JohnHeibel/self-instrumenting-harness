@@ -12,7 +12,10 @@ and the game's logs/latest.log (commands the player entered).
 The game writes these on autosave (about every 5 minutes), on quit and on world save, so a milestone
 can show up that much after it happened. Records (docs/interfaces/event-log.md):
   milestones_defined, milestone {id, evidence}, integrity {signal, active, detail, evidence},
-  host_command {command_id, command, parameters, by, custom, tick}, grader_status {ok, detail}
+  host_command {command_id, command, parameters, by, custom, tick}, grader_status {ok, detail},
+  program_actions {count, kinds, totals, tick, source} (mined, crafted, used, killed from stats),
+  program_activity {kinds, totals, tick, source}: the player doing things that aren't counted actions
+  (see activity_totals; the world is saved only every few minutes, so these arrive in lumps)
 The nether set (goals/minecraft-nether.md) expects peaceful (difficulty 0); any other difficulty, now or
 after a change mid-run, raises the difficulty_changed integrity signal. Lit portal comes from the overworld's
 poi files, a return trip from the saved player's Dimension (see Grader._dimension).
@@ -249,6 +252,24 @@ def action_totals(stats: dict) -> dict[str, int]:
     return out
 
 
+ACTIVITY_STATS = {"jump": "jump", "combat": "damage_dealt"}
+
+
+def activity_totals(stats: dict) -> dict[str, int]:
+    """Cumulative signs of a player busy with something that isn't a counted action, from the game's own
+    statistics: `move` (every *_one_cm travel counter: walking, sprinting, sneaking, swimming, flying,
+    climbing, falling, boats, mounts, minecarts), `jump`, `combat` (damage dealt) and `inventory` (items
+    picked up or dropped; picking up follows mining, but also covers loot, chest contents and drops)."""
+    custom = stats.get("minecraft:custom") or {}
+    num = lambda v: v if isinstance(v, (int, float)) else 0   # noqa: E731
+    out = {"move": sum(num(v) for k, v in custom.items() if k.endswith("_one_cm"))}
+    for kind, key in ACTIVITY_STATS.items():
+        out[kind] = num(custom.get(f"minecraft:{key}"))
+    out["inventory"] = sum(num(v) for key in ("minecraft:picked_up", "minecraft:dropped")
+                           for v in (stats.get(key) or {}).values())
+    return {k: int(v) for k, v in out.items() if v}
+
+
 class Grader:
     def __init__(self, run_dir: Path, world: Path, log_file: Path | None = None, milestones: str = "overnight",
                  expected_difficulty: int | None = None) -> None:
@@ -265,10 +286,18 @@ class Grader:
         self.seen_cmds: set[tuple] = set()
         self.seen_deaths: set[str] = set()
         self.action_totals: dict[str, int] = {}
+        self.activity_totals: dict[str, int] | None = None     # None: no program_activity record yet
+        self.pose_counts = {"position": 0, "look": 0}          # from the saved player's Pos and Rotation
+        self._pose: tuple | None = None
+        self._baseline_pending = False
         self.cmd_id = 0
         self.up: bool | None = None
         self.defined = None
         self._resume()
+        if self.activity_totals is None and self.action_totals:
+            # restarted mid-run before any activity record: the first poll only sets the baseline, so the
+            # whole backlog of travel and pick-ups isn't reported as new activity
+            self._baseline_pending = True
         self.log = EventLog(self.path, run_id, writer="grader")
         defined = [{"id": i, "name": n} for i, n, _ in self.milestones]
         if self.defined != defined:
@@ -289,6 +318,10 @@ class Grader:
                 self.active[r["signal"]] = r["active"]
             elif t == "program_actions":
                 self.action_totals = {k: int(v) for k, v in (r.get("totals") or {}).items()}
+            elif t == "program_activity":
+                self.activity_totals = {k: int(v) for k, v in (r.get("totals") or {}).items()}
+                for k in self.pose_counts:
+                    self.pose_counts[k] = self.activity_totals.get(k, 0)
             elif t == "marker" and r.get("kind") == "agent_died":
                 self.seen_deaths.add(r.get("key", ""))
             elif t == "marker" and r.get("kind") == "nether_seen":
@@ -310,6 +343,7 @@ class Grader:
         self._commands()
         self._deaths()
         self._actions(s)
+        self._activity(s)
         self._dimension(s)
         for mid, _, judge in self.milestones:
             if mid in self.reached:
@@ -366,6 +400,47 @@ class Grader:
             self.log.write("program_actions", count=sum(kinds.values()), kinds=kinds, totals=totals,
                            tick=(s.get("level") or {}).get("Time"), source="game statistics (mined, crafted, used, killed)")
         self.action_totals = totals
+
+    def _pose_changes(self, player: dict) -> None:
+        """Count a change of the saved player's position (a block or more, or another dimension) and of
+        where it looks (over 1 degree) between two saves. The first save seen only sets the baseline."""
+        pos, rot = player.get("Pos"), player.get("Rotation")
+        if not isinstance(pos, (list, tuple)) or len(pos) != 3:
+            return
+        pose = (player.get("Dimension"), tuple(float(x) for x in pos),
+                tuple(float(x) for x in rot) if isinstance(rot, (list, tuple)) else ())
+        if self._pose is not None:
+            dim, p, r = self._pose
+            if pose[0] != dim or sum((a - b) ** 2 for a, b in zip(pose[1], p)) >= 1:
+                self.pose_counts["position"] += 1
+            if len(r) == 2 and len(pose[2]) == 2 and max(abs(a - b) for a, b in zip(pose[2], r)) > 1:
+                self.pose_counts["look"] += 1
+        self._pose = pose
+
+    def _activity(self, s: dict) -> None:
+        """A program_activity record (kinds, totals, tick, source) when the player did something that isn't a
+        counted action since the last one: travel, jumping, fighting, picking up or dropping items (stats),
+        and the saved player's position or view changing. Nothing is written while nothing changed. It is
+        only as fresh as the game's saves (about every 5 minutes), so the tool server's 2 minute quiet check
+        sees it late, in lumps. A count that went down restarts from the new value."""
+        totals = activity_totals(s.get("stats", {}))
+        self._pose_changes(s.get("player") or {})
+        totals.update({k: n for k, n in self.pose_counts.items() if n})
+        if self._baseline_pending:
+            self.activity_totals, self._baseline_pending = dict(totals), False
+            return
+        before_all = self.activity_totals or {}
+        kinds = {}
+        for k, n in totals.items():
+            before = before_all.get(k, 0)
+            d = n - before if n >= before else n
+            if d:
+                kinds[k] = d
+        if kinds:
+            self.log.write("program_activity", kinds=kinds, totals=totals,
+                           tick=(s.get("level") or {}).get("Time"),
+                           source="game statistics (travel, jumps, damage dealt, pick-ups, drops) and saved player pose")
+        self.activity_totals = totals
 
     def _deaths(self) -> None:
         """A marker (kind `agent_died`) for each death line the game logged: when, who, and the cause as the game words it."""
