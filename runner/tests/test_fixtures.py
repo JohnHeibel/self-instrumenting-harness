@@ -52,8 +52,11 @@ def test_tool_call_session(tmp_path):
     msgs = [r for r in recs if r["type"] == "agent_message"]
     assert [m["phase"] for m in msgs] == ["commentary", "final_answer"]
     assert "17" in msgs[-1]["text"]
-    usage = next(r for r in recs if r["type"] == "usage")
-    assert usage["total_tokens"] == usage["turn_total_tokens"] == last_total("real_session.jsonl") > 0
+    usages = [r for r in recs if r["type"] == "usage"]
+    assert len(usages) >= 1 and all(u["turn"] == usages[0]["turn"] for u in usages)
+    usage = usages[-1]  # one record per model request; the last has the thread total
+    assert usage["total_tokens"] == last_total("real_session.jsonl") > 0
+    assert recs[-1]["turn_total_tokens"] == usage["total_tokens"]
     assert usage["input_tokens"] > usage["cached_input_tokens"] > 0
     assert usage["context_window"]
     assert recs[-1]["status"] == "completed" and recs[-1]["duration_ms"] > 0

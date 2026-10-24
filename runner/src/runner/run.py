@@ -5,10 +5,15 @@ It owns the run directory and the tool server's lifecycle, writes runner.jsonl
 
 - The thread id goes to runner-state.json the moment Codex reports it, so a crash at any
   point (even in the first turn) resumes the same thread instead of starting over.
-- Time and token budgets are checked mid-turn; hitting one interrupts the turn.
+- Time and token budgets are checked mid-turn; hitting one interrupts the turn. Time is
+  active time: it excludes runner downtime, PAUSE and the host being down, but counts
+  backoff. Tokens are uncached input plus output (thread totals from Codex).
+- The agent's workspace is snapshotted to checkpoints/ (not mounted into the container)
+  every 30 minutes and at the end of the run.
 - A STOP file in the run dir ends the run cleanly. A PAUSE file holds it (interrupting
   the current turn) until removed.
-- Failures back off 30 s, 60 s, ... up to 1 h, and the run gives up after 12 in a row.
+- Failures back off 30 s, 60 s, ... up to 1 h, and the run gives up after 12 in a row. When
+  Codex reports a rate limit reached with a reset time, the backoff waits until then instead.
   A completed turn, or any turn longer than 10 minutes, resets the count.
 - No turn starts while the host is down; a host that goes down mid-turn interrupts it.
 - Every turn after the first gets the same fixed CONTINUE_PROMPT.
@@ -21,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tarfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -28,6 +34,7 @@ from pathlib import Path
 from typing import Callable
 
 from toolserver.events import EventLog
+from toolserver.extensions import HostConfig
 
 from . import agent, hostcheck
 from .appserver import AppServer, AppServerError
@@ -43,7 +50,9 @@ CONTINUE_PROMPT = (
     "Keep working toward the run goal. Your context may have been compacted or reset, so first "
     "rebuild your picture of where things stand: re-read your notes in /home/agent/work, check "
     "which hooks and tools you have (list_hooks), and take a fresh observation of the host before "
-    "you act. Then continue from where your notes say you are, and keep the notes current.")
+    "you act. Restate your current goal with set_goal. Then continue from where your notes say "
+    "you are, and keep the notes current.")
+RATE_LIMIT_MARGIN_S = 60
 
 
 class Stalled(Exception):
@@ -53,9 +62,9 @@ class Stalled(Exception):
 @dataclass
 class Config:
     run_dir: Path
+    host_config: Path                         # hosts/<host>.toml: which program, how to check it
     goal: str | None = None
     run_id: str | None = None
-    host: str = "factorio"
     agent_cmd: list[str] | None = None        # None: the agent container (docker)
     auth_json: Path = field(default_factory=lambda: Path.home() / ".codex" / "auth.json")
     image: str = agent.DEFAULT_IMAGE
@@ -63,11 +72,11 @@ class Config:
     reasoning_summary: str = "detailed"
     port: int = 8765
     toolserver: bool = True
-    window_title: str = "Factorio"
-    host_check: hostcheck.HostCheck | None = None
+    host_check: hostcheck.HostCheck | None = None  # None: the host config's up_check
     cwd: str = "/home/agent/work"
     budget_seconds: float | None = None
-    budget_tokens: int | None = None
+    budget_tokens: int | None = None          # uncached input + output
+    checkpoint_every: float = 1800
     backoff_base: float = 30
     backoff_cap: float = 3600
     max_failures: int = 12
@@ -95,14 +104,19 @@ class Runner:
         self.run_dir = cfg.run_dir = cfg.run_dir.resolve()  # docker mounts need absolute paths
         self.run_dir.mkdir(parents=True, exist_ok=True)
         (self.run_dir / "raw").mkdir(exist_ok=True)
+        (self.run_dir / "workspace").mkdir(exist_ok=True)
         self.state_path = self.run_dir / "runner-state.json"
         self.lock = RunLock(self.run_dir / "runner.lock")
-        self.host_check = cfg.host_check or hostcheck.resolve("factorio-window")
+        cfg.host_config = cfg.host_config.resolve()
+        self.host = HostConfig.load(cfg.host_config)
+        self.host_check = cfg.host_check or hostcheck.from_config(self.host, cfg.host_config.parent)
         self.srv: AppServer | None = None
         self.toolserver: ToolServer | None = None
         self.state: RunState
         self.log: EventLog
         self.mapper: Mapper
+        self._last_tick: float | None = None   # active-time clock; None after a (re)start
+        self._counting = True
 
     # Top level ------------------------------------------------------------------
 
@@ -145,7 +159,7 @@ class Runner:
             if not self.cfg.goal:
                 raise SystemExit("a new run needs --goal or --goal-file")
             self.state = RunState(run_id=run_id, started_at=self.cfg.clock(),
-                                  extra={"goal": self.cfg.goal, "host": self.cfg.host})
+                                  extra={"goal": self.cfg.goal, "host": self.host.name})
             self._save()
 
         if self.cfg.toolserver:
@@ -154,19 +168,24 @@ class Runner:
                 kill_tree(old)
                 self.log.write("marker", label=f"killed tool server {old} left by a crashed runner",
                                kind="toolserver_restart")
-            self.toolserver = ToolServer(self.run_dir, run_id, self.cfg.port, self.cfg.window_title)
+            self.toolserver = ToolServer(self.run_dir, run_id, self.cfg.port, self.cfg.host_config)
             self._start_toolserver()
 
+        self.state.extra.setdefault("last_snapshot_at", self.cfg.clock())
         while True:
+            self._set_counting(True)
             reason = self._end_reason()
             if reason:
                 return self._end(reason)
+            self._maybe_snapshot()
             if (self.run_dir / "PAUSE").exists():
+                self._set_counting(False)
                 self.mapper.state("paused", "PAUSE file present")
                 self._wait(self.cfg.host_poll)
                 continue
             up, detail = self.host_check()
             if not up:
+                self._set_counting(False)
                 self.mapper.state("host_down", detail)
                 self._wait(self.cfg.host_poll)
                 continue
@@ -197,9 +216,16 @@ class Runner:
             if self.state.failures >= self.cfg.max_failures:
                 return self._end("too_many_failures")
             delay = min(self.cfg.backoff_base * 2 ** (self.state.failures - 1), self.cfg.backoff_cap)
-            self.mapper.state("backing_off", f"failure {self.state.failures}: {outcome.error or outcome.status}; "
-                                             f"retrying in {delay:.0f} s",
-                              delay_s=delay, failures=self.state.failures)
+            extra: dict = {}
+            reset = self._rate_limit_reset()
+            if reset is not None:
+                delay = max(delay, reset - self.cfg.clock() + RATE_LIMIT_MARGIN_S)
+                extra = {"until": _iso(reset), "cause": "rate_limit"}
+                why = f"rate limit reached; waiting until it resets at {_iso(reset)}"
+            else:
+                why = f"retrying in {delay:.0f} s"
+            self.mapper.state("backing_off", f"failure {self.state.failures}: {outcome.error or outcome.status}; {why}",
+                              delay_s=round(delay, 3), failures=self.state.failures, **extra)
             self._wait(delay)
 
     # One turn -------------------------------------------------------------------
@@ -238,6 +264,7 @@ class Runner:
                         break
             elif now - last > self.cfg.stall_timeout:
                 raise Stalled(f"no message from the app-server for {self.cfg.stall_timeout:.0f} s")
+            self._maybe_snapshot()
             if interrupt is None:
                 check_host = now >= next_host
                 if check_host:
@@ -259,6 +286,7 @@ class Runner:
         error = ((turn.get("error") or {}).get("message")) or (self.mapper.last_error if status == "failed" else None)
         self.mapper.end_turn(status, duration_ms, error)
         if status == "completed":
+            self.state.extra["last_turn_id"] = turn_id
             self.log.write("checkpoint", label=f"turn {self.state.turns} completed",
                            ref=f"{self.state.thread_id}/{turn_id}")
         self.state.active_turn_id = None
@@ -282,12 +310,68 @@ class Runner:
     def _end_reason(self) -> str | None:
         if (self.run_dir / "STOP").exists():
             return "stop"
-        if self.cfg.budget_seconds is not None and \
-                self.cfg.clock() - self.state.started_at >= self.cfg.budget_seconds:
+        self._tick()
+        if self.cfg.budget_seconds is not None and self.active_seconds() >= self.cfg.budget_seconds:
             return "budget_time"
-        if self.cfg.budget_tokens is not None and self.mapper.total_tokens() >= self.cfg.budget_tokens:
+        if self.cfg.budget_tokens is not None and self.mapper.uncached_tokens() >= self.cfg.budget_tokens:
             return "budget_tokens"
         return None
+
+    # Active time ----------------------------------------------------------------
+
+    def active_seconds(self) -> float:
+        return float(self.state.extra.get("active_s", 0.0))
+
+    def _tick(self) -> None:
+        """Add the time since the last tick if it counts. The first tick after a (re)start
+        adds nothing, so runner downtime never counts."""
+        now = self.cfg.clock()
+        if self._last_tick is not None and self._counting:
+            self.state.extra["active_s"] = self.active_seconds() + max(0.0, now - self._last_tick)
+        self._last_tick = now
+
+    def _set_counting(self, on: bool) -> None:
+        self._tick()
+        self._counting = on
+
+    # Rate limits ----------------------------------------------------------------
+
+    def _rate_limit_reset(self) -> float | None:
+        """When a rate limit that Codex reported as reached resets (unix s), if still ahead.
+        The full windows (usedPercent >= 100) decide it, latest reset first. When Codex says a
+        limit was reached but no window reads full, wait for the soonest reset, not the weekly."""
+        rl = self.mapper.rate_limits or {}
+        reached = bool(rl.get("rateLimitReachedType")) or self.mapper.last_error_info == "usageLimitExceeded"
+        now = self.cfg.clock()
+        windows = [w for w in (rl.get("primary"), rl.get("secondary"))
+                   if isinstance(w, dict) and w.get("resetsAt") and float(w["resetsAt"]) > now]
+        full = [float(w["resetsAt"]) for w in windows if (w.get("usedPercent") or 0) >= 100]
+        if full:
+            return max(full)
+        if reached and windows:
+            return min(float(w["resetsAt"]) for w in windows)
+        return None
+
+    # Checkpoints ----------------------------------------------------------------
+
+    def _maybe_snapshot(self, force: str | None = None) -> None:
+        now = self.cfg.clock()
+        last = self.state.extra.get("last_snapshot_at", now)
+        if force is None and now - last < self.cfg.checkpoint_every:
+            return
+        n = int(self.state.extra.get("snapshots", 0)) + 1
+        self.state.extra.update(last_snapshot_at=now, snapshots=n)
+        self._save()
+        label = force or "periodic"
+        rel = f"checkpoints/{n:04d}-{label}.tar.gz"
+        ref = f"{self.state.thread_id or ''}/{self.state.extra.get('last_turn_id') or ''}"
+        try:
+            files, size = _snapshot(self.run_dir / "workspace", self.run_dir / rel)
+        except OSError as e:
+            self.log.write("checkpoint", label=f"workspace snapshot failed: {e}", ref=ref, artifact=None)
+            return
+        self.log.write("checkpoint", label=f"workspace snapshot ({label})", ref=ref, artifact=rel,
+                       files=files, bytes=size)
 
     # Session --------------------------------------------------------------------
 
@@ -339,9 +423,11 @@ class Runner:
         self._save()
 
     def _end(self, reason: str) -> str:
+        self._maybe_snapshot(force="end")
         self.mapper.state("ended", reason)
         self.log.write("run_ended", reason=reason, turns=self.state.turns,
-                       total_tokens=self.mapper.total_tokens())
+                       total_tokens=self.mapper.total_tokens(), uncached_tokens=self.mapper.uncached_tokens(),
+                       active_s=round(self.active_seconds()))
         self.state.status, self.state.ended_reason = "ended", reason
         self._save()
         return reason
@@ -355,9 +441,28 @@ class Runner:
             step = min(left, 1.0)
             self.cfg.sleep(step)
             left -= step
+            self._tick()
 
     def _save(self) -> None:
         self.state.save(self.state_path)
+
+
+def _snapshot(src: Path, dest: Path) -> tuple[int, int]:
+    """tar.gz of the workspace, written beside the run's logs, where the agent can't reach it."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    files = 0
+    with tarfile.open(tmp, "w:gz") as tar:
+        for path in sorted(src.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                tar.add(path, arcname=path.relative_to(src).as_posix())
+                files += 1
+    tmp.replace(dest)
+    return files, dest.stat().st_size
+
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 # CLI ----------------------------------------------------------------------------
@@ -369,16 +474,17 @@ def main(argv: list[str] | None = None) -> int:
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--goal", help="the run's objective (first prompt)")
     g.add_argument("--goal-file", type=Path)
-    ap.add_argument("--host", default="factorio")
-    ap.add_argument("--host-check", default="factorio-window",
-                    help="factorio-window | window:<title> | always | cmd:<command> | py:<module>:<fn>")
+    ap.add_argument("--host-config", type=Path, required=True,
+                    help="hosts/<host>.toml: the program the agent works in, how to see it and check it is up")
+    ap.add_argument("--host-check", help="override the host config's up_check: "
+                    "window | always | cmd:<command> | py:<module>:<fn>")
     ap.add_argument("--model")
     ap.add_argument("--reasoning-summary", default="detailed", choices=["auto", "concise", "detailed", "none"])
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--image", default=agent.DEFAULT_IMAGE)
     ap.add_argument("--auth-json", type=Path, default=Path.home() / ".codex" / "auth.json")
     ap.add_argument("--budget-hours", type=float)
-    ap.add_argument("--budget-tokens", type=int, help="on Codex's thread total (includes cached input)")
+    ap.add_argument("--budget-tokens", type=int, help="uncached input + output tokens (Codex thread totals)")
     ap.add_argument("--no-toolserver", action="store_true")
     ap.add_argument("--agent-cmd", help="JSON list; replaces the agent container (tests, fakes)")
     ap.add_argument("--stall-timeout", type=float, default=1800)
@@ -389,17 +495,19 @@ def main(argv: list[str] | None = None) -> int:
     goal = args.goal_file.read_text(encoding="utf-8") if args.goal_file else args.goal
     if args.build and not args.agent_cmd:
         import subprocess
-        if subprocess.run(["docker", "build", "-t", args.image, str(agent.REPO / "agent")]).returncode:
+        if subprocess.run(["docker", "build", "-t", args.image, "--build-arg",
+                           f"CODEX_VERSION={agent.CODEX_VERSION}", str(agent.REPO / "agent")]).returncode:
             print("docker build failed", file=sys.stderr)
             return 3
     if not args.agent_cmd and not args.auth_json.exists():
         print(f"{args.auth_json} not found; run `codex login` first", file=sys.stderr)
         return 3
-    cfg = Config(run_dir=run_dir, goal=goal, host=args.host, model=args.model,
+    hc = HostConfig.load(args.host_config)
+    cfg = Config(run_dir=run_dir, host_config=args.host_config, goal=goal, model=args.model,
                  reasoning_summary=args.reasoning_summary, port=args.port, image=args.image,
                  auth_json=args.auth_json, toolserver=not args.no_toolserver,
                  agent_cmd=json.loads(args.agent_cmd) if args.agent_cmd else None,
-                 host_check=hostcheck.resolve(args.host_check), stall_timeout=args.stall_timeout,
+                 host_check=hostcheck.resolve(args.host_check, hc) if args.host_check else None, stall_timeout=args.stall_timeout,
                  budget_seconds=args.budget_hours * 3600 if args.budget_hours else None,
                  budget_tokens=args.budget_tokens)
     print(f"run dir: {run_dir}")

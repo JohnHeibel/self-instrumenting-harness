@@ -8,8 +8,12 @@ What the app-server gives us (Codex 0.164.0, checked against a recorded session)
   webSearch, imageView, sleep, contextCompaction, and others
 - item/agentMessage/delta, item/reasoning/summaryTextDelta: streaming text (not logged; the
   completed item carries the full text)
-- thread/tokenUsage/updated: tokenUsage.total (thread-wide, persists across resume) and
-  tokenUsage.last (the latest model request), plus modelContextWindow
+- thread/tokenUsage/updated, after each model request: tokenUsage.total (thread-wide, persists
+  across resume) and tokenUsage.last (that request), plus modelContextWindow. totalTokens is
+  inputTokens + outputTokens; inputTokens includes cachedInputTokens, and outputTokens includes
+  reasoningOutputTokens
+- account/rateLimits/updated: rateLimits.primary/secondary {usedPercent, windowDurationMins,
+  resetsAt (unix s)}, rateLimitReachedType
 - error (with willRetry), warning, thread/status/changed, thread/compacted (deprecated)
 """
 
@@ -40,6 +44,8 @@ class Mapper:
         self._turn_base: dict[str, int] = {}
         self._state: tuple[str, str] | None = None
         self.last_error: str | None = None
+        self.last_error_info: Any = None     # codexErrorInfo of the last error, e.g. "usageLimitExceeded"
+        self.rate_limits: dict = {}          # the latest account/rateLimits/updated
         self.on_usage = lambda total: None  # the runner persists totals so a crash loses nothing
 
     # Called by the runner ------------------------------------------------------
@@ -55,28 +61,30 @@ class Mapper:
         self._turn_base = dict(self.total)
         self.turn_base = self._turn_base
         self.last_error = None
+        self.last_error_info = None
         self.log.write("turn_started", turn=turn, turn_id=turn_id)
         self.state("thinking")
 
-    def end_turn(self, status: str, duration_ms: int | None, error: str | None) -> dict:
-        usage = self.turn_usage()
-        self.log.write("usage", turn=self.turn, **usage, total_tokens=self.total.get("totalTokens", 0),
-                       turn_total_tokens=self._delta("totalTokens"),
-                       context_window=self.context_window)
+    def end_turn(self, status: str, duration_ms: int | None, error: str | None) -> int:
+        """Usage was already logged per request; the turn's total goes on turn_completed."""
+        turn_total = self._delta("totalTokens")
         self.log.write("turn_completed", turn=self.turn, turn_id=self.turn_id, status=status,
-                       duration_ms=duration_ms, error=error)
+                       duration_ms=duration_ms, error=error, turn_total_tokens=turn_total)
         self.turn, self.turn_id = None, None
-        return usage
+        return turn_total
 
     def restore_turn(self, turn: int, turn_id: str, base: dict) -> None:
         """Reopen a turn a crashed runner left open, so end_turn can close it."""
         self.turn, self.turn_id, self._turn_base = turn, turn_id, dict(base)
 
-    def turn_usage(self) -> dict[str, int]:
-        return {ours: self._delta(theirs) for theirs, ours in USAGE_FIELDS.items()}
-
     def total_tokens(self) -> int:
         return self.total.get("totalTokens", 0)
+
+    def uncached_tokens(self) -> int:
+        """What the token budget counts: uncached input plus output (which already includes
+        reasoning). Cached input is cheap and grows with every request of a long thread."""
+        t = self.total
+        return t.get("inputTokens", 0) - t.get("cachedInputTokens", 0) + t.get("outputTokens", 0)
 
     def _delta(self, key: str) -> int:
         return self.total.get(key, 0) - self._turn_base.get(key, 0)
@@ -88,9 +96,18 @@ class Mapper:
         p = msg.get("params") or {}
         if method == "thread/tokenUsage/updated":
             tu = p.get("tokenUsage") or {}
-            self.total = {k: int(v) for k, v in (tu.get("total") or {}).items() if isinstance(v, int)}
+            new = {k: int(v) for k, v in (tu.get("total") or {}).items() if isinstance(v, int)}
             self.context_window = tu.get("modelContextWindow") or self.context_window
+            old, self.total = self.total, new
+            # One record per model request. A resume repeats the total it already had: skip it.
+            if new.get("totalTokens", 0) > old.get("totalTokens", 0):
+                self.log.write("usage", turn=self.turn,
+                               **{ours: new.get(k, 0) - old.get(k, 0) for k, ours in USAGE_FIELDS.items()},
+                               total_tokens=self.total_tokens(), uncached_tokens=self.uncached_tokens(),
+                               context_window=self.context_window)
             self.on_usage(self.total)
+        elif method == "account/rateLimits/updated":
+            self.rate_limits = p.get("rateLimits") or {}
         elif method == "item/started":
             self._item_started(p.get("item") or {})
         elif method == "item/completed":
@@ -100,6 +117,7 @@ class Mapper:
         elif method == "error":
             err = p.get("error") or {}
             self.last_error = err.get("message")
+            self.last_error_info = err.get("codexErrorInfo")
 
     def _item_started(self, item: dict) -> None:
         kind = item.get("type")

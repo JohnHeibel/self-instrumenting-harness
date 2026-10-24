@@ -22,7 +22,7 @@ def test_goal_then_continue_and_event_mapping(h):
     assert h.runner(script, budget_tokens=2000).run() == "budget_tokens"
 
     p = prompts(h)
-    assert len(p) == 2 and p[0].startswith("Reach blue science.") and p[1] == CONTINUE_PROMPT
+    assert len(p) == 2 and p[0].startswith("Reach the goal.") and p[1] == CONTINUE_PROMPT
     assert len(h.requests("thread/start")) == 1 and not h.requests("thread/resume")
 
     recs = h.records()
@@ -33,10 +33,15 @@ def test_goal_then_continue_and_event_mapping(h):
     assert {"state": "acting", "text": "harness.list_hooks"}.items() <= h.records("agent_state")[1].items()
     assert h.records("agent_message")[0]["text"] == "I have no hooks yet."
     u1, u2 = h.records("usage")
-    assert (u1["turn"], u1["turn_total_tokens"], u1["total_tokens"], u1["input_tokens"]) == (1, 1000, 1000, 1000)
-    assert (u2["turn"], u2["turn_total_tokens"], u2["total_tokens"]) == (2, 1500, 2500)
-    assert [r["status"] for r in h.records("turn_completed")] == ["completed", "completed"]
-    assert len(h.records("checkpoint")) == 2
+    # One usage record per request, with that request's tokens and the thread totals.
+    assert (u1["turn"], u1["total_tokens"], u1["input_tokens"], u1["uncached_tokens"]) == (1, 1000, 1000, 1000)
+    assert (u2["turn"], u2["total_tokens"], u2["input_tokens"]) == (2, 2500, 1500)
+    done = h.records("turn_completed")
+    assert [r["status"] for r in done] == ["completed", "completed"]
+    assert [r["turn_total_tokens"] for r in done] == [1000, 1500]
+    cps = h.records("checkpoint")
+    assert [c["label"] for c in cps if "artifact" not in c] == ["turn 1 completed", "turn 2 completed"]
+    assert [c["label"] for c in cps if "artifact" in c] == ["workspace snapshot (end)"]
     assert h.records("run_ended")[0]["reason"] == "budget_tokens"
     assert h.records("agent_state")[-1]["state"] == "ended"
     st = h.state()
@@ -48,7 +53,8 @@ def test_token_budget_interrupts_mid_turn(h):
     assert h.runner(script, budget_tokens=1000).run() == "budget_tokens"
     assert len(h.requests("turn/interrupt")) == 1
     assert h.records("turn_completed")[0]["status"] == "interrupted"
-    assert h.records("usage")[0]["turn_total_tokens"] == 5000
+    assert [u["total_tokens"] for u in h.records("usage")] == [500, 5000]
+    assert h.records("turn_completed")[0]["turn_total_tokens"] == 5000
 
 
 def test_time_budget_interrupts_mid_turn(h):
@@ -110,7 +116,7 @@ def test_runner_restart_resumes_from_state_file(h):
     # The cut-off turn is closed with the tokens it used before the crash.
     cut, nxt = h.records("turn_completed")
     assert (cut["turn"], cut["status"], nxt["turn"]) == (3, "cut_off", 4)
-    assert [u["turn_total_tokens"] for u in h.records("usage")] == [500, 600]
+    assert [t["turn_total_tokens"] for t in h.records("turn_completed")] == [500, 600]
 
 
 def test_usage_total_is_saved_on_every_update(h):

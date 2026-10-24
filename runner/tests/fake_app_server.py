@@ -14,6 +14,8 @@ processes[N], the last one repeating), and what each turn of that launch does:
 
 Steps:
   {"usage": 1200}                 thread/tokenUsage/updated with that thread total
+  {"usage": 1200, "cached": 800, "output": 100}   ...with those thread totals too (default:
+                                  unchanged, starting at 0); input = usage - output
   {"notify": method, "params": {}} any notification ({threadId}/{turnId} are filled in)
   {"message": "text"}             an agentMessage item (started + completed)
   {"reasoning": ["**T**\\n\\nx"]}   a reasoning item with these summary parts
@@ -63,14 +65,22 @@ def notify(method: str, params: dict) -> None:
     send({"jsonrpc": "2.0", "method": method, "params": params})
 
 
-def usage(total: int, turn_id: str) -> None:
+usage_parts = {"cached": 0, "output": 0}  # thread totals, like total_tokens
+
+
+def usage(total: int, turn_id: str, cached: int | None = None, output: int | None = None) -> None:
+    """Thread totals as Codex reports them: total = input + output, input includes cached."""
     global total_tokens
-    last = total - total_tokens
+    prev = (total_tokens, usage_parts["cached"], usage_parts["output"])
     total_tokens = total
-    b = lambda n: {"totalTokens": n, "inputTokens": n, "cachedInputTokens": n // 2,
-                   "cacheWriteInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
+    usage_parts["cached"] = prev[1] if cached is None else cached
+    usage_parts["output"] = prev[2] if output is None else output
+    b = lambda t, c, o: {"totalTokens": t, "inputTokens": t - o, "cachedInputTokens": c,
+                         "cacheWriteInputTokens": 0, "outputTokens": o, "reasoningOutputTokens": 0}
+    now = (total, usage_parts["cached"], usage_parts["output"])
     notify("thread/tokenUsage/updated", {"threadId": THREAD, "turnId": turn_id,
-                                         "tokenUsage": {"total": b(total), "last": b(last),
+                                         "tokenUsage": {"total": b(*now),
+                                                        "last": b(*(n - p for n, p in zip(now, prev))),
                                                         "modelContextWindow": 272000}})
 
 
@@ -87,7 +97,7 @@ def run_turn(turn_id: str, steps: list) -> None:
     status, error, duration = "completed", None, None
     for step in steps:
         if "usage" in step:
-            usage(step["usage"], turn_id)
+            usage(step["usage"], turn_id, step.get("cached"), step.get("output"))
         elif "notify" in step:
             params = json.loads(json.dumps(step.get("params", {})).replace("{threadId}", THREAD)
                                 .replace("{turnId}", turn_id))

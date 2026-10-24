@@ -17,8 +17,9 @@ class ToolServerError(Exception):
 
 
 class ToolServer:
-    def __init__(self, run_dir: Path, run_id: str, port: int, window_title: str = "Factorio") -> None:
-        self.run_dir, self.run_id, self.port, self.window_title = run_dir, run_id, port, window_title
+    def __init__(self, run_dir: Path, run_id: str, port: int, host_config: Path) -> None:
+        self.run_dir, self.run_id, self.port = run_dir, run_id, port
+        self.host_config = host_config
         self.proc: subprocess.Popen | None = None
 
     def start(self, timeout: float = 30) -> None:
@@ -26,11 +27,12 @@ class ToolServer:
             raise ToolServerError(f"port {self.port} is already in use; is another run going?")
         env = {**os.environ, "PYTHONPATH": str(REPO / "toolserver" / "src")}
         log = (self.run_dir / "toolserver.log").open("a", encoding="utf-8")
-        self.proc = subprocess.Popen(
-            [sys.executable, "-m", "toolserver.server", "--port", str(self.port),
-             "--run-dir", str(self.run_dir), "--run-id", self.run_id,
-             "--window-title", self.window_title],
-            env=env, stdout=log, stderr=subprocess.STDOUT)
+        cmd = [sys.executable, "-m", "toolserver.server", "--port", str(self.port),
+               "--run-dir", str(self.run_dir), "--run-id", self.run_id]
+        cmd += ["--host-config", str(self.host_config)]
+        # Extension tools run in the agent container, which the tool server finds by its
+        # default name harness-agent-<run-id>: the name agent.container_name gives it.
+        self.proc = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:

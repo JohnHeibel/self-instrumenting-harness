@@ -9,12 +9,16 @@ refresh can't fork the login (ModdedBench lesson).
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-DEFAULT_IMAGE = "harness-agent:spike"
+# Tagged with the Codex version it is built with (agent/Dockerfile's ARG).
+CODEX_VERSION = re.search(r"ARG CODEX_VERSION=(\S+)",
+                          (REPO / "agent" / "Dockerfile").read_text(encoding="utf-8")).group(1)
+DEFAULT_IMAGE = f"harness-agent:codex-{CODEX_VERSION}"
 
 
 def container_name(run_id: str) -> str:
