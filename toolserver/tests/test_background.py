@@ -252,3 +252,256 @@ def test_idle_note_after_a_while_without_acting(tmp_path):
     assert w.idle_note() == ""                       # not again right away
     h.check(None)                                    # acting resets the clock
     assert h.idle_s() < 1
+
+
+def test_stalled_task_holding_the_hands_is_reported_once_per_kind(tmp_path):
+    from toolserver import tasks as tm
+
+    class Log:
+        def __init__(self):
+            self.rows = []
+
+        def write(self, typ, **kw):
+            self.rows.append((typ, kw))
+
+    class Board:
+        def __init__(self):
+            self.posts = []
+
+        def post(self, source, text, urgent=False):
+            self.posts.append((source, text, urgent))
+
+    log, board = Log(), Board()
+    w = tm.Work(None, log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    t = tm.Task(id="t1", name="build", hands=True, started=1000.0, deadline_s=600, wake_on_end=False)
+    w.tasks["t1"] = t
+    for i in range(tm.STALL_REPEAT - 1):
+        w.watch_call(t, "act", {"op": "take", "n": 1}, acts=True, now=1001.0 + i)
+        w.watch_call(t, "look", {}, acts=False, now=1001.5 + i)
+    assert board.posts == []
+    w.watch_call(t, "act", {"n": 1, "op": "take"}, acts=True, now=1020.0)    # same call, keys reordered
+    assert len(board.posts) == 1 and "same acting call (10 times" in board.posts[0][1] and board.posts[0][2]
+    w.watch_call(t, "act", {"op": "take", "n": 1}, acts=True, now=1021.0)
+    assert len(board.posts) == 1                                               # once per kind
+    for i in range(5):
+        w.watch_call(t, "look", {}, acts=False, now=1030.0 + i)
+    assert len(board.posts) == 1                                               # reading, but not for long
+    w.stall_check(now=1021.0 + tm.STALL_NO_ACT_S + 1)
+    assert len(board.posts) == 2 and "no acting call for 2.0 min (5 reads since)" in board.posts[1][1]
+    assert [kw["kind"] for typ, kw in log.rows if typ == "task_stalled"] == ["repeat", "quiet"]
+    assert "the most repeated 11x" in w.describe("t1")
+
+
+def test_waiting_on_a_task_ends_early_on_an_urgent_notice(tmp_path):
+    import asyncio
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    async def go():
+        board = tm.Board(Log(), tmp_path)
+        job = asyncio.ensure_future(asyncio.sleep(30))
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, board.post, "t9", "plain")              # not urgent: keeps waiting
+        loop.call_later(0.15, board.post, "t2", "stuck", True)        # urgent: ends the wait
+        t0 = loop.time()
+        assert await board.until_done_or_urgent(job, 10) is False
+        assert 0.1 < loop.time() - t0 < 2
+        board.mark_seen(board.unseen())
+        assert await board.until_done_or_urgent(asyncio.ensure_future(asyncio.sleep(0.01)), 10) is True
+        loop.call_later(0.05, board.post, "t9", "plain again")
+        loop.call_later(0.1, board.post, "t2", "again", True)
+        assert [n.text for n in await board.wait(["t7"], 5)] == ["again"]   # urgent ends a wait on others
+        job.cancel()
+
+    asyncio.run(go())
+
+
+def test_the_same_failure_twice_gets_an_urgent_nudge(tmp_path):
+    import asyncio
+    from toolserver import tasks as tm
+
+    class Log:
+        def __init__(self):
+            self.rows = []
+
+        def write(self, typ, **kw):
+            self.rows.append(typ)
+
+    import sys
+    from toolserver.extensions import LocalExecutor
+
+    class Ext:                                       # just enough to run plain scripts locally
+        loaded = {}
+        executor = LocalExecutor(tmp_path)
+        executor_python = sys.executable
+
+        def hook_info(self, name):
+            return None
+
+    async def go():
+        log = Log()
+        board = tm.Board(log, tmp_path)
+        w = tm.Work(Ext(), log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+        stuff = ("{'wood': 1}", "{'coal': 15, 'iron-plate': 200}", "{'stone': 3, 'belt': 9, 'pole': 2}")
+        names = ("walker", "code", "walker")             # a kept script, then a one-off copy of it
+        for i, pos in enumerate(("1.5 ab12cd34ef", "7.25 0f9e8d7c6b", "3 deadbeef00")):   # the state after differs
+            t = w.start(f"raise Exception(\"No path to target at x={pos}; inventory: {stuff[i]}\")", "", names[i],
+                        None, 1, True, False)
+            await t.job
+        t = w.start("raise Exception('placement blocked')", "", "walker", None, 1, True, False)
+        await t.job                                      # another error: not a repeat
+        texts = [n.text for n in board.items if n.source.startswith("t")]
+        assert "same error" not in texts[0] and "2nd time a task failed" in texts[1] and "3rd time" in texts[2]
+        assert "same error" not in texts[3]
+        assert board.items[1].urgent and log.rows.count("task_repeat_failure") == 2
+
+    asyncio.run(go())
+
+
+def test_quiet_stall_uses_the_programs_own_action_counts(tmp_path):
+    import json
+    from datetime import datetime, timezone
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    class Board:
+        def __init__(self):
+            self.posts = []
+
+        def post(self, source, text, urgent=False):
+            self.posts.append(text)
+
+    def counts(ts):
+        with (tmp_path / "grader.jsonl").open("a") as f:
+            f.write(json.dumps({"ts": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+                                "type": "program_actions", "count": 2}) + "\n")
+
+    board = Board()
+    w = tm.Work(None, Log(), tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    t0 = datetime.now(timezone.utc).timestamp()
+    t = tm.Task(id="t1", name="direct", hands=True, started=t0, deadline_s=600, wake_on_end=False)
+    w.tasks["t1"] = t
+    w.stall_check(now=t0 + 300)
+    assert board.posts == []                     # no calls through the harness and no counts: can't tell
+    counts(t0 + 250)                             # the program says things are happening
+    w._prog["checked"] = 0
+    w.stall_check(now=t0 + 300)
+    assert board.posts == []
+    w._prog["checked"] = 0
+    with (tmp_path / "grader.jsonl").open("a") as f:      # walking, moving items: busy, not actions
+        f.write(json.dumps({"ts": datetime.fromtimestamp(t0 + 350, timezone.utc).isoformat(),
+                            "type": "program_activity", "kinds": {"move": 30}}) + "\n")
+    w.stall_check(now=t0 + 250 + tm.STALL_NO_ACT_S + 1)
+    assert board.posts == []
+    w._prog["checked"] = 0
+    w.stall_check(now=t0 + 350 + tm.STALL_NO_ACT_S + 1)
+    assert len(board.posts) == 1 and "the program saw no player activity" in board.posts[0]
+
+
+def test_notices_the_runner_delivered_in_a_wake_prompt_count_as_seen(tmp_path):
+    import json
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    board = tm.Board(Log(), tmp_path)
+    board.post("t2", "stuck", urgent=True)
+    items = json.loads((tmp_path / "WAKE").read_text())
+    (tmp_path / "WAKE").unlink()                                          # the runner took it...
+    (tmp_path / "WAKE_TAKEN").write_text(json.dumps([items[0]["key"]]))   # ...and delivered it
+    board.post("t9", "plain")
+    assert not (tmp_path / "WAKE").exists()          # not written again for what was delivered
+    assert "stuck" not in board.footer()
+    board.post("t3", "new trouble", urgent=True)
+    assert [i["text"] for i in json.loads((tmp_path / "WAKE").read_text())] == ["new trouble"]
+
+
+def test_a_long_failure_keeps_its_start_and_end():
+    from toolserver import tasks as tm
+    long = "RuntimeError: {'state': " + "x" * 2000 + "}, 'error': 'blocked at 3,4 by tree'"
+    s = tm._ends(long, "t7")
+    assert s.startswith("RuntimeError: {'state':") and "blocked at 3,4 by tree" in s
+    assert 'task("t7") shows all' in s and len(s) < 400
+    assert tm._ends("short error", "t7") == "short error"
+
+
+def test_a_tool_review_is_suggested_at_new_milestones_and_after_a_long_gap(tmp_path):
+    import json
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    def milestone(name):
+        with (tmp_path / "grader.jsonl").open("a") as f:
+            f.write(json.dumps({"ts": "2026-10-24T18:00:00Z", "type": "milestone", "id": name}) + "\n")
+
+    milestone("old_one")                            # reached before this server started: no review
+    board = tm.Board(Log(), tmp_path)
+    w = tm.Work(None, Log(), tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    w.review_check()
+    assert not board.items
+    milestone("red_auto")
+    w._prog["checked"] = 0
+    w.review_check()
+    w._prog["checked"] = 0
+    w.review_check()                                # once per milestone
+    assert [n.text.split(")")[0] for n in board.items] == ["Milestone reached (red_auto"]
+    assert "get anywhere" in board.items[0].text
+    assert "kept test" not in board.items[0].text       # no failures: nothing to ask tests for
+    w.review_check(now=w.last_review + tm.REVIEW_EVERY_S + 1)
+    assert len(board.items) == 2 and "since the last milestone or tool review" in board.items[1].text
+
+
+def test_the_review_carries_what_happened_since_the_last_one(tmp_path):
+    import json
+    from datetime import datetime, timezone
+    from toolserver import tasks as tm
+
+    class Log:
+        def __init__(self):
+            self.rows = []
+
+        def write(self, kind, **kw):
+            self.rows.append((kind, kw))
+
+    def busy(ts):
+        with (tmp_path / "grader.jsonl").open("a") as f:
+            f.write(json.dumps({"ts": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+                                "type": "program_actions", "count": 1}) + "\n")
+
+    log = Log()
+    board = tm.Board(log, tmp_path)
+    w = tm.Work(None, log, tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    t0 = 1_800_000_000.0
+    busy(t0 - 100)                                   # the host counts actions
+    busy(t0 + 3)                                     # something was done during the first script
+    for i in range(6):                               # scripts that reach the program directly: no harness calls
+        w.note_oneoff(t0 + 100 * i, t0 + 100 * i + 5, None)
+    w.note_oneoff(t0 + 900, t0 + 905, True)          # acted through the harness: not a look
+    w.note_oneoff(t0 + 906, t0 + 908, None)          # just ended: the host may not have reported yet
+    w._judge_oneoffs(now=t0 + 910)                   # the first script did something; the next five only looked
+    assert w.since["looks"] == 5 and len(w.oneoffs) == 1
+    w.note_result("my_read", 30_000)
+    w.note_result("small_tool", 200)
+    w.since["tasks"] = 4
+    key = "blocked at # by tree"
+    w.since["failures"][key], w.since["examples"][key] = 3, "blocked at 3,4 by tree (build)"
+    assert not board.items                           # nothing is posted between reviews
+    w.review_check(now=w.last_review + tm.REVIEW_EVERY_S + 1)
+    text = board.items[-1].text
+    assert "only looked at the program: 5" in text
+    assert "- failed 3x: blocked at 3,4 by tree (build)" in text and "4 ended, 3 failed, 1 different errors" in text
+    assert "does a kept test now set up that case" in text      # each failure should become a test
+    assert "my_read 30.0k" in text and "small_tool" not in text
+    assert w.since["looks"] == 0 and w.since["tasks"] == 0      # starts over after each review
+    assert [kw["facts"] for k, kw in log.rows if k == "tool_review_suggested"][0][0].startswith("tasks:")

@@ -18,7 +18,7 @@ This brief brings a new agent or teammate up to date on everything decided so fa
 
 **Why it matters in the real world.** Almost every company customizes its business software with custom fields, modules, and workflows that vendor APIs and MCP servers don't cover. A customized ERP is effectively a modpack. Integrations also break when apps change. An agent that builds its own interface, and repairs it when it breaks, stays working over months. That is the real-world version of the long-horizon argument.
 
-**Novelty claim.** As far as we know, no prior agent starts from only screenshots, input, and docs, and builds its own interface live by writing code into the host through the host's native mod or plugin system, then keeps extending it over tens of hours, in both games and business software. Evidence is interface coverage rising and tokens per hour falling.
+**Novelty claim.** As far as we know, no prior agent starts from only screenshots, input, and docs, and builds its own interface live by writing code into the host through the host's native mod or plugin system, then keeps extending it over tens of hours, in both games and business software. Evidence is interface coverage rising, actions per step rising, and the cost of each action and each milestone falling (see Metrics).
 
 **Do not lead with** "self-improving harness" or "writes its own MCP server for any app". Both read as prior work to judges who follow the field.
 
@@ -74,11 +74,11 @@ Two research agents ran about 170 searches (academic, products, open source, hac
 - Hook accuracy checked against Odoo's API as oracle.
 - Held-out tasks.
 - Ablation: performance drops when its own hooks are off.
-- Curves over time: success rate, tokens per task, time per task, interface coverage.
+- Curves over time: the headline metrics (see Metrics), success rate, time per task, interface coverage.
 - One planted change mid-run (e.g. Odoo form change or module upgrade) with visible detection and repair.
 
 ### Tier 5 — demo and pitch
-- Live dashboard: hooks appearing, coverage rising, cost falling.
+- Live dashboard: hooks appearing, coverage rising, cost per action and per milestone falling (cache-weighted).
 - At least one host running continuously until judging.
 - Recorded backup run.
 - One user story through every slide: an accountant whose customized Odoo no off-the-shelf tool understands. The agent learns the setup, reconciles the month, and repairs its own hook when an upgrade breaks it.
@@ -95,6 +95,29 @@ Two research agents ran about 170 searches (academic, products, open source, hac
 - Closed applications via decompiling and injecting hooks. Many licenses forbid reverse engineering; enterprise buyers will raise it.
 - Sharing one hook library across many agents and installs.
 - More hosts: Excel, browsers, CAD tools.
+
+## Metrics
+
+Decided after Factorio trial 07. Raw tokens per hour is not a headline metric: each model step re-reads the whole context, so raw tokens grow with run length and context size whatever the agent does, and nearly all of that context is cached, at about a tenth of the price. **Cache-weighted tokens** count cached input at 10% and other input and output in full.
+
+**Headline**
+1. **Cache-weighted tokens per milestone**, for each milestone and for each step between milestones. This is the score: progress per cost. If the harness works, later steps cost less relative to their difficulty.
+2. **Cache-weighted tokens per action, over time**, in 15-minute bins. This is the efficiency curve: a steep drop once the agent's own tools land, then flat or still falling. Trial 07 went from 9.1k to about 1.8k.
+3. **Actions per step**: actions done in the program per model step. It needs no pricing assumption and doesn't depend on context size.
+4. **Hands busy**: the share of wall-clock time something is acting on the program. It catches an agent that is efficient per step but leaves the program idle while it thinks.
+
+Actions are counted by the host (a grader-side counter of the user's actions), never by the agent.
+
+**Diagnostics** (reported, not scored)
+- Failure rate, and repeats of each kind of failure. Each kind should become a test and not come back.
+- Raw context per request: a check that context isn't ballooning.
+- Harness restarts and their cold-cache cost, so our own changes aren't charged to the agent.
+
+**Guards against gaming**
+- **Output made by what the agent built**, per hour, for example science packs from machines in Factorio. It is the clearest sign that the agent's tools compound.
+- **Strict grading:** a milestone counts only when the whole supply chain is automated, including fuel and power, so a hand-fed shortcut scores lower than the real thing.
+
+**Comparisons** need 2 or 3 runs per harness version. Single runs vary as much as the differences between versions do.
 
 ## Sponsor tracks
 

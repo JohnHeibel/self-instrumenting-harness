@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -204,6 +205,7 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
             free = hands_free = work.hands.free_for(None)
             if free:
                 work.hands.take("script", name or file or "code")
+            started = time.time()
             try:
                 ok, text, calls = await scripts.run(
                     ext, code, timeout_s, file, args, script_url, sorted(BUILTIN - SCRIPT_BLOCKED), who="script",
@@ -227,6 +229,10 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
                           error=c.get("error"), duration_ms=c.get("ms"), result_kind="text",
                           result_bytes=c.get("bytes"), summary=c.get("summary"), via="script",
                           hook=ext.hook_info(c.get("tool", "")))
+            if code and not keep:       # a one-off: was it only looking? (for the views suggestion)
+                infos = [ext.hook_info(c.get("tool", "")) for c in calls]
+                acted = any(i is None or i["acts"] for i in infos) if calls else None
+                work.note_oneoff(started, time.time(), acted)
             res.set("text", len(text), summary=text.splitlines()[-1][:200], inner_calls=len(calls),
                     held_hands=bool(free))
             if not ok:
@@ -284,10 +290,7 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
             else:
                 t = work.tasks.get(id)
                 if t and t.status == "running" and wait_s > 0 and t.job:
-                    try:
-                        await asyncio.wait_for(asyncio.shield(t.job), min(float(wait_s), 900))
-                    except asyncio.TimeoutError:
-                        pass
+                    await board.until_done_or_urgent(t.job, min(float(wait_s), 900))
                 text = work.describe(id)
             res.set("text", len(text), summary=text.splitlines()[0][:200])
             return text
@@ -378,6 +381,14 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
     return mcp
 
 
+def _text_chars(result) -> int:
+    """How much text a tool result puts in the agent's context."""
+    content = result[0] if isinstance(result, tuple) else result
+    if not isinstance(content, list):
+        return 0
+    return sum(len(getattr(c, "text", "") or "") for c in content)
+
+
 def _deliver_notices(mcp: FastMCP, board: "tasks_mod.Board", work: "tasks_mod.Work") -> None:
     """Every tool result the agent gets carries the notices it hasn't seen yet, as a last text block.
     (Not inside scripts: their results are parsed.) Also restores saved rules on the first call."""
@@ -392,6 +403,11 @@ def _deliver_notices(mcp: FastMCP, board: "tasks_mod.Board", work: "tasks_mod.Wo
         result = await original(name, arguments, context=context, convert_result=convert_result)
         if VIA.get() is not None or not convert_result or name in ("wait", "status"):
             return result
+        work.stall_check()             # these post to the board, so before its footer
+        work.review_check()
+        own = (arguments or {}).get("name") if name == "call_hook" else name
+        if own and work.ext.hook_info(str(own)):
+            work.note_result(str(own), _text_chars(result))
         footer = "\n".join(x for x in (board.footer(), work.idle_note()) if x)
         if not footer:
             return result

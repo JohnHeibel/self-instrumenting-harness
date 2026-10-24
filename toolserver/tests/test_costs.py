@@ -27,11 +27,13 @@ def test_report_counts_calls_tokens_and_largest_results(tmp_path):
     ])
     _write(tmp_path / "runner.jsonl", [
         {"ts": "2026-01-01T11:29:00Z", "type": "usage", "total_tokens": 1000, "uncached_tokens": 100, "input_tokens": 50},
-        {"ts": "2026-01-01T11:59:00Z", "type": "usage", "total_tokens": 31000, "uncached_tokens": 400, "input_tokens": 900},
+        {"ts": "2026-01-01T11:59:00Z", "type": "usage", "total_tokens": 31000, "uncached_tokens": 400, "input_tokens": 900,
+         "cached_input_tokens": 800, "output_tokens": 100},
     ])
     text = report(tmp_path, 60, now=NOW)
     assert text.startswith("Last 60 min: 3 tool calls, 1 failed; 1 more calls ran inside scripts.")
-    assert "Model: 1 steps, 30,000 tokens (300 not cached), about 30,000 per step. Context now: 900" in text
+    assert ("Model: 1 steps, 30,000 tokens (300 not cached), about 30,000 per step; cache-weighted (cached input "
+            "at 0.1): 280, about 280 per step. Context now: 900") in text
     assert "status: 3, 1 failed" in text and "screenshot: 1, 0 failed, 0.5 s, 1 images" in text
     assert "old" not in text and "Largest text results: status" in text
     assert "median 30 s, longest 30 s" in text
@@ -59,8 +61,10 @@ def test_report_shows_milestone_costs(tmp_path):
 def test_report_shows_program_actions_per_step_from_any_log(tmp_path):
     _write(tmp_path / "runner.jsonl", [
         {"ts": "2026-01-01T11:10:00Z", "type": "usage", "total_tokens": 0, "uncached_tokens": 0, "input_tokens": 10},
-        {"ts": "2026-01-01T11:20:00Z", "type": "usage", "total_tokens": 40000, "uncached_tokens": 0, "input_tokens": 10},
-        {"ts": "2026-01-01T11:30:00Z", "type": "usage", "total_tokens": 80000, "uncached_tokens": 0, "input_tokens": 10},
+        {"ts": "2026-01-01T11:20:00Z", "type": "usage", "total_tokens": 40000, "uncached_tokens": 0, "input_tokens": 40000,
+         "cached_input_tokens": 30000},
+        {"ts": "2026-01-01T11:30:00Z", "type": "usage", "total_tokens": 80000, "uncached_tokens": 0, "input_tokens": 40000,
+         "cached_input_tokens": 30000},
     ])
     _write(tmp_path / "grader.jsonl", [
         {"ts": "2026-01-01T09:00:00Z", "type": "program_actions", "count": 99, "kinds": {"build": 99}},  # too old
@@ -69,7 +73,7 @@ def test_report_shows_program_actions_per_step_from_any_log(tmp_path):
         {"ts": "2026-01-01T11:26:00Z", "type": "host_command", "parameters": "program_actions"},
     ])
     text = report(tmp_path, 60, now=NOW)
-    assert "Done in the program: 40 actions (build 20, mine 10, craft 10), 20.0 per step, about 2,000 tokens per action." in text
+    assert "Done in the program: 40 actions (build 20, mine 10, craft 10), 20.0 per step, about 650 cache-weighted tokens per action (2,000 raw)." in text
 
 
 def test_report_without_program_counts_says_nothing_about_them(tmp_path):
@@ -97,3 +101,28 @@ def test_time_use_splits_hands_tools_and_idle(tmp_path):
     u = time_use(tmp_path, a, b)
     assert [round(u[k] / 60) for k in ("hands", "tools", "idle", "off")] == [10, 6, 34, 10], u
     assert "hands busy 20%" in report(tmp_path, 60, now=NOW)
+    u = time_use(tmp_path, a - 1800, b)                                               # before the run: off
+    assert [round(u[k] / 60) for k in ("hands", "tools", "idle", "off")] == [10, 6, 34, 40], u
+    assert "hands busy 20%" in report(tmp_path, 90, now=NOW)
+
+
+def test_milestone_costs_are_cache_weighted_and_stepwise(tmp_path):
+    import json
+    from toolserver import costs
+
+    def rec(ts, inp, cached, out=0):
+        return {"ts": ts, "type": "usage", "input_tokens": inp, "cached_input_tokens": cached, "output_tokens": out}
+
+    (tmp_path / "runner.jsonl").write_text("\n".join(json.dumps(r) for r in [
+        rec("2026-01-01T10:00:00Z", 1000, 0),          # 1000
+        rec("2026-01-01T10:10:00Z", 10000, 9000, 50),  # 1000 + 900 + 50 = 1950
+        rec("2026-01-01T10:30:00Z", 20000, 20000),     # 2000
+    ]))
+    (tmp_path / "grader.jsonl").write_text("\n".join(json.dumps(r) for r in [
+        {"ts": "2026-01-01T10:15:00Z", "type": "milestone", "id": "first"},
+        {"ts": "2026-01-01T10:15:30Z", "type": "milestone", "id": "first"},   # repeated: first time counts
+        {"ts": "2026-01-01T10:40:00Z", "type": "milestone", "id": "second"},
+    ]))
+    got = costs.milestone_costs(tmp_path, costs._all(tmp_path / "runner.jsonl"))
+    assert [(m, s, spent, step) for m, s, spent, step in got] == [
+        ("first", 900.0, 2950.0, 2950.0), ("second", 2400.0, 4950.0, 2000.0)]

@@ -25,6 +25,8 @@ run's mods folder by hosts/factorio/hostctl.py) for production counts over RCON 
                       new actions since the last record, from the mod's counts of the game's own
                       player events (build, mine, craft, rotate; see mod/control.lua for what
                       isn't counted)
+  program_activity    {kinds, totals, tick, source} when players did something that isn't an action (moved,
+                      inventory changed): shows a player is busy, not counted as actions
   grader_status       {ok, detail} when the game becomes reachable or unreachable
 
 Restart-safe: it rebuilds what it has already written from grader.jsonl.
@@ -163,6 +165,7 @@ class Grader:
         self.counts: dict[str, int] = {}
         self.last_command = 0
         self.action_totals: dict[str, int] = {}
+        self.activity_totals: dict[str, int] = {}
         self.up: bool | None = None
         self._resume()
         self.log = EventLog(self.path, run_id, writer="grader")
@@ -191,6 +194,8 @@ class Grader:
                 self.last_command = max(self.last_command, r.get("command_id", 0))
             elif t == "program_actions":
                 self.action_totals = {k: int(v) for k, v in _dict(r.get("totals")).items()}
+            elif t == "program_activity":
+                self.activity_totals = {k: int(v) for k, v in _dict(r.get("totals")).items()}
 
     def _connect(self) -> Rcon:
         info = json.loads((self.run_dir / "host" / "rcon.json").read_text())
@@ -260,6 +265,14 @@ class Grader:
             self.log.write("program_actions", count=sum(kinds.values()), kinds=kinds, totals=totals,
                            tick=state.get("tick"), source="game player events")
         self.action_totals = totals
+        seen = {k: int(v) for k, v in _dict(state.get("activity")).items() if isinstance(v, (int, float))}
+        grew = {k: (n - self.activity_totals.get(k, 0) if n >= self.activity_totals.get(k, 0) else n)
+                for k, n in seen.items()}
+        grew = {k: d for k, d in grew.items() if d}
+        if grew:
+            self.log.write("program_activity", kinds=grew, totals=seen, tick=state.get("tick"),
+                           source="game player events")
+        self.activity_totals = seen
 
     def _status(self, ok: bool, detail: str) -> None:
         if self.up != ok:

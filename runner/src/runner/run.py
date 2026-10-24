@@ -36,6 +36,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+from . import hostlog
 from typing import Callable
 
 from toolserver.events import EventLog
@@ -63,9 +65,15 @@ WAKE_PROMPT = (
     "You were interrupted because something you asked to be woken for happened:\n{notices}\n"
     "Your context is intact. Deal with it if it needs you, then carry on with what you were doing.")
 WAKE = "WAKE"   # written by the tool server while urgent notices wait for the agent
+WAKE_TAKEN = "WAKE_TAKEN"   # keys of the notices a wake prompt delivered, so the tool server counts them seen
+HOST_DOWN_NOTE = (
+    "The program went down while you were working, and the harness restarted it. What it wrote just "
+    "before (recently changed files where it keeps its state and logs):\n{evidence}\n"
+    "If something you did caused this (an extension or a call), fix that before doing it again.")
 DEFAULT_BRIEF = agent.REPO / "prompts" / "brief.md"
 RUN_FILES = "run"   # workspace/run/: BRIEF.md, GOAL.md, HOST.md, rewritten on every runner start
 RATE_LIMIT_MARGIN_S = 60
+INTERRUPT_RESEND = 15            # resend turn/interrupt this often until the turn ends
 INPUT_BLOCKED = "INPUT_BLOCKED"   # written by the tool server while input can't reach the host
 
 
@@ -108,6 +116,7 @@ class Config:
     interrupt_grace: float = 60               # turn/interrupt must end the turn within this
     wake_grace: float = 60                    # a WAKE during a tool call waits this long for its result
     wake_cooldown: float = 60                 # least time between wake-up interrupts
+    wake_settle: float = 5                    # no wake this soon after a turn starts (the app may not take an interrupt yet)
     request_timeout: float = 120
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.time
@@ -139,7 +148,8 @@ class Runner:
         self.log: EventLog
         self.mapper: Mapper
         self._last_tick: float | None = None   # active-time clock; None after a (re)start
-        self._last_wake = 0.0
+        self._last_wake = self._turn_start = 0.0
+        self._agent_ran = False                # a turn ran in this process (so a host outage is news)
         self._counting = True
 
     # Top level ------------------------------------------------------------------
@@ -275,7 +285,9 @@ class Runner:
 
     def _run_turn(self) -> Outcome:
         assert self.srv
+        self._agent_ran = True
         wake = self.state.extra.pop("pending_wake", None)
+        host_note = self.state.extra.pop("pending_host_note", None) if self.state.goal_sent else None
         if self.state.goal_sent and wake:
             prompt, kind = WAKE_PROMPT.format(notices=wake), "wake"
         elif self.state.goal_sent:
@@ -285,6 +297,8 @@ class Runner:
                 prompt, kind = update + "\n\n" + prompt, "update"
         else:
             prompt, kind = self.first_prompt(), "goal"
+        if host_note:
+            prompt = host_note + "\n\n" + prompt
         res = self.srv.request("turn/start", {"threadId": self.state.thread_id,
                                               "input": [{"type": "text", "text": prompt}]},
                                timeout=self.cfg.request_timeout)
@@ -298,9 +312,10 @@ class Runner:
         self.log.write("marker", label=f"prompt: {kind}", kind=f"prompt_{kind}")
 
         t0 = last = self.cfg.clock()
+        self._turn_start = t0
         next_host = t0 + self.cfg.host_poll
         interrupt: str | None = None
-        interrupt_deadline = 0.0
+        interrupt_deadline = next_resend = 0.0
         while True:
             msg = self.srv.next_message(self.cfg.poll)
             now = self.cfg.clock()
@@ -329,8 +344,12 @@ class Runner:
                     self.log.write("marker", label=f"interrupting turn {self.state.turns}: {interrupt}",
                                    kind="interrupt")
                     interrupt_deadline = now + self.cfg.interrupt_grace
+                    next_resend = now + INTERRUPT_RESEND
             elif now > interrupt_deadline:
                 raise AppServerError(f"turn did not end {self.cfg.interrupt_grace:.0f} s after turn/interrupt")
+            elif now >= next_resend:    # an interrupt can be lost (e.g. sent as the turn starts): ask again
+                next_resend = now + INTERRUPT_RESEND
+                self.srv.send_request("turn/interrupt", {"threadId": self.state.thread_id, "turnId": turn_id})
 
         status = turn.get("status") or "failed"
         duration_ms = turn.get("durationMs")
@@ -372,7 +391,8 @@ class Runner:
             age = self.cfg.clock() - p.stat().st_mtime
         except OSError:
             return False
-        if self.cfg.clock() - self._last_wake < self.cfg.wake_cooldown:
+        now = self.cfg.clock()
+        if now - self._last_wake < self.cfg.wake_cooldown or now - self._turn_start < self.cfg.wake_settle:
             return False
         return self.mapper.current != "acting" or age >= self.cfg.wake_grace
 
@@ -383,6 +403,16 @@ class Runner:
             p.unlink(missing_ok=True)
         except (OSError, ValueError):
             return "- (the notice could not be read; call status)"
+        keys = [i["key"] for i in items if i.get("key")]
+        if keys:
+            t = self.run_dir / WAKE_TAKEN
+            try:
+                old = json.loads(t.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                old = []
+            tmp = t.with_suffix(".tmp")
+            tmp.write_text(json.dumps((old + keys)[-200:]), encoding="utf-8")
+            tmp.replace(t)
         return "\n".join(f"- {i.get('source', '?')}: {i.get('text', '')}" for i in items)[:2000]
 
     def _input_blocked(self) -> str | None:
@@ -586,6 +616,8 @@ class Runner:
         if not self.host.start or (last is not None and self.cfg.clock() - last < self.cfg.start_retry):
             return False
         self._set_counting(False)
+        if self._agent_ran:
+            self._keep_host_log()          # before the start: it may rotate or clear the log
         self.mapper.state("host_starting", why)
         ok, what = self._host_cmd(self.host.start, "start", self.host.start_timeout_s)
         self.log.write("marker", label=f"started the host: {what}" if ok else f"could not start the host: {what}",
@@ -594,6 +626,16 @@ class Runner:
         self._save()
         self._set_counting(True)  # the start itself didn't count
         return ok
+
+    def _keep_host_log(self) -> None:
+        """What the program wrote just before it went down, for the agent's next prompt: when the
+        agent's own code brought it down, this is usually the only place that says why."""
+        dirs = [self.run_dir / "host"] + [Path(d) for d in getattr(self.host, "log_dirs", [])]
+        evidence, files = hostlog.evidence(dirs, since=self.cfg.clock() - hostlog.RECENT_S)
+        if evidence:
+            self.state.extra["pending_host_note"] = HOST_DOWN_NOTE.format(evidence=evidence)
+            self.log.write("marker", label=f"kept what the host wrote before going down: {', '.join(files)}",
+                           kind="host_log", files=files)
 
     def _host_cmd(self, argv: list[str], what: str, timeout: float) -> tuple[bool, str]:
         """Output goes to raw/host.log."""

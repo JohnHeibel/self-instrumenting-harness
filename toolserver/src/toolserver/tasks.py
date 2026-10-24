@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
     from .extensions import Extensions
 
 WAKE = "WAKE"                  # run-dir file the runner watches; holds the urgent notices not yet seen
+WAKE_TAKEN = "WAKE_TAKEN"      # keys of notices the runner delivered in a wake prompt: they count as seen
 MAX_TASK_MINUTES = 480
 MAX_TASKS = 8
 MAX_RULES = 32
@@ -39,7 +42,18 @@ QUIET = {"", "none", "null", "false", "0", "[]", "{}", '""'}
 FOOTER_CHARS = 800
 MAX_QUEUED = 8
 IDLE_NOTE_AFTER_S = 90          # hands idle this long: say so on the agent's tool results
+ONEOFF_SETTLE_S = 15            # the host's activity reports lag by up to this long
+REVIEW_EVERY_S = 3600          # suggest a tool review this long after the last one (milestones also bring one)
+REVIEW_ASK = ("Against the brief's foundation (get anywhere, get anything, change many things at once, see an "
+              "area) and its rules on repeats (actions and questions), which of your tools is weakest, failed or "
+              "cost the most? Improve that one before pushing on. (costs has more per tool.)")
+REVIEW_TESTS_ASK = ("For each failure above: does a kept test now set up that case, run the tool and check its "
+                    "receipt? Add the missing ones, fix the tool until they pass, and rerun all its tests.")
+REVIEW_FAILURES = 5             # kinds of failure listed in a review, most frequent first
 IDLE_NOTE_EVERY_S = 180         # ...at most this often
+STALL_REPEAT = 10               # a task holding the hands made the same acting call this many times...
+STALL_NO_ACT_S = 120            # ...or has made no acting call for this long: tell the agent, once each
+REPEAT_KEY_WORDS = 5              # failures whose first words match count as the same error (numbers, ids ignored)
 
 
 class HandsBusy(ToolError):
@@ -107,7 +121,7 @@ class Board:
         self._changed = asyncio.Event()
 
     def post(self, source: str, text: str, urgent: bool = False) -> Notice:
-        n = Notice(len(self.items) + 1, time.time(), source, text.strip()[:500], urgent)
+        n = Notice(len(self.items) + 1, time.time(), source, text.strip()[:800], urgent)
         self.items.append(n)
         self.log.write("notice", notice=n.id, source=source, text=n.text, urgent=urgent)
         if urgent:
@@ -117,7 +131,27 @@ class Board:
         return n
 
     def unseen(self) -> list[Notice]:
+        self._absorb_taken()
         return [n for n in self.items if not n.seen]
+
+    def _absorb_taken(self) -> None:
+        """Notices the runner already delivered in a wake prompt are seen: don't wake for them again."""
+        p = self.run_dir / WAKE_TAKEN
+        try:
+            st = p.stat()
+            mtime = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return
+        if mtime == getattr(self, "_taken_mtime", None):
+            return
+        self._taken_mtime = mtime
+        try:
+            keys = set(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return
+        for n in self.items:
+            if not n.seen and _key(n) in keys:
+                n.seen = True
 
     def mark_seen(self, notices: list[Notice]) -> None:
         for n in notices:
@@ -135,8 +169,8 @@ class Board:
     async def wait(self, sources: list[str], timeout_s: float) -> list[Notice]:
         """Unseen notices from `sources` (any source if empty), waiting up to timeout_s for one."""
         deadline = time.monotonic() + timeout_s
-        while True:
-            hits = [n for n in self.unseen() if not sources or _from(n, sources)]
+        while True:     # an urgent notice from anything ends the wait too: it shouldn't sit unseen
+            hits = [n for n in self.unseen() if not sources or _from(n, sources) or n.urgent]
             if hits:
                 self.mark_seen(hits)
                 return hits
@@ -148,8 +182,24 @@ class Board:
             except asyncio.TimeoutError:
                 return []
 
+    async def until_done_or_urgent(self, job: asyncio.Future, timeout_s: float) -> bool:
+        """Wait for `job` to end, but return early (False) when an urgent notice is posted meanwhile,
+        so a wait on one task doesn't keep the agent from hearing that something needs it now."""
+        mark, deadline = len(self.items), time.monotonic() + timeout_s
+        while not job.done():
+            if any(n.urgent and not n.seen for n in self.items[mark:]):
+                return False
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            changed = asyncio.ensure_future(self._changed.wait())
+            await asyncio.wait({asyncio.shield(job), changed}, timeout=left, return_when=asyncio.FIRST_COMPLETED)
+            changed.cancel()
+        return True
+
     def _write_wake(self) -> None:
-        urgent = [{"source": n.source, "text": n.text} for n in self.items if n.urgent and not n.seen]
+        self._absorb_taken()
+        urgent = [{"source": n.source, "text": n.text, "key": _key(n)} for n in self.items if n.urgent and not n.seen]
         p = self.run_dir / WAKE
         if urgent:
             tmp = p.with_suffix(".tmp")
@@ -157,6 +207,22 @@ class Board:
             tmp.replace(p)
         else:
             p.unlink(missing_ok=True)
+
+
+def _fresh_since() -> dict:
+    return {"tasks": 0, "failures": {}, "examples": {}, "looks": 0, "results": {}}
+
+
+def _ends(text: str, tid: str, head: int = 170, tail: int = 130) -> str:
+    """A long failure cut to its start and end, where the error and the reason usually are."""
+    text = " ".join(text.split())
+    if len(text) <= head + tail + 40:
+        return text
+    return f"{text[:head]} … {text[-tail:]} (cut; task(\"{tid}\") shows all)"
+
+
+def _key(n: Notice) -> str:
+    return f"{n.ts:.6f}:{n.id}"
 
 
 def _from(n: Notice, sources: list[str]) -> bool:
@@ -186,6 +252,11 @@ class Task:
     logs: list[str] = field(default_factory=list)
     calls: int = 0
     job: asyncio.Task | None = None
+    acts: int = 0                  # acting calls it made
+    reads: int = 0                 # calls since its last acting call
+    last_act: float = 0.0
+    repeats: dict = field(default_factory=dict)   # acting call -> times made
+    stall_told: set = field(default_factory=set)  # which stall notices it got
 
     def brief(self) -> str:
         if self.status == "queued":
@@ -234,9 +305,13 @@ class Work:
         self.ext, self.log, self.run_dir, self.hands, self.board = ext, log, run_dir, hands, board
         self.harness_url, self.builtins = harness_url, builtins
         self.tasks: dict[str, Task] = {}
+        self.failures: dict[str, int] = {}      # error with numbers masked -> times, whichever task hit it
         self.rules: dict[str, Rule] = {}
         self._n = 0
         self._rules_path = run_dir / "rules.json"
+        self.since = _fresh_since()                   # what happened since the last tool review
+        self.last_review = time.time()
+        self.oneoffs: list[tuple[float, float, bool | None]] = []
         hands.on_release = self.pump
 
     def can_act(self, who: str | None) -> bool:
@@ -362,10 +437,12 @@ class Work:
         def on_event(kind: str, data: dict) -> None:
             if kind == "call":
                 t.calls += 1
+                hook = self.ext.hook_info(data.get("tool", ""))
                 self.log.write("tool_call", tool=data.get("tool"), channel="hook", args=data.get("args"),
                                ok=data.get("ok"), error=data.get("error"), duration_ms=data.get("ms"),
                                result_kind="text", result_bytes=data.get("bytes"), summary=data.get("summary"),
-                               via=f"task:{t.id}", hook=self.ext.hook_info(data.get("tool", "")))
+                               via=f"task:{t.id}", hook=hook)
+                self.watch_call(t, data.get("tool", ""), data.get("args"), bool(hook and hook["acts"]))
             elif kind == "log":
                 t.logs = (t.logs + [data.get("text", "")])[-20:]
             elif kind == "notify":
@@ -383,10 +460,26 @@ class Work:
             self.hands.release(t.id)
         t.result = r
         t.status = "ok" if r.ok else ("stopped" if r.stopped else "failed")
-        summary = (r.out.strip().splitlines() or [""])[-1][:200] if r.ok else r.detail[:200]
+        summary = (r.out.strip().splitlines() or [""])[-1][:200] if r.ok else _ends(r.detail, t.id)
         self.log.write("task_ended", task=t.id, name=t.name, status=t.status, duration_ms=round(r.seconds * 1000),
                        calls=len(r.calls), summary=summary)
-        self.board.post(t.id, f"{t.status}: {summary or '(no output)'}", urgent=t.wake_on_end and not r.stopped)
+        again = ""
+        self.since["tasks"] += 1
+        if t.status == "failed":
+            masked = re.sub(r"[0-9a-f]{8,}", "#", summary)           # ids, hashes
+            # Only the first words, where the error is: positions, counts and state dumps after it vary.
+            # The error alone, not the task's name: a kept script and a one-off copy of it fail alike.
+            key = " ".join(re.findall(r"[A-Za-z_][\w./-]*", masked)[:REPEAT_KEY_WORDS])
+            self.failures[key] = n = self.failures.get(key, 0) + 1
+            self.since["failures"][key] = self.since["failures"].get(key, 0) + 1
+            self.since["examples"][key] = f"{summary} ({t.name})"
+            if n >= 2:
+                again = (f" This is the {n}{'nd' if n == 2 else 'rd' if n == 3 else 'th'} time a task failed with "
+                         f"this same error: running it again unchanged, or a copy of it, won't help. Look at why (read the state "
+                         f"where it fails) or change the approach.")
+                self.log.write("task_repeat_failure", task=t.id, name=t.name, times=n, summary=summary)
+        self.board.post(t.id, f"{t.status}: {summary or '(no output)'}{again}",
+                        urgent=(t.wake_on_end and not r.stopped) or bool(again))
         self.pump()
 
     async def stop(self, tid: str, why: str = "stopped") -> str:
@@ -420,6 +513,10 @@ class Work:
         if t is None:
             raise ToolError(f"no task {tid!r}. " + self.listing())
         lines = [t.brief()]
+        if t.status == "running" and t.hands:
+            top = max(t.repeats.values(), default=0)
+            lines.append(f"acting calls: {t.acts} ({len(t.repeats)} different, the most repeated {top}x); "
+                         f"{t.reads} reads since the last one")
         if t.logs:
             lines.append("log: " + " | ".join(t.logs[-8:]))
         if t.result is not None:
@@ -431,6 +528,164 @@ class Work:
             lines.append(f"(Checking again costs a step. wait(on=[\"{t.id}\"]) returns when it ends; meanwhile "
                          f"queue the next chore with run_script(..., background=True, after=\"{t.id}\").)")
         return "\n".join(lines)
+
+    def watch_call(self, t: Task, tool: str, args: Any, acts: bool, now: float | None = None) -> None:
+        """Track what a task does with the hands, to spot one that holds them without getting anywhere."""
+        now = now or time.time()
+        if acts:
+            t.acts, t.reads, t.last_act = t.acts + 1, 0, now
+            key = f"{tool} {json.dumps(args, sort_keys=True, default=str)[:300]}"
+            t.repeats[key] = t.repeats.get(key, 0) + 1
+        else:
+            t.reads += 1
+        self.stall_check(now)
+
+    def stall_check(self, now: float | None = None) -> None:
+        """Tell the agent, once per kind, when a task holding the hands seems stuck: it keeps making the
+        same acting call, or it has gone a while with only reads (waiting, polling) or nothing at all."""
+        now = now or time.time()
+        for t in self.tasks.values():
+            if t.status != "running" or not t.hands:
+                continue
+            held = (now - t.started) / 60
+            key, n = max(t.repeats.items(), key=lambda kv: kv[1], default=("", 0))
+            if n >= STALL_REPEAT and "repeat" not in t.stall_told:
+                t.stall_told.add("repeat")
+                self._stalled(t, "repeat", f"{t.id} ({t.name}) has held your hands {held:.1f} min and keeps making "
+                              f"the same acting call ({n} times: {key[:160]}). It may be stuck in a retry loop. "
+                              f"Check what it is waiting for and stop it (task(\"{t.id}\", stop=True)) if it "
+                              f"isn't getting anywhere.")
+            # Acting is seen two ways: the task's acting calls through the harness, and the program's own
+            # action counts (when the host reports them), which also catch tools that reach the program
+            # directly. With neither (no calls, no counts) there is nothing to judge by, so say nothing.
+            counted, last_prog = self.program_activity()
+            if not counted and t.acts + t.reads == 0:
+                continue
+            quiet = now - max(t.last_act or t.started, last_prog if last_prog > t.started else 0)
+            if quiet >= STALL_NO_ACT_S and "quiet" not in t.stall_told:
+                t.stall_told.add("quiet")
+                self._stalled(t, "quiet", f"{t.id} ({t.name}) has held your hands {held:.1f} min but made no acting "
+                              f"call{' and the program saw no player activity' if counted else ''} for {quiet / 60:.1f} "
+                              f"min ({t.reads} reads since). If it is waiting or polling, "
+                              f"the hands sit idle meanwhile: stop it and do the waiting outside the hands (a "
+                              f"hands=False task, or a rule), or let it finish if the wait is nearly over.")
+
+    def program_activity(self) -> tuple[bool, float]:
+        """(whether the host counts actions in the program at all, time of the latest sign of the user
+        doing something), from `program_actions` and `program_activity` records in the run's logs, read
+        incrementally."""
+        st = self.__dict__.setdefault("_prog", {"counted": False, "last": 0.0, "pos": {}, "checked": 0.0, "scanned": False})
+        if time.time() - st["checked"] < 5:
+            return st["counted"], st["last"]
+        st["checked"] = time.time()
+        for path in Path(self.run_dir).glob("*.jsonl"):
+            if path.name == "events.jsonl":
+                continue
+            try:
+                size = path.stat().st_size
+                pos = st["pos"].get(path.name, 0)
+                if size <= pos:
+                    st["pos"][path.name] = min(pos, size)
+                    continue
+                with path.open("rb") as f:
+                    f.seek(pos)
+                    chunk = f.read(size - pos)
+            except OSError:
+                continue
+            end = chunk.rfind(b"\n") + 1               # leave a half-written last line for next time
+            st["pos"][path.name] = pos + end
+            for line in chunk[:end].splitlines():
+                if b'"program_actions"' not in line and b'"program_activity"' not in line and b'"milestone"' not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                    ts = datetime.fromisoformat(r["ts"].replace("Z", "+00:00")).timestamp()
+                except (ValueError, KeyError):
+                    continue
+                busy = ((r.get("type") == "program_actions" and r.get("count")) or
+                        (r.get("type") == "program_activity" and r.get("kinds")))   # moving etc.: not an action
+                if r.get("type") == "program_actions":
+                    st["counted"] = True
+                if busy:
+                    st["last"] = max(st["last"], ts)
+                    st.setdefault("times", []).append(ts)
+                    del st["times"][:-500]
+                elif r.get("type") == "milestone" and st["scanned"]:   # not those from before this server
+                    st.setdefault("new_milestones", []).append(str(r.get("id", "?")))
+        st["scanned"] = True
+        return st["counted"], st["last"]
+
+    def note_result(self, tool: str, chars: int) -> None:
+        """A result of one of the agent's own tools, returned straight into its context (for the review)."""
+        c = self.since["results"].setdefault(tool, [0, 0])
+        c[0], c[1] = c[0] + 1, c[1] + chars
+
+    def note_oneoff(self, t0: float, t1: float, acted: bool | None) -> None:
+        """A one-off foreground script ran from t0 to t1. acted: whether any of its calls through the harness
+        acted (None: it made none). Judged later, once the host has reported what happened meanwhile."""
+        self.oneoffs.append((t0, t1, acted))
+
+    def _judge_oneoffs(self, now: float) -> None:
+        """Count one-off scripts that only looked: no acting call, and the program saw nobody do anything
+        meanwhile (for the review)."""
+        counted, _ = self.program_activity()
+        times = self._prog.get("times", [])
+        keep = []
+        for t0, t1, acted in self.oneoffs:
+            if acted:
+                continue
+            if counted and now < t1 + ONEOFF_SETTLE_S:
+                keep.append((t0, t1, acted))          # the host reports with a lag: wait for it
+                continue
+            if counted:
+                looked = not any(t0 <= ts <= t1 + ONEOFF_SETTLE_S for ts in times)
+            else:
+                looked = acted is False               # only harness calls to go by, and all of them read
+            self.since["looks"] += looked
+        self.oneoffs = keep
+
+    def review_check(self, now: float | None = None) -> None:
+        """At each milestone, or every REVIEW_EVERY_S without one, ask the agent to review its own tools,
+        with what happened since the last review: the facts, and the agent decides what to fix."""
+        now = now or time.time()
+        self._judge_oneoffs(now)
+        new = self._prog.pop("new_milestones", [])
+        if new:
+            why = f"Milestone reached ({', '.join(new)})."
+        elif now - self.last_review >= REVIEW_EVERY_S:
+            why = f"It has been {(now - self.last_review) / 3600:.0f} h since the last milestone or tool review."
+        else:
+            return
+        facts = self._review_facts()
+        self.last_review, self.since = now, _fresh_since()
+        self.log.write("tool_review_suggested", why=why, facts=facts)
+        lines = "".join(f"\n- {f}" for f in facts) or "\n- (nothing recorded)"
+        ask = (REVIEW_TESTS_ASK + " " if any(f.startswith("failed ") for f in facts) else "") + REVIEW_ASK
+        self.board.post("harness", f"{why} Time to review your own tools. Since the last review:{lines}\n{ask}")
+
+    def _review_facts(self) -> list[str]:
+        s, facts = self.since, []
+        if s["tasks"]:
+            kinds = sorted(s["failures"].items(), key=lambda kv: -kv[1])
+            facts.append(f"tasks: {s['tasks']} ended, {sum(s['failures'].values())} failed"
+                         + (f", {len(kinds)} different errors" if kinds else ""))
+            for k, n in kinds[:REVIEW_FAILURES]:          # one line per kind of failure: each should get a test
+                facts.append(f"failed {n}x: {s['examples'][k][:160]}")
+            if len(kinds) > REVIEW_FAILURES:
+                facts.append(f"...and {len(kinds) - REVIEW_FAILURES} more kinds (task shows each)")
+        if s["looks"]:
+            facts.append(f"one-off scripts that only looked at the program: {s['looks']}")
+        big = sorted(((c[1] / c[0], t, c[0]) for t, c in s["results"].items()
+                      if c[0] and c[1] / c[0] >= 2000), reverse=True)[:2]
+        if big:
+            facts.append("results of your own tools returned straight to you: " +
+                         ", ".join(f"{t} {avg / 1000:.1f}k characters on average over {n} calls" for avg, t, n in big))
+        return facts
+
+    def _stalled(self, t: Task, kind: str, text: str) -> None:
+        self.log.write("task_stalled", task=t.id, name=t.name, kind=kind, acts=t.acts, calls=t.calls,
+                       held_s=round(time.time() - t.started))
+        self.board.post(t.id, text, urgent=True)
 
     def idle_note(self) -> str:
         """A line for the agent's tool results when nothing has acted for a while and nothing is queued."""

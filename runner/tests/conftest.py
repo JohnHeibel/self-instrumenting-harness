@@ -25,7 +25,7 @@ class Harness:
         cfg = dict(run_dir=self.run_dir, host_config=host_config, goal="Reach the goal.", brief="", toolserver=False,
                    agent_cmd=[sys.executable, str(FAKE), str(script_path), str(self.fake_state)],
                    host_check=lambda: (True, "up"), poll=0.02, host_poll=0.05,
-                   backoff_base=0.01, backoff_cap=0.05, interrupt_grace=5, request_timeout=10)
+                   backoff_base=0.01, backoff_cap=0.05, interrupt_grace=5, request_timeout=10, wake_settle=0.1)
         cfg.update(overrides)
         return Runner(Config(**cfg))
 

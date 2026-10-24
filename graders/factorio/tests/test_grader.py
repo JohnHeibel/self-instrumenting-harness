@@ -280,3 +280,18 @@ def test_program_actions_are_written_as_deltas_and_survive_a_restart(tmp_path):
     gr2.poll(); gr2.poll()
     recs = records(tmp_path, "program_actions")[2:]
     assert [(r["count"], r["kinds"]) for r in recs] == [(1, {"build": 1}), (2, {"build": 2})]
+
+
+def test_player_activity_is_written_apart_from_actions(tmp_path):
+    with_activity = lambda tick, **a: {**state(tick=tick), "actions": {"build": 1}, "activity": a}
+    fake = FakeRcon([with_activity(100, move=0, inventory=0), with_activity(200, move=40, inventory=3),
+                     with_activity(300, move=40, inventory=3)])
+    gr = g.Grader(tmp_path, connect=fake)
+    for _ in range(3):
+        gr.poll()
+    recs = records(tmp_path, "program_activity")
+    assert [r["kinds"] for r in recs] == [{"move": 40, "inventory": 3}]
+    assert [r["count"] for r in records(tmp_path, "program_actions")] == [1]     # moves aren't actions
+    gr2 = g.Grader(tmp_path, connect=FakeRcon([with_activity(400, move=41, inventory=3)]))
+    gr2.poll()
+    assert records(tmp_path, "program_activity")[-1]["kinds"] == {"move": 1}
