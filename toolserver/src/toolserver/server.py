@@ -29,22 +29,47 @@ LOAD_EXTENSION_DOC = """Load or update one of your extensions, and register its 
 
 `manifest` is the path, relative to your workspace (/home/agent/work), of an extension.json:
 {
-  "name": "factory_probe",
+  "name": "status_probe",
   "reason": "why you wrote or changed it",
-  "in_host": {"source": "mod", "install_as": "factory-probe"},
-  "reload": "<a reload action of this host, optional>",
-  "tools": [{"name": "get_assembler_status", "description": "what it returns",
+  "in_host": {"source": "plugin", "install_as": "status-probe"},
+  "reload": "<one of this host's reload actions, below>",
+  "tools": [{"name": "get_status", "description": "what it returns",
              "input_schema": {"type": "object", "properties": {"area": {"type": "string"}}},
-             "run": ["python3", "tools/assembler_status.py"], "where": "sandbox", "timeout_s": 30, "read_only": true,
-             "depends_on": ["other_tool"]}],
-  "health_check": {"tool": "get_assembler_status", "args": {}}
+             "run": ["python3", "tools/status.py"], "timeout_s": 30, "read_only": true,
+             "depends_on": ["read_log"]}],
+  "health_check": {"tool": "get_status", "args": {}}
 }
-- in_host (optional): a directory next to the manifest, copied into the host's extension folder under
-  install_as (for example a mod). The previous version is restored if the reload fails.
+- in_host (optional): code that runs inside the program, such as a plugin or mod. `source` is a directory
+  next to the manifest; it is copied into the program's extension folder as a folder named `install_as`,
+  which must not clash with another extension's. {install}
+  If the reload fails, the previous version is put back.
+- reload (optional): what to do after installing, so the program picks up the change. {reload}
 - Each tool's `run` command executes in your workspace sandbox, in the manifest's directory. It gets its
   arguments as JSON on stdin and returns its result on stdout. Exit non-zero to report an error. Print a
-  JSON object with a "summary" string to give a one-line summary. How it reaches the host is up to you.
+  JSON object with a "summary" string to give a one-line summary. {reach}
+- depends_on (optional): other tools of yours that this one relies on. It is recorded with the tool, so
+  when one breaks it is clear what else may be affected; nothing is enforced.
+- health_check (optional): a tool call run right after loading; if it fails, the tool is marked broken.
 - Loading again with the same name replaces the extension; tools it no longer lists are removed."""
+
+
+def load_extension_doc(hc: HostConfig) -> str:
+    """The description with this host's specifics filled in from its host config."""
+    install = ("You can't write to that folder directly; this is the way in." if hc.install_dir else
+               "This host has no extension folder, so in_host can't be used here.")
+    if hc.reload_actions:
+        reload = "This host's reload actions: " + ", ".join(f'"{n}"' for n in sorted(hc.reload_actions)) + "."
+    else:
+        reload = "This host has no reload actions, so leave it out."
+    if hc.agent_ports:
+        reach = ("Your sandbox reaches the program on the host at host.docker.internal, on port(s) "
+                 + ", ".join(str(p) for p in hc.agent_ports) + "; other host ports are closed.")
+    else:
+        reach = "How it gets information out of the program is up to you."
+    doc = LOAD_EXTENSION_DOC  # holds JSON braces, so no str.format
+    for key, text in (("{install}", install), ("{reload}", reload), ("{reach}", reach)):
+        doc = doc.replace(key, text)
+    return doc
 
 
 def build_server(log: EventLog, host: str, port: int, window_title: str = "",
@@ -74,7 +99,7 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
 
     @mcp.tool(annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                                 idempotentHint=False, openWorldHint=False),
-              description=LOAD_EXTENSION_DOC)
+              description=load_extension_doc(hc))
     async def load_extension(manifest: str, ctx: Context) -> str:
         with log.call("load_extension", "extension", {"manifest": manifest}) as res:
             msg = await ext.load(manifest)

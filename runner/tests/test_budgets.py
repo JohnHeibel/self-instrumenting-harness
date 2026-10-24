@@ -88,6 +88,18 @@ def test_rate_limit_backoff_waits_until_reset_plus_margin(h):
     assert h.records("run_ended")[0]["active_s"] == 560  # backoff counts as active time
 
 
+def test_rate_limit_waits_do_not_count_as_failures(h):
+    clock = Clock()
+    def hit(reset):
+        limits = {"rateLimits": {"primary": {"usedPercent": 100, "resetsAt": T0 + reset}}}
+        return [{"notify": "account/rateLimits/updated", "params": limits}, {"fail": "usage limit reached"}]
+    script = {"processes": [{"turns": [hit(100), hit(1000), hit(5000), [{"usage": 100}]]}]}
+    r = h.runner(script, clock=clock, sleep=clock.sleep, max_failures=2, budget_tokens=50)
+    assert r.run() == "budget_tokens"   # three rate-limited turns, yet not too_many_failures
+    waits = [s for s in h.records("agent_state") if s["state"] == "backing_off"]
+    assert [w["failures"] for w in waits] == [0, 0, 0] and waits[0]["text"].startswith("rate limited")
+
+
 def test_rate_limit_reached_without_a_full_window_waits_for_the_soonest_reset(h):
     clock = Clock()
     limits = {"rateLimits": {"primary": {"usedPercent": 97, "resetsAt": T0 + 900},

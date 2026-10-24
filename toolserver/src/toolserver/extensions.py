@@ -5,19 +5,19 @@ files go and which named reload commands exist. Everything else comes from the a
 manifest, `extension.json` in its workspace:
 
     {
-      "name": "factory_probe",                     # [a-z][a-z0-9_]{2,47}
+      "name": "status_probe",                      # [a-z][a-z0-9_]{2,47}
       "reason": "why the agent wrote or changed it",
-      "in_host": {"source": "mod", "install_as": "factory-probe"},   # optional
+      "in_host": {"source": "plugin", "install_as": "status-probe"},   # optional
       "reload": "restart",                         # optional: a reload action from the host config
       "tools": [{
-        "name": "get_assembler_status",
+        "name": "get_status",
         "description": "...",
         "input_schema": {"type": "object", "properties": {...}},     # optional
-        "run": ["python3", "tools/assembler_status.py"],            # runs in the agent's sandbox
+        "run": ["python3", "tools/status.py"],                      # runs in the agent's sandbox
         "where": "sandbox",                          # optional; reserved for host-side helpers later
         "timeout_s": 30, "read_only": true, "depends_on": ["..."]
       }],
-      "health_check": {"tool": "get_assembler_status", "args": {}}  # optional
+      "health_check": {"tool": "get_status", "args": {}}            # optional
     }
 
 A tool runs inside the agent's container with the extension directory as cwd, its arguments
@@ -62,6 +62,7 @@ class HostConfig:
     process: str = ""                         # exe name of the host's program, e.g. "notepad.exe"
     capture: str = "window"                   # window | process | monitor (see capture.py)
     up_check: str | list[str] = "window"      # window | always | [argv]: up when it exits 0
+    agent_ports: list[int] = field(default_factory=list)  # host ports the agent's sandbox may reach
     install_dir: Path | None = None          # where in-host extension files go
     reload_actions: dict[str, list[str]] = field(default_factory=dict)
     reload_timeout_s: int = 120
@@ -79,6 +80,7 @@ class HostConfig:
             process=host.get("process", ""),
             capture=_one_of(host.get("capture", "window"), CAPTURE_MODES, "capture"),
             up_check=host.get("up_check", "window"),
+            agent_ports=_ports(host.get("agent_ports", [])),
             install_dir=Path(os.path.expanduser(os.path.expandvars(install))) if install else None,
             reload_actions={k: [os.path.expandvars(a) for a in v] for k, v in ext.get("reload", {}).items()},
             reload_timeout_s=int(ext.get("reload_timeout_s", 120)),
@@ -86,6 +88,12 @@ class HostConfig:
 
 
 CAPTURE_MODES = ("window", "process", "monitor")
+
+
+def _ports(value) -> list[int]:
+    if not isinstance(value, list) or not all(isinstance(p, int) and 0 < p < 65536 for p in value):
+        raise ValueError(f"host config: [host] agent_ports must be a list of port numbers, not {value!r}")
+    return value
 
 
 def _one_of(value: str, allowed: tuple[str, ...], key: str) -> str:

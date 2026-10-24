@@ -211,20 +211,22 @@ class Runner:
                 self.state.failures = 0
                 self._save()
                 continue
-            self.state.failures += 1
-            self._save()
-            if self.state.failures >= self.cfg.max_failures:
-                return self._end("too_many_failures")
-            delay = min(self.cfg.backoff_base * 2 ** (self.state.failures - 1), self.cfg.backoff_cap)
-            extra: dict = {}
             reset = self._rate_limit_reset()
+            extra: dict = {}
             if reset is not None:
-                delay = max(delay, reset - self.cfg.clock() + RATE_LIMIT_MARGIN_S)
+                # A rate limit is not the run failing, so it doesn't count toward max_failures.
+                delay = reset - self.cfg.clock() + RATE_LIMIT_MARGIN_S
                 extra = {"until": _iso(reset), "cause": "rate_limit"}
                 why = f"rate limit reached; waiting until it resets at {_iso(reset)}"
             else:
+                self.state.failures += 1
+                self._save()
+                if self.state.failures >= self.cfg.max_failures:
+                    return self._end("too_many_failures")
+                delay = min(self.cfg.backoff_base * 2 ** (self.state.failures - 1), self.cfg.backoff_cap)
                 why = f"retrying in {delay:.0f} s"
-            self.mapper.state("backing_off", f"failure {self.state.failures}: {outcome.error or outcome.status}; {why}",
+            what = "rate limited" if reset is not None else f"failure {self.state.failures}"
+            self.mapper.state("backing_off", f"{what}: {outcome.error or outcome.status}; {why}",
                               delay_s=round(delay, 3), failures=self.state.failures, **extra)
             self._wait(delay)
 

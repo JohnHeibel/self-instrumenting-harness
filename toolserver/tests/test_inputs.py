@@ -428,3 +428,27 @@ def test_a_lost_thumbnail_keeps_the_record(tmp_path):
     log.write("tool_call", tool="screenshot", _artifact=boom)
     rec = _records(tmp_path)[0]
     assert rec["artifact"] is None and "disk full" in rec["artifact_error"]
+
+
+# load_extension's description, generated from the host config ---------------------------
+
+def test_load_extension_doc_lists_this_hosts_reload_actions_and_ports(tmp_path):
+    from toolserver.extensions import HostConfig
+    from toolserver.server import load_extension_doc
+    cfg = tmp_path / "h.toml"
+    cfg.write_text('[host]\nname = "h"\nagent_ports = [27015]\n[extensions]\ninstall_dir = "x"\n'
+                   '[extensions.reload]\nnone = []\nrestart = ["echo"]\n')
+    doc = load_extension_doc(HostConfig.load(cfg))
+    assert 'reload actions: "none", "restart".' in doc
+    assert "port(s) 27015" in doc and "{" + "reach}" not in doc
+    bare = load_extension_doc(HostConfig())
+    assert "no reload actions" in bare and "no extension folder" in bare and "up to you" in bare
+    assert '"where"' not in doc
+
+
+def test_agent_ports_must_be_port_numbers(tmp_path):
+    from toolserver.extensions import HostConfig
+    cfg = tmp_path / "h.toml"
+    cfg.write_text('[host]\nagent_ports = ["27015"]\n')
+    with pytest.raises(ValueError, match="agent_ports"):
+        HostConfig.load(cfg)
