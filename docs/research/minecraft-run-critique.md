@@ -64,3 +64,13 @@ Fix (Minecraft-only): goal paragraph on respawn point (bed), night shelter, armo
 ## 2026-10-24 05:25 PDT, cycle 14
 Evidence: 7 `agent_died` markers (5 drownings, spider, pillager) plus about 2 before the grader restart (NOTES says about 9 deaths); no milestone since iron_tools at 10:26Z (2 h); the second handoff happened (context back to 62k); the agent rebuilt from zero, waited a night in a sealed shaft, and keeps a danger-zone list in NOTES. Cumulative 46.6M total tokens, 421k uncached, 8 milestones in 3 h 45 min.
 Fix (Minecraft-only): goal paragraph "Safe breadth" (bank crafted_25/50 near the base, where dying cannot erase it) with a list of 25+ craftable items; NUDGE text sent to main.
+
+## 2026-10-24 06:30 PDT, cycle 17 (trend table, run clock from first model request 08:51Z)
+| milestone | min | total tokens | uncached |
+|---|---|---|---|
+| first_wood, crafting_table | 31 | 4.3M | 143k |
+| stone_tools, furnace, chest, crafted_10 | 39 | 7.2M | 159k |
+| iron_ingot, iron_tools | 104 | 26M | 249k |
+| crafted_25 | 224 | 48M | 442k |
+Wall-clock and tokens per milestone rose, not fell: 12 logged deaths (5+ drownings, spider, pillager, zombie x3 respawn-camping) erased gear several times; the agent rebuilt wood and stone tools about 3 times. Three automatic handoffs (218k, ~150k, ~150k -> 62k) worked. No death since 12:45Z (about 1 h 45 min); heartbeat file adopted by the agent after the nudge. The first milestones were stamped late (the grader only started reading the world at 09:13Z; it was broken until then), so early minutes are overstated.
+Next: watch whether the safety loop stops deaths and diamonds follow; the main lever left is fewer deaths, then fewer steps per chore.
