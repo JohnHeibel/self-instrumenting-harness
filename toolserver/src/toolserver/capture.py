@@ -87,11 +87,16 @@ def screenshot(target: Target, max_width: int, thumb_width: int = 640) -> Shot:
         region = locate(target) if sys.platform in ("win32", "darwin") else None
     except NotFound:
         region = None
-    with mss.MSS() as sct:
-        rect = ({"left": region.left, "top": region.top, "width": region.width, "height": region.height}
-                if region else sct.monitors[1])
-        shot = sct.grab(rect)
-    img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+    if sys.platform == "darwin":
+        # mss's capture call returns only the wallpaper on recent macOS; use Apple's tool.
+        from .macos import grab, main_display
+        img = grab(*((region.left, region.top, region.width, region.height) if region else main_display()))
+    else:
+        with mss.MSS() as sct:
+            rect = ({"left": region.left, "top": region.top, "width": region.width, "height": region.height}
+                    if region else sct.monitors[1])
+            shot = sct.grab(rect)
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
     captured = img.size
     if img.width > max_width:
         img = img.resize((max_width, round(img.height * max_width / img.width)), Image.LANCZOS)

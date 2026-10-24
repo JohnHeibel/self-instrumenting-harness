@@ -5,7 +5,7 @@
 the Controller builds and posts them as Quartz events.
 
 Units: everything here is in macOS points (global display coordinates, origin at the top
-left of the main display). `mss` captures a region given in points and returns an image
+left of the main display). `grab` captures a region given in points and returns an image
 at the display's pixel density, and the Controller maps image pixels proportionally, so
 Retina scaling needs no special handling.
 
@@ -142,6 +142,31 @@ def _displays() -> list[tuple[float, float, float, float]]:
 
 def locate(target: Target) -> Region:
     return choose(_windows(), target, _displays())
+
+
+def main_display() -> tuple[int, int, int, int]:
+    return tuple(round(v) for v in _displays()[0])
+
+
+def grab(left: int, top: int, width: int, height: int):
+    """Screenshot of a screen region (points) at the display's pixel density, as a PIL image.
+    Uses `screencapture`: the capture API mss relies on returns only the wallpaper on
+    macOS 15, while Apple's tool goes through the supported capture path."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "shot.png"
+        r = subprocess.run(["screencapture", "-x", "-t", "png", "-R", f"{left},{top},{width},{height}", str(out)],
+                           capture_output=True, text=True, timeout=15)
+        if r.returncode or not out.exists():
+            raise RuntimeError("screencapture failed; give the tool server's process Screen Recording "
+                               f"permission (System Settings > Privacy & Security). {r.stderr.strip()}")
+        with Image.open(out) as img:
+            return img.convert("RGB")
 
 
 # --------------------------------------------------------------------------- input
