@@ -1,0 +1,22 @@
+# Host config: the only host-specific input to the harness, and it is data, not code.
+# The agent writes everything else: its mods, and the programs that read them.
+
+[host]
+name = "factorio"
+window_title = "Factorio"
+
+[extensions]
+# Where load_extension copies an extension's in_host directory (a Factorio mod folder).
+# Steam on Windows keeps user mods here.
+install_dir = "%APPDATA%/Factorio/mods"
+reload_timeout_s = 180
+
+[extensions.reload]
+# Named commands the agent can ask for in extension.json ("reload": "<name>"), run on the host.
+# "none": copy files only. A mod's control.lua runs again whenever a save is loaded, so the
+# agent can pick up control-stage changes itself through the game's own menus.
+none = []
+# TODO(nazeem, plumbing test b): fill in once we know what works on this PC. For example, a
+# script that saves, quits and relaunches Factorio into the latest save, with RCON enabled if
+# the agent's helpers use it. Data-stage changes need a full restart.
+# restart = ["powershell", "-File", "hosts/factorio/restart.ps1"]

@@ -26,8 +26,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 PROBE = "probe_hello"
 PROMPT = f"""This is an automated test of your tool setup. Do exactly this:
-1. Call the tool `load_extension` with name="{PROBE}" and description="Returns a probe string".
-2. Then call the new tool `{PROBE}` directly by its name with query="ping". Do not use call_hook,
+1. In your workspace (/home/agent/work), create extensions/probe/probe.py: it reads JSON from stdin
+   and prints a JSON object {{"summary": "probe ok", "query": <the "query" argument>}}.
+2. Create extensions/probe/extension.json for an extension named "probe" with reason "harness test",
+   and one tool named "{PROBE}" with description "Echoes its query", input_schema with a string
+   property "query", and run ["python3", "probe.py"]. No in_host part.
+3. Call the tool `load_extension` with manifest="extensions/probe/extension.json".
+4. Then call the new tool `{PROBE}` directly by its name with query="ping". Do not use call_hook,
    a shell, tool search, or code execution to reach it. If it is not available to you as a tool, say so.
 3. Finish with two lines:
    RESULT: <exact text {PROBE} returned, or NONE>
@@ -65,8 +70,10 @@ def main() -> int:
 
     server = _start_server(run_dir, args.port)
     try:
-        cmd = ["docker", "run", "--rm",
+        (run_dir / "workspace").mkdir(exist_ok=True)
+        cmd = ["docker", "run", "--rm", "--name", f"harness-agent-{run_dir.name}",
                "-v", f"{auth}:/home/agent/.codex/auth.json",
+               "-v", f"{run_dir / 'workspace'}:/home/agent/work",
                "-v", f"{run_dir / 'codex-sessions'}:/home/agent/.codex/sessions",
                args.image, "codex", "exec", "--json", "--skip-git-repo-check",
                "-c", f'mcp_servers.harness.url="http://host.docker.internal:{args.port}/mcp"']
@@ -115,6 +122,7 @@ def check(run_dir: Path, **context) -> dict:
     events = _jsonl(run_dir / "events.jsonl")
     calls = [e for e in events if e.get("type") == "tool_call"]
     loaded = any(e.get("type") == "hook_loaded" and e.get("hook") == PROBE for e in events)
+    # The agent wrote the extension itself; its tool ran inside the container.
     direct = [c for c in calls if c["tool"] == PROBE and c.get("via") == "direct" and c["ok"]]
     fallback = [c for c in calls if c["tool"] == PROBE and c.get("via") == "call_hook"]
 
