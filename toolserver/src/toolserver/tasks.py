@@ -43,7 +43,9 @@ FOOTER_CHARS = 800
 MAX_QUEUED = 8
 IDLE_NOTE_AFTER_S = 90          # hands idle this long: say so on the agent's tool results
 BIG_RESULT_CALLS, BIG_RESULT_CHARS = 5, 10_000   # one of the agent's tools averaging this much over this many calls
-REVIEW_EVERY_S = 2 * 3600       # suggest a tool review this often when no milestone has come
+VIEW_NUDGE_FIRST, VIEW_NUDGE_EVERY = 5, 10   # one-off read-only scripts before suggesting views, then again
+ONEOFF_SETTLE_S = 15            # the host's activity reports lag by up to this long
+REVIEW_EVERY_S = 2 * 3600      # suggest a tool review this often when no milestone has come
 REVIEW_TEXT = ("{why} A good moment to review your own tools: against the brief's foundation (get anywhere, "
                "get anything, change many things at once, see an area), which is weakest, or which failed or "
                "cost the most since the last review (costs shows calls, failures and result size per tool)? "
@@ -306,6 +308,8 @@ class Work:
         self.results: dict[str, list[int]] = {}       # agent's own tool -> [direct calls, result chars]
         self.big_told: set[str] = set()
         self.last_review = time.time()
+        self.oneoffs: list[tuple[float, float, bool | None]] = []
+        self.looks, self.looks_next = 0, VIEW_NUDGE_FIRST
         hands.on_release = self.pump
 
     def can_act(self, who: str | None) -> bool:
@@ -592,12 +596,14 @@ class Work:
                     ts = datetime.fromisoformat(r["ts"].replace("Z", "+00:00")).timestamp()
                 except (ValueError, KeyError):
                     continue
+                busy = ((r.get("type") == "program_actions" and r.get("count")) or
+                        (r.get("type") == "program_activity" and r.get("kinds")))   # moving etc.: not an action
                 if r.get("type") == "program_actions":
                     st["counted"] = True
-                    if r.get("count"):
-                        st["last"] = max(st["last"], ts)
-                elif r.get("type") == "program_activity" and r.get("kinds"):
-                    st["last"] = max(st["last"], ts)     # busy (moving, moving items), though not an action
+                if busy:
+                    st["last"] = max(st["last"], ts)
+                    st.setdefault("times", []).append(ts)
+                    del st["times"][:-500]
                 elif r.get("type") == "milestone" and st["scanned"]:   # not those from before this server
                     st.setdefault("new_milestones", []).append(str(r.get("id", "?")))
         st["scanned"] = True
@@ -617,10 +623,41 @@ class Work:
                             f"(what's wrong first, counts, what changed) with filters or a detail level for the rest, "
                             f"or call it inside run_script and return only what you need.")
 
+    def note_oneoff(self, t0: float, t1: float, acted: bool | None) -> None:
+        """A one-off foreground script ran from t0 to t1. acted: whether any of its calls through the harness
+        acted (None: it made none). Judged later, once the host has reported what happened meanwhile."""
+        self.oneoffs.append((t0, t1, acted))
+
+    def _judge_oneoffs(self, now: float) -> None:
+        """Count one-off scripts that only looked (no acting call, and the program saw nobody do anything
+        meanwhile); every so often suggest keeping repeated questions as views."""
+        counted, _ = self.program_activity()
+        times = self._prog.get("times", [])
+        keep = []
+        for t0, t1, acted in self.oneoffs:
+            if acted:
+                continue
+            if counted and now < t1 + ONEOFF_SETTLE_S:
+                keep.append((t0, t1, acted))          # the host reports with a lag: wait for it
+                continue
+            if counted:
+                looked = not any(t0 <= ts <= t1 + ONEOFF_SETTLE_S for ts in times)
+            else:
+                looked = acted is False               # only harness calls to go by, and all of them read
+            self.looks += looked
+        self.oneoffs = keep
+        if self.looks >= self.looks_next:
+            self.looks_next = self.looks + VIEW_NUDGE_EVERY
+            self.log.write("views_suggested", one_off_reads=self.looks)
+            self.board.post("harness", f"You have written {self.looks} one-off scripts that only looked at the "
+                            f"program. If you keep answering the same questions, keep them as views (run_script "
+                            f"with keep=) and build one view that runs them and shows only what needs your "
+                            f"attention (see \"Repeated questions become views\" in the brief).")
+
     def review_check(self, now: float | None = None) -> None:
         """Suggest a review of the agent's tools at each milestone, or every REVIEW_EVERY_S without one."""
         now = now or time.time()
-        self.program_activity()
+        self._judge_oneoffs(now)
         new = self._prog.pop("new_milestones", [])
         if new:
             why = f"Milestone reached ({', '.join(new)})."

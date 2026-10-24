@@ -472,3 +472,34 @@ def test_a_tool_review_is_suggested_at_new_milestones_and_after_a_long_gap(tmp_p
     assert "get anywhere" in board.items[0].text
     w.review_check(now=w.last_review + tm.REVIEW_EVERY_S + 1)
     assert len(board.items) == 2 and "since the last milestone or tool review" in board.items[1].text
+
+
+def test_one_off_scripts_that_only_look_lead_to_a_views_suggestion(tmp_path):
+    import json
+    from datetime import datetime, timezone
+    from toolserver import tasks as tm
+
+    class Log:
+        def write(self, *a, **kw):
+            pass
+
+    def busy(ts):
+        with (tmp_path / "grader.jsonl").open("a") as f:
+            f.write(json.dumps({"ts": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+                                "type": "program_actions", "count": 1}) + "\n")
+
+    board = tm.Board(Log(), tmp_path)
+    w = tm.Work(None, Log(), tmp_path, tm.Hands(), board, lambda: "", lambda: [])
+    t0 = 1_800_000_000.0
+    busy(t0 - 100)                                   # the host counts actions
+    busy(t0 + 3)                                     # something was done during the first script
+    for i in range(tm.VIEW_NUDGE_FIRST + 1):        # scripts that reach the program directly: no harness calls
+        w.note_oneoff(t0 + 100 * i, t0 + 100 * i + 5, None)
+    w.note_oneoff(t0 + 900, t0 + 905, True)          # acted through the harness: not a look
+    w.note_oneoff(t0 + 906, t0 + 908, None)          # just ended: the host may not have reported yet
+    w._judge_oneoffs(now=t0 + 910)                   # the first script did something; the next five only looked
+    assert w.looks == tm.VIEW_NUDGE_FIRST and len(board.items) == 1 and len(w.oneoffs) == 1
+    w._prog["checked"] = 0
+    w._judge_oneoffs(now=t0 + 2000)
+    assert w.looks == tm.VIEW_NUDGE_FIRST + 1 and len(board.items) == 1   # next suggestion only after 10 more
+    assert "only looked" in board.items[0].text and "keep=" in board.items[0].text

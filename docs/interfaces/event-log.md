@@ -68,6 +68,7 @@ Screenshot calls also carry `source` (`window` or `monitor`), `captured_size` an
 | `task_repeat_failure` | `task`, `name`, `times`, `summary`. A task failed with the same error (numbers masked) as an earlier run of the same script; the agent gets an urgent nudge to change approach |
 | `big_results` | `tool`, `calls`, `avg_chars`: one of the agent's own tools has been returning large results straight into its context; the agent was told once to give it a summary by default |
 | `tool_review_suggested` | `why`: the agent was asked to review its own tools against the brief's foundation, at a new milestone or after a long stretch without one |
+| `views_suggested` | `one_off_reads`: the agent has written this many one-off scripts that only looked (no acting call through the harness, and the host saw no user activity while they ran); it was told to keep repeated questions as views. Written at 5, then every 10 more |
 | `task_ended` | `task`, `name`, `status` (`ok`, `failed`, `stopped`; a queued or held task the agent dropped ends `stopped` with `calls` 0), `duration_ms`, `calls`, `summary`. `task_started` of a queued task adds `after` and `queued_s` |
 | `rule_set`, `rule_removed`, `rules_restored` | `rule`, its `check` (a kept script name, or `code` with the code), `args`, `every_s`, `do` (`tell`, `wake`, `run:<script>`), `times`, `cooldown_s`; removal adds `why` and `fired` |
 | `rule_fired` | `rule`, `text` (what the check reported), `do`, `count` |

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -204,6 +205,7 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
             free = hands_free = work.hands.free_for(None)
             if free:
                 work.hands.take("script", name or file or "code")
+            started = time.time()
             try:
                 ok, text, calls = await scripts.run(
                     ext, code, timeout_s, file, args, script_url, sorted(BUILTIN - SCRIPT_BLOCKED), who="script",
@@ -227,6 +229,10 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
                           error=c.get("error"), duration_ms=c.get("ms"), result_kind="text",
                           result_bytes=c.get("bytes"), summary=c.get("summary"), via="script",
                           hook=ext.hook_info(c.get("tool", "")))
+            if code and not keep:       # a one-off: was it only looking? (for the views suggestion)
+                infos = [ext.hook_info(c.get("tool", "")) for c in calls]
+                acted = any(i is None or i["acts"] for i in infos) if calls else None
+                work.note_oneoff(started, time.time(), acted)
             res.set("text", len(text), summary=text.splitlines()[-1][:200], inner_calls=len(calls),
                     held_hands=bool(free))
             if not ok:
