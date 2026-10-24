@@ -289,7 +289,8 @@ class Controller:
                                  f"{now[0]}x{now[1]}), e.g. a window was resized, opened or closed; "
                                  "take a new screenshot")
         if region.hwnd is not None and not self.b.focus(region.hwnd):
-            raise InputError("could not bring the program's window to the front")
+            why = getattr(self.b, "focus_detail", "")
+            raise InputError("could not bring the program's window to the front" + (f": {why}" if why else ""))
         vscreen = self.b.virtual_screen()
 
         def point(x: float, y: float) -> tuple[int, int]:
@@ -414,12 +415,36 @@ class Win32Backend:
         m = self.user32.GetSystemMetrics
         return m(76), m(77), m(78), m(79)  # SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
 
+    focus_detail = ""   # why the last focus failed, or which method worked
+
     def focus(self, hwnd: int) -> bool:
         u, k32 = self.user32, self.ct.windll.kernel32
         if u.GetForegroundWindow() == hwnd:
             return True
-        # Windows only lets the foreground thread change the foreground window, so borrow
-        # its input state for a moment.
+        if u.IsIconic(hwnd):
+            u.ShowWindow(hwnd, 9)   # SW_RESTORE
+        # Windows refuses SetForegroundWindow unless the caller owns the last input event (the
+        # "foreground lock"). Each method below gets around that a different way; use the first
+        # that works.
+        methods = [("attach", self._focus_attach), ("alt", self._focus_alt),
+                   ("restore", self._focus_restore), ("switch", lambda h: u.SwitchToThisWindow(h, True))]
+        for name, method in methods:
+            self.ct.set_last_error(0)
+            method(hwnd)
+            err = self.ct.get_last_error()
+            if self._became_foreground(hwnd):
+                self.focus_detail = f"focused with {name}"
+                if name != "attach":
+                    print(f"input: {self.focus_detail}", file=sys.stderr)
+                return True
+        fg = u.GetForegroundWindow()
+        self.focus_detail = (f"Windows kept {self._describe(fg)} in front (last error {err}; "
+                             f"session locked: {self._locked()})")
+        return False
+
+    def _focus_attach(self, hwnd: int) -> None:
+        # Borrow the foreground thread's input state for a moment.
+        u, k32 = self.user32, self.ct.windll.kernel32
         fg = u.GetForegroundWindow()
         fg_tid = u.GetWindowThreadProcessId(fg, None) if fg else 0
         me = k32.GetCurrentThreadId()
@@ -430,12 +455,62 @@ class Win32Backend:
         finally:
             if attached:
                 u.AttachThreadInput(me, fg_tid, False)
+
+    def _focus_alt(self, hwnd: int) -> None:
+        # A synthetic Alt tap makes this process the source of the last input, which releases the lock.
+        alt = 0x12   # VK_MENU
+        arr = (self.INPUT * 2)()
+        for i, flags in enumerate((0, 2)):   # down, KEYEVENTF_KEYUP
+            arr[i].type = 1
+            arr[i].ki.wVk, arr[i].ki.wScan, arr[i].ki.dwFlags = alt, 0, flags
+        self.user32.SendInput(2, arr, self.ct.sizeof(self.INPUT))
+        self.user32.SetForegroundWindow(hwnd)
+
+    def _focus_restore(self, hwnd: int) -> None:
+        self.user32.ShowWindow(hwnd, 9)   # SW_RESTORE
+        self._focus_alt(hwnd)
+
+    def _became_foreground(self, hwnd: int) -> bool:
         for _ in range(20):
-            if u.GetForegroundWindow() == hwnd:
+            if self.user32.GetForegroundWindow() == hwnd:
                 time.sleep(0.05)  # let the program process the activation before input arrives
                 return True
             time.sleep(0.025)
         return False
+
+    def _describe(self, hwnd: int) -> str:
+        if not hwnd:
+            return "no window (nothing has the foreground: a lock screen or secure desktop?)"
+        u = self.user32
+        buf = self.ct.create_unicode_buffer(256)
+        u.GetWindowTextW(hwnd, buf, 256)
+        pid = self.wt.DWORD()
+        u.GetWindowThreadProcessId(hwnd, self.ct.byref(pid))
+        return f"'{buf.value}' (process {self._process_name(pid.value)}, pid {pid.value})"
+
+    def _process_name(self, pid: int) -> str:
+        k32 = self.ct.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = self.wt.HANDLE
+        h = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return "?"
+        try:
+            buf = self.ct.create_unicode_buffer(1024)
+            size = self.wt.DWORD(1024)
+            ok = k32.QueryFullProcessImageNameW(h, 0, buf, self.ct.byref(size))
+            return buf.value.rsplit("\\", 1)[-1] if ok else "?"
+        finally:
+            k32.CloseHandle(h)
+
+    def _locked(self) -> bool:
+        u = self.user32
+        u.OpenInputDesktop.restype = self.wt.HANDLE
+        h = u.OpenInputDesktop(0, False, 0x0100)   # DESKTOP_SWITCHDESKTOP
+        if not h:
+            return True
+        ok = u.SwitchDesktop(h)   # fails while the secure desktop (lock screen, UAC) is shown
+        u.CloseDesktop(h)
+        return not ok
 
     def send(self, events: list[tuple]) -> None:
         arr = (self.INPUT * len(events))()
