@@ -9,8 +9,11 @@ reported on stderr so the tool server logs it as a tool_call with via="script".
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -69,6 +72,9 @@ if _spec.get("file"):
 else:
     _path, _src = "<script>", _spec["code"]
 sys.path.insert(0, _root)
+sys.path.insert(0, os.path.join(_root, "scripts"))   # kept scripts can import each other
+import builtins   # so modules a script imports (kept scripts too) can use call() and ToolFailed
+builtins.call, builtins.ToolFailed = call, ToolFailed
 _g = {"__name__": "__main__", "__file__": _path, "call": call, "ToolFailed": ToolFailed, "args": _spec.get("args") or {}}
 try:
     exec(compile(_src, _path, "exec"), _g)
@@ -94,20 +100,58 @@ DOC = """Run Python in your sandbox that calls your own tools, as ONE step.
 Every step you take re-reads your whole context, so the number of steps is your main cost. A known
 chore (anything that needs several tool calls: loops, retries, waiting until something holds, acting
 on what an earlier call returned) should be one run_script call, decided once.
-  code: the script. Or file: a script saved in your workspace (path relative to it), to run again.
+  code: the script. By default it runs once and is gone: that's right for a one-off.
+  keep: a name (lower_snake_case) to also keep `code` as scripts/<name>.py, when the run succeeds.
+        Keep only what you will run again, give it a docstring whose first line says what it does,
+        and parameters through args, so one kept script serves many cases. Keeping a name again
+        replaces it.
+  name: run a kept script again by name (with new args). Call run_script with no arguments to list
+        your kept scripts and what each does; extend one of them before writing a new one.
+  file: run any other script in your workspace (path relative to it).
   args: a dict, available to the script as `args`; if the script defines main(), it is called as
         main(**args) and its return value is printed as JSON.
 Inside the script:
   call("tool_name", arg=value, ...)  -> that tool's parsed JSON result (or text); raises ToolFailed
   Your extension tools and the harness tools (input tools, set_goal, costs, read_docs, list_hooks)
   can be called; not screenshot, load_extension or run_script.
-Your workspace root is importable, so keep reusable steps as modules and import them. Save scripts you
-will run again, and delete ones you won't. Write steps as "make sure X holds" (check, then act), so a
-rerun after a fix is safe, and verify the outcome inside the script.
+Your workspace root and scripts/ are importable, so a script can build on your kept scripts and
+modules. Write steps as "make sure X holds" (check, then act), so a rerun after a fix is safe, and
+verify the outcome inside the script.
 Only what the script prints (or main returns) comes back: return a short summary, not raw results.
 If the script fails you get what it printed, the error and the script line it happened on, and how
 many tool calls it made. timeout_s: up to 1200; give every loop a count or a deadline, and stop
 when progress stalls."""
+
+
+KEPT_DIR = "scripts"
+NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,48}")
+
+
+def purpose(source: str) -> str:
+    """The first line of a script's docstring, or '' if it has none (or doesn't parse)."""
+    try:
+        doc = ast.get_docstring(ast.parse(source)) or ""
+    except SyntaxError:
+        return ""
+    return doc.strip().splitlines()[0].strip() if doc.strip() else ""
+
+
+def kept(workspace: Path) -> list[tuple[str, str]]:
+    """(name, purpose) of each kept script, by name."""
+    d = workspace / KEPT_DIR
+    out = []
+    for p in sorted(d.glob("*.py")) if d.is_dir() else []:
+        if NAME_RE.fullmatch(p.stem):
+            out.append((p.stem, purpose(p.read_text(encoding="utf-8", errors="replace")) or "(no docstring)"))
+    return out
+
+
+def listing(workspace: Path) -> str:
+    items = kept(workspace)
+    if not items:
+        return "No kept scripts yet. Keep one with run_script(code=..., keep=\"name\")."
+    return f"Kept scripts ({len(items)}; run one with name=..., args=...):\n" + \
+        "\n".join(f"  {n}: {p[:150]}" for n, p in items)
 
 
 async def run(ext: "Extensions", code: str, timeout_s: float, file: str = "", args: dict | None = None,

@@ -145,15 +145,41 @@ def build_server(log: EventLog, host: str, port: int, window_title: str = "",
     @mcp.tool(annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                                 idempotentHint=False, openWorldHint=False),
               description=scripts.DOC)
-    async def run_script(code: str = "", file: str = "", args: dict | None = None, timeout_s: float = 300) -> str:
-        logged = {k: v for k, v in {"code": code, "file": file, "args": args, "timeout_s": timeout_s}.items() if v}
+    async def run_script(code: str = "", keep: str = "", name: str = "", file: str = "", args: dict | None = None,
+                         timeout_s: float = 300) -> str:
+        logged = {k: v for k, v in {"code": code, "keep": keep, "name": name, "file": file, "args": args,
+                                    "timeout_s": timeout_s}.items() if v}
         with log.call("run_script", "script", logged) as res:
-            if bool(code) == bool(file):
-                raise ToolError("give either code or file")
+            if not (code or name or file):
+                text = scripts.listing(ext.workspace)
+                res.set("text", len(text), summary=text.splitlines()[0][:200])
+                return text
+            if sum(map(bool, (code, name, file))) != 1:
+                raise ToolError("give one of: code (with keep to keep it), name (a kept script) or file")
+            if keep and not code:
+                raise ToolError("keep goes with code: the script to keep")
+            for n in (keep, name):
+                if n and not scripts.NAME_RE.fullmatch(n):
+                    raise ToolError(f"{n!r}: a script name is lower_snake_case, at most 49 characters")
+            if keep and not scripts.purpose(code):
+                raise ToolError("a kept script starts with a docstring whose first line says what it does")
+            if name:
+                if not (ext.workspace / scripts.KEPT_DIR / f"{name}.py").is_file():
+                    raise ToolError(f"no kept script named {name!r}. " + scripts.listing(ext.workspace))
+                file = f"{scripts.KEPT_DIR}/{name}.py"
             if file.startswith(("/", "\\")) or ".." in file.replace("\\", "/").split("/"):
                 raise ToolError("file is a path inside your workspace, relative to it")
             ok, text, calls = await scripts.run(ext, code, timeout_s, file, args, script_url,
                                                 sorted(BUILTIN - SCRIPT_BLOCKED))
+            if ok and keep:
+                path = ext.workspace / scripts.KEPT_DIR / f"{keep}.py"
+                replaced = path.exists()
+                path.parent.mkdir(exist_ok=True)
+                path.write_text(code.replace("\r\n", "\n"), encoding="utf-8", newline="\n")
+                text += (f"\n[{'replaced' if replaced else 'kept as'} {scripts.KEPT_DIR}/{keep}.py; "
+                         f"run it again with name=\"{keep}\"]")
+            elif keep:
+                text += f"\n[not kept: the run failed, so {scripts.KEPT_DIR}/{keep}.py is unchanged]"
             for c in calls:   # each inner call is recorded like a direct one, for review and for costs
                 log.write("tool_call", tool=c.get("tool"), channel="hook", args=c.get("args"), ok=c.get("ok"),
                           error=c.get("error"), duration_ms=c.get("ms"), result_kind="text",
