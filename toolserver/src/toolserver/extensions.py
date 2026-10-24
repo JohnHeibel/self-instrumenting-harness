@@ -314,6 +314,8 @@ class Extensions:
             for t in m.tools:
                 if self.owner.get(t.name, m.name) != m.name:
                     raise ValueError(f"tool {t.name!r} already belongs to extension {self.owner[t.name]!r}")
+            if m.in_host:
+                self._check_install_as(m)
             version = self.loaded[m.name].version + 1 if m.name in self.loaded else 1
             ext_dir = self.workspace / m.dir_rel
             archived = self.archive_dir / m.name / f"v{version}"
@@ -405,7 +407,29 @@ class Extensions:
         # Kept in the run's archive, never in the host's folder, where the host might load it.
         return self.archive_dir / m.name / "installed-previous"
 
+    def _installs_path(self) -> Path:
+        return self.archive_dir / "installs.json"
+
+    def _installs(self) -> dict[str, str]:
+        """install_as (lowercase) -> extension name. Kept beside the archive, so it survives a
+        tool server restart and the agent can't edit it."""
+        p = self._installs_path()
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+    def _check_install_as(self, m: Manifest) -> None:
+        folder = m.in_host["install_as"]
+        owner = self._installs().get(folder.lower())
+        if owner and owner != m.name:
+            raise ValueError(f"in_host.install_as: {folder!r} is already used by your extension {owner!r}")
+        if not owner and self._target(m).exists():
+            raise ValueError(f"in_host.install_as: the host's extension folder already has {folder!r}, which "
+                             "isn't one of your extensions; choose another name")
+
     def _install(self, m: Manifest, ext_dir: Path) -> str:
+        installs = self._installs()
+        installs[m.in_host["install_as"].lower()] = m.name
+        self._installs_path().parent.mkdir(parents=True, exist_ok=True)
+        self._installs_path().write_text(json.dumps(installs, indent=1), encoding="utf-8")
         target, backup = self._target(m), self._backup(m)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(backup, ignore_errors=True)

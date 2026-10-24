@@ -480,3 +480,23 @@ def test_host_config_placeholders_and_reload_runs_from_the_config_dir(tmp_path):
     cfg.write_text('[host]\nstart = "ctl.py start"\n')
     with pytest.raises(ValueError, match="start must be a command"):
         HostConfig.load(cfg)
+
+
+def test_install_as_cannot_take_a_folder_the_extension_does_not_own(tmp_path):
+    from types import SimpleNamespace
+    from toolserver.extensions import Extensions, HostConfig
+    ext = object.__new__(Extensions)
+    ext.host = HostConfig(install_dir=tmp_path / "mods")
+    ext.archive_dir = tmp_path / "extensions"
+    (tmp_path / "mods" / "placed-by-harness").mkdir(parents=True)
+    (tmp_path / "src" / "p").mkdir(parents=True)
+
+    def m(name, folder):
+        return SimpleNamespace(name=name, in_host={"source": "p", "install_as": folder})
+    with pytest.raises(ValueError, match="isn't one of your extensions"):
+        ext._check_install_as(m("probe", "placed-by-harness"))
+    ext._check_install_as(m("probe", "probe-mod"))
+    ext._install(m("probe", "probe-mod"), tmp_path / "src")
+    ext._check_install_as(m("probe", "probe-mod"))            # its own folder: fine to replace
+    with pytest.raises(ValueError, match="already used by your extension 'probe'"):
+        ext._check_install_as(m("other", "PROBE-MOD"))
