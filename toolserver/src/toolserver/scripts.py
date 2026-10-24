@@ -27,8 +27,9 @@ _spec = json.load(sys.stdin)
 _root = os.getcwd()
 class ToolFailed(Exception):
     pass
-def call(name, args=None, **kw):
-    """Call one of your tools by name; returns its parsed JSON result (or text). Raises ToolFailed."""
+def call(name, args=None, /, **kw):
+    """Call one of your tools by name; returns its parsed JSON result (or text). Raises ToolFailed.
+    Positional-only, so a tool may itself take arguments called `name` or `args`."""
     a = dict(args or {}, **kw)
     if name not in _spec["tools"]:
         if name not in _spec["builtins"]:
