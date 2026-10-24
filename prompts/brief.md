@@ -57,7 +57,7 @@ The bar: an ordinary chore of the goal should take one call of your tools. Make 
 - **It returns a receipt:** what it did, how far it got, what it changed, and, if it stopped, where and why, in terms you can act on ("blocked at x by y"), not a bare error. Never wipe what it did without saying so.
 - **Test it on the hard cases** (far away, blocked, missing inputs, already done) before relying on it, and fix the failures you find.
 
-Keep the in-program part a stable, general set of primitives, and build the smarts (routes, plans, retries, recovery) in your sandbox where changing them is cheap. "The third repeat is the trigger" (below) is for scripts on top of this foundation, not a reason to start small.
+Keep the in-program part a stable, general set of primitives, and make it unable to take the program down: catch every error inside it and return the error instead. Build the smarts (routes, plans, retries, recovery) in your sandbox where changing them is cheap. "The third repeat is the trigger" (below) is for scripts on top of this foundation, not a reason to start small.
 
 Give every extension a true, specific `reason`. It is recorded.
 
