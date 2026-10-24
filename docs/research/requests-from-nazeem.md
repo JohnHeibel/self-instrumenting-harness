@@ -121,3 +121,7 @@ Implemented (critic, cycle 12): `toolserver/src/toolserver/forward.py` + `[host]
 
 ## 2026-10-24 (critic, cycle 15: death loops) runner/claude_runner.py
 Evidence: three deaths ("was slain by Zombie") at 12:44:01, 12:44:41 and 12:45:01Z: the agent respawned into waiting mobs and died again within seconds. The runner's death note now escalates when 3 or more deaths fall within 10 minutes (`recent_deaths`, `DEATH_LOOP_NOTE`: leave at once, seal yourself in, stay safe until day, then re-plan). Test: runner/tests/test_skills_note.py.
+
+## 2026-10-24 (critic, cycle 16: safety loop and heartbeat) prompts/brief.md, runner/claude_runner.py
+Evidence: about 10 deaths in 5 h; the agent's long jobs had no safety check per slice; after each death neither the agent nor the harness knew where it was or what it lost (the world's playerdata is saved only every few minutes, so the grader cannot warn live).
+Change: brief bullet "Every long job checks safety each slice and saves a heartbeat" (generic: any state that can end or undo progress); the agent writes `state/heartbeat.json`; the runner appends its last content and age to the host-event (death) note (`heartbeat_text`). Live low-health or night warnings from the grader were rejected: playerdata is up to 5 min stale, which is longer than a night or a fight.

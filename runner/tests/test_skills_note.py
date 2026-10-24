@@ -76,3 +76,11 @@ def test_recent_deaths_counts_a_loop(tmp_path):
     p.write_text("".join(json.dumps({"type": "marker", "kind": "agent_died", "ts": t}) + "\n" for t in rows))
     assert cr.recent_deaths(p) == 3
     assert cr.recent_deaths(tmp_path / "none") == 0
+
+
+def test_heartbeat_text(tmp_path):
+    assert cr.heartbeat_text(tmp_path) == ""
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "heartbeat.json").write_text('{"pos": [1, 2, 3], "hp": 4}')
+    t = cr.heartbeat_text(tmp_path)
+    assert '"pos": [1, 2, 3]' in t and "min old" in t

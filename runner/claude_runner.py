@@ -151,6 +151,17 @@ def recent_deaths(grader_path: Path, window_s: float = 600) -> int:
     return sum(1 for t in ts if (ts[-1] - t).total_seconds() <= window_s) if ts else 0
 
 
+def heartbeat_text(workspace: Path, cap: int = 900) -> str:
+    """The agent's own last saved state (state/heartbeat.json), with its age, for notes after a loss."""
+    p = workspace / "state" / "heartbeat.json"
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace").strip()
+        age = time.time() - p.stat().st_mtime
+    except OSError:
+        return ""
+    return f"Your last saved heartbeat ({age / 60:.0f} min old, state/heartbeat.json): {text[:cap]}" if text else ""
+
+
 def new_host_events(grader_path: Path, seen: set[str]) -> list[dict]:
     """Grader markers of the kinds that matter right now (a death), not yet reported. Marks them seen."""
     out = []
@@ -573,6 +584,9 @@ class ClaudeRunner:
                     n = recent_deaths(self.run_dir / "grader.jsonl")
                     note = (DEATH_LOOP_NOTE.format(n=n, m=10) + "\n\n" if n >= 3 else "") + \
                         DEATH_NOTE.format(cause=evs[-1].get("cause", "unknown"))
+                    hb = heartbeat_text(self.run_dir / "workspace")
+                    if hb:
+                        note += "\n\n" + hb + "\nThat is where you were and what you carried just before; use it to decide what to fetch."
                     self.pending_note += ("\n\n" if self.pending_note else "") + note
             if not why and why_handoff:
                 why = "handoff"
