@@ -366,7 +366,8 @@ class Host:
         return st.get("scene") in GAME_SCENES
 
     def _game_pid(self) -> int | None:
-        """The KSP_x64.exe running from this run's copy."""
+        """The KSP_x64.exe running from this run's copy. A killed game stays listed while anything
+        still holds a handle to it, so a listed process that has exited doesn't count."""
         exe = str(self.ksp / EXE).lower()
         out = subprocess.run(["powershell", "-NoProfile", "-Command",
                               "Get-CimInstance Win32_Process -Filter \"Name='KSP_x64.exe'\" | "
@@ -374,7 +375,7 @@ class Host:
                              capture_output=True, text=True, creationflags=CREATE_NO_WINDOW).stdout
         for line in out.splitlines():
             pid, _, path = line.partition("\t")
-            if path.strip().lower() == exe:
+            if path.strip().lower() == exe and _alive(int(pid)):
                 return int(pid)
         return None
 
