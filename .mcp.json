@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "mailbox": {
-      "command": "uv",
-      "args": ["run", "--quiet", "--script", "tools/mailbox/server.py"]
-    }
-  }
-}
