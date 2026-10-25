@@ -120,7 +120,7 @@ namespace HarnessGrader
             if (now >= nextSample)
             {
                 nextSample = now + 1f;
-                try { Sample(); }
+                try { Sample(); if (lastError.StartsWith("sample: ")) lastError = ""; }   // a later good sample clears it
                 catch (Exception e) { lastError = "sample: " + e.Message; }
             }
         }
@@ -201,8 +201,18 @@ namespace HarnessGrader
             j.End();
             string tmp = Path.Combine(dir, "state.json.tmp"), dst = Path.Combine(dir, "state.json");
             File.WriteAllText(tmp, j.ToString());
-            if (File.Exists(dst)) File.Delete(dst);
-            File.Move(tmp, dst);
+            // A reader may have state.json open for a moment (Windows then refuses to replace it):
+            // retry briefly, and if it's still busy skip this sample; the next one comes in a second.
+            for (int i = 0; ; i++)
+            {
+                try
+                {
+                    if (File.Exists(dst)) File.Replace(tmp, dst, null); else File.Move(tmp, dst);
+                    break;
+                }
+                catch (IOException) when (i < 4) { System.Threading.Thread.Sleep(15); }
+                catch (IOException) { return; }
+            }
         }
 
         static void VesselJson(Json j, Vessel v)
