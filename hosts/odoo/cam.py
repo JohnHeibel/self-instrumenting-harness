@@ -114,7 +114,7 @@ def main() -> int:
         ov_i, last_ov, rest = 0, 0.0, True
         while not stop and not (a.run_dir / "STOP").exists():
             new, pos = read_new(calls, pos)
-            shown = [c for c in new if c.get("ids") and c.get("ok") and not c["model"].startswith(("ir.", "res.users"))]
+            shown = [c for c in new if c.get("ids") and c.get("ok") and not c["model"].startswith(("ir.", "res.users", "mail.")) and not c["model"].endswith((".line", ".lines"))]
             if shown:
                 pick = next((c for c in reversed(shown) if c.get("mutating")), shown[-1])
                 rid = pick["ids"][-1]
