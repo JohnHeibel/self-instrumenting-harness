@@ -514,8 +514,9 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .gl1 { display: flex; align-items: baseline; gap: 24px; }
 .gl1 h1 { flex: 1; font-size: 27px; font-weight: 600; line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .gcount { font-size: 38px; font-weight: 700; color: var(--green); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.mlist { columns: 4; column-gap: 20px; font-size: 14px; line-height: 17px; color: var(--faint); }
-.mlist li { display: flex; gap: 7px; break-inside: avoid; padding: 1px 0; }
+.mlist { display: grid; grid-template-columns: repeat(4, 1fr); column-gap: 20px; row-gap: 3px; font-size: 15px; line-height: 19px; color: var(--faint); }
+.mlist li { display: flex; gap: 7px; min-width: 0; }
+.mlist li span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .mlist li i { flex: none; width: 10px; height: 10px; margin-top: 3px; border: 2px solid var(--faint); display: inline-block; }
 .mlist li.on { color: var(--ink); } .mlist li.on i { background: var(--green); border-color: var(--green); }
 .rstrip { display: flex; align-items: baseline; gap: 16px; background: var(--panel); border: 2px solid var(--rule); margin: 0 24px 14px; padding: 8px 14px; height: 70px; flex: none; }
