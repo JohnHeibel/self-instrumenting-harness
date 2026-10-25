@@ -211,19 +211,18 @@ export function ToolWindow({ run, at, kitId, onClose }: { run: Run; at: number; 
   )
 }
 
-const REPO = 'https://github.com/JohnHeibel/self-instrumenting-harness/blob/main/'
 const BOXES: [string, string][] = [
   ['agent', 'runner/src/runner/run.py'], ['tool server', 'toolserver/src/toolserver/server.py'], ['hooks', 'toolserver/src/toolserver/extensions.py'],
   ['grader', 'graders'], ['event log', 'docs/interfaces/event-log.md'], ['SpacetimeDB', 'stdb/SCHEMA.md'], ['this page', 'ui/src/views/Story.tsx'],
 ]
 
-/** "How it works": the parts, each linking to its source. */
+/** "How it works": the parts, each with its source path in the repo (plain text: the booth runs offline). */
 export function HowDrawer({ onClose }: { onClose: () => void }) {
   return (
     <div className="how" role="dialog" aria-label="How it works">
       <button className="x" onClick={onClose} aria-label="Close">✕</button>
       <div className="flow">
-        {BOXES.map(([name, path], i) => <span key={name} className="hb"><a href={REPO + path} target="_blank" rel="noreferrer">{name}</a>{i < BOXES.length - 1 && <i aria-hidden="true">→</i>}</span>)}
+        {BOXES.map(([name, path], i) => <span key={name} className="hb"><span className="box"><b>{name}</b><code>{path}</code></span>{i < BOXES.length - 1 && <i aria-hidden="true">→</i>}</span>)}
       </div>
     </div>
   )

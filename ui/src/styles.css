@@ -1,3 +1,7 @@
+/* Offline: every font is local. The demo's pixel font is public/fonts/Monocraft.ttf (OFL, github.com/IdreesInc/Monocraft);
+   until that file is in place the browser uses the monospace fallback. The other views use the system's Times New Roman. */
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft.ttf") format("truetype"), url("/fonts/Monocraft.otf") format("opentype"); font-display: block; }
+
 /* Sisyphus story view, three directions (#v=a broadsheet, b the room first, c the climb).
    Palette: Gruvbox by Pavel Pertsev (github.com/morhetz/gruvbox, README "Palette"). Light (a, b): bg0 #fbf1c7, bg0_h #f9f5d7,
    bg0_s #f2e5bc, bg1 #ebdbb2, bg2 #d5c4a1, bg3 #bdae93, fg1 #3c3836, fg2 #504945, fg3 #665c54, fg4 #7c6f64, faded orange
@@ -458,12 +462,12 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 /* ---------- Demo (#v=demo, the default): wireframe v4 ----------
    Palette: Melange dark (github.com/savq/melange-nvim, palettes/dark.lua): bg #292522, float #34302C, sel #403A36,
    ui #867462, com #C1A78E, fg #ECE1D7; green #78997A / #85B695, deep green #233524, ochre #E49B5D (the accent: state
-   changes only), dark yellow #8B7449. Font: Pixelify Sans (OFL, Google Fonts), one family for everything. Square edges. */
+   changes only), dark yellow #8B7449. Font: Monocraft (OFL, self-hosted in public/fonts), one family for everything. Square edges. */
 .v-demo { color-scheme: dark; --bg: #292522; --panel: #34302C; --panel2: #403A36; --wash: #403A36; --rule: #403A36; --rule-hi: #867462;
   --ink: #ECE1D7; --ink2: #C1A78E; --muted: #C1A78E; --faint: #867462; --accent: #E49B5D; --green: #85B695; --frame: #1b1816; --figure: #ECE1D7;
-  font-family: "Pixelify Sans", monospace; font-size: 20px; grid-template-columns: 1150px 1fr; grid-template-rows: 58px 1fr; column-gap: 24px; row-gap: 14px;
+  font-family: "Monocraft", ui-monospace, Menlo, monospace; font-size: 20px; grid-template-columns: 1150px 1fr; grid-template-rows: 58px 1fr; column-gap: 24px; row-gap: 14px;
   grid-template-areas: "head head" "left right"; padding: 18px 32px 22px; }
-.v-demo, .v-demo * { border-radius: 0 !important; font-family: "Pixelify Sans", monospace; }
+.v-demo, .v-demo * { border-radius: 0 !important; font-family: "Monocraft", ui-monospace, Menlo, monospace; }
 .v-demo button, .v-demo select { font: inherit; }
 .v-demo h2 { font-size: 17px; font-weight: 600; letter-spacing: .04em; text-transform: lowercase; color: var(--green); }
 .v-demo time, .v-demo td { font-variant-numeric: tabular-nums; }
@@ -521,7 +525,7 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .v-demo .mchart .bar { fill: #8B7449; opacity: .45; } .v-demo .mchart .bar.open { fill: none; stroke: #8B7449; }
 .v-demo .mchart .cum { stroke: var(--ink2); opacity: .7; } .v-demo .mchart .prev { stroke: var(--faint); }
 .v-demo .mchart .mt { stroke: var(--faint); } .v-demo .mchart .mt.on { stroke: var(--green); }
-.v-demo .mchart .ax { stroke: var(--rule-hi); } .v-demo .mchart .sc { fill: var(--faint); font-size: 13px; font-family: "Pixelify Sans", monospace; }
+.v-demo .mchart .ax { stroke: var(--rule-hi); } .v-demo .mchart .sc { fill: var(--faint); font-size: 13px; font-family: "Monocraft", ui-monospace, Menlo, monospace; }
 .v-demo .mchart figcaption { flex-direction: column; }
 .v-demo .mchart b { order: -1; font-size: 52px; font-weight: 700; line-height: 1; }
 .v-demo .mchart .ml { font-size: 16px; font-style: normal; color: var(--ink2); }
@@ -581,6 +585,9 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .how .x { position: absolute; right: 8px; top: 8px; width: 34px; height: 34px; border: 2px solid var(--rule-hi); color: var(--ink); }
 .how .flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 20px; }
 .how .hb { display: inline-flex; align-items: center; gap: 10px; }
-.how a { color: var(--ink); text-decoration: none; border: 2px solid var(--rule-hi); padding: 8px 12px; background: var(--panel); }
-.how a:hover { border-color: var(--green); }
+.how .box { display: flex; flex-direction: column; gap: 4px; border: 2px solid var(--rule-hi); padding: 8px 12px; background: var(--panel); }
+.how .box b { color: var(--ink); font-weight: 600; } .how .box code { font-family: inherit; font-size: 14px; color: var(--ink2); }
 .how i { color: var(--faint); font-style: normal; }
+
+.demo-stage { background: #292522; }
+.tile .tn { font-size: 15px; }

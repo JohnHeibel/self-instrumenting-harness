@@ -111,7 +111,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
     </section>
   )
   if (v === 'demo') return (
-    <div className="stage-fit">
+    <div className="stage-fit demo-stage">
       <div className="canvas v-demo" style={{ transform: `scale(${scale})` }}>
         <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} />
         <div className="left">
