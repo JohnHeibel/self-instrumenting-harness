@@ -3,7 +3,8 @@
     python graders/ksp/grader.py --run-dir runs/<run> [--target Duna] [--interval 2] [--once]
 
 The milestones are a ladder to one target body and back (ladder(); the Mun unless --target or
-<run>/host/grader.json {"target": ...} names another). Changing the target mid-run writes a new
+<run>/host/grader.json {"target": ...} names another; --no-return or {"return": false} ends it at
+the crewed landing). Changing the target mid-run writes a new
 milestones_defined; what was reached stays reached.
 
 A separate process. It reads the state the harness-grader plugin (graders/ksp/plugin, built into
@@ -71,9 +72,10 @@ RECENT = 5
 MOONS = {"Mun", "Minmus"}            # Kerbin's moons: reached without leaving Kerbin's sphere of influence
 
 
-def ladder(target: str = "Mun") -> list[dict]:
-    """The milestones for landing a kerbal on `target` and bringing them home. The Mun's ids are
-    unprefixed for return ("return") as they were first defined; other targets prefix every id."""
+def ladder(target: str = "Mun", return_home: bool = True) -> list[dict]:
+    """The milestones for landing a kerbal on `target` and bringing them home (or only landing,
+    when not `return_home`). The Mun's ids are unprefixed for return ("return") as they were first
+    defined; other targets prefix every id."""
     t = target.lower()
     the = f"the {target}" if target == "Mun" else target
     out = [{"id": "launch", "name": "First launch (above 1 km)"},
@@ -84,8 +86,9 @@ def ladder(target: str = "Mun") -> list[dict]:
     out += [{"id": f"{t}_soi", "name": f"{target} encounter"},
             {"id": f"{t}_orbit", "name": f"Orbit of {the}"},
             {"id": f"{t}_landing", "name": f"Landed on {the}"},
-            {"id": f"crewed_{t}_landing", "name": f"Kerbal on {the}"},
-            {"id": "return" if target == "Mun" else f"{t}_return", "name": f"Kerbal back on Kerbin from {the}"}]
+            {"id": f"crewed_{t}_landing", "name": f"Kerbal on {the}"}]
+    if return_home:
+        out.append({"id": "return" if target == "Mun" else f"{t}_return", "name": f"Kerbal back on Kerbin from {the}"})
     for m in out:
         m["target"] = target
     return out
@@ -136,10 +139,10 @@ def judge(mid: str, state: dict, landed_crew: set[str], target: str = "Mun") -> 
 
 
 class Grader:
-    def __init__(self, run_dir: Path, read=None, target: str = "Mun") -> None:
+    def __init__(self, run_dir: Path, read=None, target: str = "Mun", return_home: bool = True) -> None:
         self.run_dir = run_dir
         self.target = target
-        self.milestones = ladder(target)
+        self.milestones = ladder(target, return_home)
         st = run_dir / "runner-state.json"
         run_id = (json.loads(st.read_text()).get("run_id") if st.exists() else None) or run_dir.name
         self.path = run_dir / "grader.jsonl"
@@ -329,15 +332,17 @@ def main() -> int:
     ap.add_argument("--once", action="store_true", help="poll once, print the state, exit")
     ap.add_argument("--target", default=None,
                     help="the body to land on and return from (default: host/grader.json's target, else Mun)")
+    ap.add_argument("--no-return", action="store_true",
+                    help="end the ladder at the crewed landing (default: host/grader.json's \"return\", else true)")
     args = ap.parse_args()
     run_dir = args.run_dir.resolve()
-    target = args.target
-    if target is None:
-        try:
-            target = json.loads((run_dir / "host" / "grader.json").read_text(encoding="utf-8")).get("target")
-        except (OSError, ValueError):
-            target = None
-    g = Grader(run_dir, target=target or "Mun")
+    try:
+        cfg = json.loads((run_dir / "host" / "grader.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cfg = {}
+    target = args.target or cfg.get("target") or "Mun"
+    return_home = False if args.no_return else bool(cfg.get("return", True))
+    g = Grader(run_dir, target=target, return_home=return_home)
     if args.once:
         print(json.dumps(g.poll(), indent=1))
         return 0
