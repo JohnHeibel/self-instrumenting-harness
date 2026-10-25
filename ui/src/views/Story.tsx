@@ -5,13 +5,14 @@ import { Backdrop } from '../Backdrop'
 import { HookDetail } from '../components/HookDetail'
 import { Event, Header, Kits, Ledger, Screen } from '../components/panels'
 import { Calls, Climb, Figures, MilestoneList, Reasoning, Room } from '../components/stories'
+import { DemoHeader, DemoMetrics, GoalBox, ReasonStrip, Scrubber, TaskLog, ToolTiles, ToolWindow, VideoHero, HowDrawer } from '../components/demo'
 import { MetricCharts } from '../components/MetricCharts'
 import { span } from '../util'
 import { Timeline } from '../components/Timeline'
 import { SPEEDS, useNow } from '../util'
 
 /** Three directions, chosen with #v=a|b|c: a broadsheet front page, the room first, the climb. */
-type V = 'a' | 'b' | 'c' | 'a1' | 'a2' | 'a3' | 's1' | 's2' | 's3' | 'm1' | 'm2' | 'm3'
+type V = 'demo' | 'a' | 'b' | 'c' | 'a1' | 'a2' | 'a3' | 's1' | 's2' | 's3' | 'm1' | 'm2' | 'm3'
 
 /** A run, live or finished: follows the newest moment by default; scrub, play at timelapse speed, jump between
  *  key moments, open any hook. `t=live` in the URL means following. */
@@ -30,7 +31,9 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
     }
   }, [run.t1])
   const [playing, setPlaying] = useState(false)
-  const [speed, setSpeed] = useState(600)
+  const [speed, setSpeed] = useState(60)
+  const [tool, setTool] = useState<string | null>(() => params.get('tool'))
+  const [help, setHelp] = useState(false)
   const [open, setOpen] = useState<string | null>(() => params.get('hook'))
   const scale = useFit()
 
@@ -56,7 +59,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
       // Space toggles playback, except when a button or field has focus (there it presses the button or types).
       const el = e.target instanceof Element ? e.target.closest('button, input, textarea, select, a, [contenteditable]') : null
       if (e.key === ' ' && !el) { e.preventDefault(); setPlaying(p => !p) }
-      if (e.key === 'Escape') setOpen(null)
+      if (e.key === 'Escape') { setOpen(null); setTool(null); setHelp(false) }
       const i = SPEEDS.indexOf(speed)
       if (e.key === ']' && i < SPEEDS.length - 1) setSpeed(SPEEDS[i + 1])
       if (e.key === '[' && i > 0) setSpeed(SPEEDS[i - 1])
@@ -90,7 +93,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
 
   const hooks = run.hooks(at)
   const openHook = open ? hooks.find(h => h.name === open) : undefined
-  const v = (['a', 'b', 'c', 'a1', 'a2', 'a3', 's1', 's2', 's3', 'm1', 'm2', 'm3'].includes(params.get('v') ?? '') ? params.get('v') : 'm1') as V
+  const v = (['demo', 'a', 'b', 'c', 'a1', 'a2', 'a3', 's1', 's2', 's3', 'm1', 'm2', 'm3'].includes(params.get('v') ?? '') ? params.get('v') : 'demo') as V
   const seek = (t: number) => setAt(Math.max(run.t0, Math.min(run.t1, t)))
   const active = !(following && !live) && run.handsActive(at)
   const g = run.latest('goal', at)
@@ -106,6 +109,26 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
       <h1>{g?.text ?? (run.goalTitle || '—')}</h1>
       {g && <p className="deck">{g.serves && <>for {g.serves} · </>}set {span(at - g.t)} ago</p>}
     </section>
+  )
+  if (v === 'demo') return (
+    <div className="stage-fit">
+      <div className="canvas v-demo" style={{ transform: `scale(${scale})` }}>
+        <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} />
+        <div className="left">
+          <VideoHero run={run} runName={run.recs[0]?.run_id ?? ''} at={at} now={now} playing={playing} speed={speed} following={following} spectator={spectator} imageUrl={imageUrl} />
+          <Scrubber run={run} at={at} playing={playing} onPlay={setPlaying} onSeek={seek} />
+          <GoalBox run={run} at={at} />
+          <ReasonStrip run={run} at={at} />
+        </div>
+        <div className="right">
+          <DemoMetrics run={run} at={at} compare={compare} />
+          <TaskLog run={run} at={at} />
+          <ToolTiles run={run} at={at} open={tool} onOpen={k => setTool(t => (t === k ? null : k))} />
+        </div>
+        {tool && <ToolWindow key={tool} run={run} at={at} kitId={tool} onClose={() => setTool(null)} />}
+        {help && <HowDrawer onClose={() => setHelp(false)} />}
+      </div>
+    </div>
   )
   return (
     <div className="stage-fit">

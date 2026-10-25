@@ -18,6 +18,15 @@ export const httpSource: DataSource = {
 
   imageUrl: (run, rec) => (rec.artifact ? `/runs/${enc(run)}/${rec.artifact}` : undefined),
 
+  async video(run) {
+    const r = await fetch(`/runs/${enc(run)}/video.json`, { cache: 'no-store' }).catch(() => null)
+    if (!r?.ok) return null
+    const v = await r.json().catch(() => null) as { file?: string; start_utc?: string } | null
+    const start = v?.start_utc ? Date.parse(v.start_utc) : NaN
+    if (!v?.file || !/^(video\/)?[A-Za-z0-9_.-]+\.(mp4|webm)$/.test(v.file) || !Number.isFinite(start)) return null
+    return { url: `/runs/${enc(run)}/${v.file}`, start }
+  },
+
   watch(run: string, cb: Watch) {
     const url = `/api/runs/${enc(run)}/records`
     const spectatorUrl = `/runs/${enc(run)}/live/latest.jpg`

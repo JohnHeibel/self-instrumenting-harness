@@ -17,6 +17,10 @@ export type Watch = {
   error(e: Error): void
 }
 
+/** A recorded video of the host for a run (OBS for games, a browser recording for Odoo): `runs/<run>/video.json` says which
+ *  file and the UTC time its first frame shows, which puts it on the event log's clock. */
+export type VideoInfo = { url: string; start: number }
+
 export interface DataSource {
   kind: 'jsonl' | 'spacetimedb'
   /** Short description for the footer of the run picker. */
@@ -26,6 +30,30 @@ export interface DataSource {
   watch(run: string, cb: Watch): () => void
   /** The saved image for a record's `artifact`, if it is available (yet). */
   imageUrl(run: string, rec: TRec): string | undefined
+  /** The run's recorded video, if it has one. */
+  video?(run: string): Promise<VideoInfo | null>
 }
 
-export const source: DataSource = stdbConfig ? stdbSource(stdbConfig) : httpSource
+/** SpacetimeDB first; when it can't be reached (listing or loading fails), the run files over HTTP. */
+function withFallback(primary: DataSource, secondary: DataSource): DataSource {
+  let use = primary
+  return {
+    get kind() { return use.kind },
+    get label() { return use.label },
+    async listRuns() {
+      try { return await primary.listRuns() } catch { use = secondary; return secondary.listRuns() }
+    },
+    watch(run, cb) {
+      let switched = false
+      let stop = use.watch(run, { ...cb, error: e => {
+        if (switched || use === secondary) { cb.error(e); return }
+        switched = true; use = secondary; stop(); stop = secondary.watch(run, cb)
+      } })
+      return () => stop()
+    },
+    imageUrl: (run, rec) => use.imageUrl(run, rec),
+    video: run => (secondary.video ? secondary.video(run) : Promise.resolve(null)),
+  }
+}
+
+export const source: DataSource = stdbConfig ? withFallback(stdbSource(stdbConfig), httpSource) : httpSource

@@ -24,6 +24,14 @@ A run that is still writing opens at its newest moment and follows it (the heade
 
 Both produce the same records, so nothing above `src/data/source.ts` knows which is in use.
 
+## Demo view (default)
+
+`#v=demo` (the default): header (run switcher, model · agent, replay speed, clock, "?" with the parts linked to their source), the recorded video as the hero with chapter marks (milestones, tool versions, deaths) on the scrubber, the goal with every milestone, the newest reasoning, the four headline numbers, the task log, and tiles for the tools the agent built (click one for its versions, code and the change each version made; `#tool=extension:<name>` opens one).
+
+**Video**: put the recording in the run directory with `video.json`: `{"file": "obs.mp4", "start_utc": "2026-10-24T23:55:00.723Z"}` (`file` may also be `video/<name>`; mp4 or webm). `start_utc` is the UTC time of the video's first frame; the player seeks the video to the event-log time. At speeds up to 16× it plays at that rate; faster, it is seeked. Without a video the run's saved frames show.
+
+**Data**: SpacetimeDB on `ws://127.0.0.1:3000` by default (`VITE_SPACETIMEDB_HOST` to point elsewhere, `off` for files only); when it can't be reached the run files over HTTP are used. Videos are always served by the dev server.
+
 ## Layout and numbers
 
 `#v=s1|s2|s3` (default s1): the broadsheet with the two step panels. **Reasoning**: the agent's own words (`agent_message`) and new goals (`goal`), numbered by step (the count of `usage` records by then); Claude Code's thinking blocks are redacted in the raw stream (empty text, signature only), so nothing else is available. **Tool calls**: every call the agent made itself (not those inside its scripts or tasks) with step, time, tool (`run_script <kept name>`), short arguments, failed, duration; identical consecutive calls folded. Stats on the left over Sisyphus (the slope runs from the bottom edge to the top edge; the mountain's base, top and right side are off screen), the milestone count opening to the whole set. Palettes: s1 Gruvbox, s2 Flexoki, s3 Rosé Pine Dawn (hex values in styles.css). Older directions stay available: `a`, `b`, `c`, `a1`–`a3`.

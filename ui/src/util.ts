@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 /** Replay speeds, in run seconds per real second. */
-export const SPEEDS = [60, 300, 600, 1800]
+export const SPEEDS = [1, 4, 16, 60, 300, 1800]
 
 export const two = (n: number) => String(Math.floor(n)).padStart(2, '0')
 

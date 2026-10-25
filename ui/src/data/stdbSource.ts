@@ -8,7 +8,10 @@ import type { DataSource, Watch } from './source'
  *  SCHEMA.md documents the HTTP API only, so the UI uses that. */
 export type StdbConfig = { base: string; db: string }
 
-const host = import.meta.env.VITE_SPACETIMEDB_HOST as string | undefined
+// SpacetimeDB is the default source (a local server on port 3000); VITE_SPACETIMEDB_HOST points elsewhere, and `off`
+// reads the run files only. When the server can't be reached the UI falls back to the files (source.ts).
+const envHost = import.meta.env.VITE_SPACETIMEDB_HOST as string | undefined
+const host = envHost === 'off' ? undefined : envHost || 'ws://127.0.0.1:3000'
 export const stdbConfig: StdbConfig | null = host
   ? { base: host.replace(/^ws/, 'http').replace(/\/+$/, ''), db: (import.meta.env.VITE_SPACETIMEDB_DB_NAME as string | undefined) || 'harness-events' }
   : null

@@ -97,7 +97,7 @@ export type Ledger = {
 }
 export type OpenTask = { task: string; name: string; hands: boolean; t: number }
 export type ActionLine = { t: number; label: string; count: number; ok: boolean }
-export type ToolVersion = { version: number; t: number; reason: string }
+export type ToolVersion = { version: number; t: number; reason: string; files?: { path: string; content: string }[] }
 export type HookUse = { name: string; calls: number; lastCall?: number; acts?: boolean }
 /** One extension the agent wrote (several hooks share its version) or one kept script, with every version and its use. */
 export type Kit = {
@@ -654,7 +654,7 @@ export class Run {
     const hookOf = new Map<string, Kit>()
     for (const r of this.upTo('hook_loaded', at)) {
       const k = kit('extension', String(r.extension || r.hook))
-      if (!k.versions.some(v => v.version === r.version)) k.versions.push({ version: Number(r.version), t: r.t, reason: String(r.reason ?? '') })
+      if (!k.versions.some(v => v.version === r.version)) k.versions.push({ version: Number(r.version), t: r.t, reason: String(r.reason ?? ''), files: Array.isArray(r.files) ? r.files : undefined })
       if (!k.hooks.some(h => h.name === r.hook)) k.hooks.push({ name: r.hook, calls: 0 })
       hookOf.set(r.hook, k)
     }
@@ -670,7 +670,8 @@ export class Run {
         if (c.hook && typeof c.hook.acts === 'boolean') h.acts = c.hook.acts
       } else if (c.tool === 'run_script') {
         const kept = /kept as (scripts\/[\w.-]+)/.exec(String(c.summary ?? ''))
-        if (kept) { const k = kit('script', scriptName(kept[1])); k.versions.push({ version: k.versions.length + 1, t: c.t, reason: '' }) }
+        if (kept) { const k = kit('script', scriptName(kept[1])); k.versions.push({ version: k.versions.length + 1, t: c.t, reason: '',
+          files: typeof c.args?.code === 'string' ? [{ path: kept[1], content: c.args.code }] : undefined }) }
         if (c.args?.name) { const k = kit('script', scriptName(String(c.args.name))); k.calls++; k.lastCall = c.t }
       }
     }
