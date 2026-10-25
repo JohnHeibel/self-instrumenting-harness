@@ -1,0 +1,56 @@
+# Host config for Kerbal Space Program 1.12 (Steam install, Windows). Data, not code: the agent
+# writes everything else, including the plugin it uses to read and fly the game.
+#
+# {run_dir}: this run's directory; {config_dir}: this file's directory; {python}: the harness's
+# Python. Commands run from {config_dir}. hosts/ksp/hostctl.py gives each run its own copy of the
+# game under {run_dir}/host/ksp/ (large files hard-linked from the install), so the user's own
+# install, settings and saves are untouched. Needs Visual Studio (or Build Tools) for csc.
+
+[host]
+name = "ksp"
+window_title = "Kerbal Space Program"
+process = "KSP_x64.exe"
+# KSP draws its menus and dialogs inside its one window.
+capture = "window"
+# Up when the game runs and has the run's save open (not loading, not the main menu).
+up_check = ["{python}", "ksp/hostctl.py", "check", "--run-dir", "{run_dir}"]
+start = ["{python}", "ksp/hostctl.py", "start", "--run-dir", "{run_dir}"]
+stop = ["{python}", "ksp/hostctl.py", "stop", "--final", "--run-dir", "{run_dir}"]
+start_timeout_s = 480
+# For a server your plugin runs inside the game: listen on 127.0.0.1 at one of these.
+agent_ports = [51000]
+notes = """
+The game is Kerbal Space Program 1.12.5 (no expansions), a sandbox save with every part
+unlocked; it opened at the Space Center. It runs on a host machine; you reach it through your
+tools and your own plugin.
+
+Plugins: KSP loads compiled plugins from its GameData folder only when it starts. An extension's
+in_host source folder is installed as GameData/<install_as>/; put C# source files (.cs) in it,
+not a .dll. The "restart" reload compiles every .cs file in that folder into one plugin (C# with
+the latest language version, against all of the game's own assemblies: Assembly-CSharp,
+UnityEngine and the rest, .NET Framework 4.x API), then saves the game, restarts it (about 30 s)
+and reopens the save. A compile error fails the reload and comes back to you with the
+compiler's messages; the game keeps running as it was. "none" only copies files.
+
+The game's API: /home/agent/work/host/api.txt lists every public type and member of the game's
+assemblies, one per line (grep it, e.g. grep -n "class Vessel " or grep -n "onStageActivate").
+
+Getting data out: a plugin can listen on 127.0.0.1 at the port in "reach" below, or write files
+under Path.Combine(KSPUtil.ApplicationRootPath, "agent-io"), which is
+/home/agent/work/host/io/ in your sandbox. The game's own log from the last session (exceptions
+from your plugin show up there) is copied to /home/agent/work/host/KSP-last.log at each stop.
+
+Unity runs your plugin's MonoBehaviour methods on the game's main thread; most game objects may
+only be touched there. A socket server runs on its own thread, so hand requests to the main
+thread (a queue read in Update or FixedUpdate) and send replies back.
+"""
+
+[extensions]
+# Where load_extension copies an extension's in_host directory: this run's GameData.
+install_dir = "{run_dir}/host/ksp/GameData"
+reload_timeout_s = 600
+
+[extensions.reload]
+# "none": copy files only (the next restart builds and loads them).
+none = []
+restart = ["{python}", "ksp/hostctl.py", "restart", "--run-dir", "{run_dir}"]

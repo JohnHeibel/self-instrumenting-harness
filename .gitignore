@@ -19,3 +19,6 @@ runs/
 
 # Built per machine by hosts/factorio/hostctl.py make-start-save
 hosts/factorio/saves/
+
+# Built per install by hosts/ksp/hostctl.py (the game API listing and its tool)
+hosts/ksp/cache/
