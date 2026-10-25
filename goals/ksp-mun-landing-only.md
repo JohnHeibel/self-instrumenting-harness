@@ -2,9 +2,9 @@
 
 The program is **Kerbal Space Program**, in a sandbox game: every part is unlocked, and money and science don't matter. You start at the Space Center with four kerbals and no craft. The game's example craft are not included, so you design and build your own.
 
-**Objective:** land a crewed vessel on the **Mun**, with its kerbal alive. Bringing them home is not part of this run.
+**Objective:** land a crewed vessel on the **Mun**, upright on its landing legs, intact, with its kerbal alive. Bringing them home is not part of this run.
 
-**Done when** a crewed vessel is landed on the Mun.
+**Done when** a crewed vessel is landed on the Mun and stays upright on its legs: its long axis close to the local vertical (within about 20°), not tipped over or lying on its side. A craft that touches down and falls over does not count; check it from the game's state after it has settled.
 
 **Progress** is measured by these steps, in order: first launch (above 1 km), space (above 70 km), orbit of Kerbin (periapsis above 70 km), Mun encounter, orbit of the Mun, landing on the Mun (any craft), and a kerbal on the Mun. A grader reads them from the game's own state. **Tokens** are everything you spend. Building tools that let you take each step in fewer calls is the point of this run: a launch, an orbit, a transfer or a landing that your own code flies is cheaper than one you steer step by step.
 
