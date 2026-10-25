@@ -14,7 +14,7 @@ function MilestoneBlock({ run, at }: { run: Run; at: number }) {
     <section className="goalbox cmp-ms">
       <div className="gl1"><span className="cmp-name">{run.recs[0]?.run_id}</span><span className="gcount">{ms.length ? `${done} / ${ms.length}` : DASH}</span></div>
       <ul className="mlist">
-        {ms.map(m => <li key={m.id} className={m.t !== undefined ? 'on' : ''} title={m.t !== undefined ? `${m.name} · ${hms(m.t - run.t0)}` : m.name}>
+        {ms.map(m => <li key={m.id} className={m.t !== undefined ? 'on' : ''} data-full={m.name}>
           <i aria-hidden="true" /><span>{m.name}</span></li>)}
       </ul>
     </section>

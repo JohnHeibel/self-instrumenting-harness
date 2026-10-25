@@ -130,7 +130,7 @@ export function GoalBox({ run, at }: { run: Run; at: number }) {
     <section className="goalbox">
       <div className="gl1"><h1 className={(g?.text ?? run.goalTitle).length > 80 ? 'long' : ''}>{g?.text ?? (run.goalTitle || DASH)}</h1><span className="gcount">{ms.length ? `${done} / ${ms.length}` : DASH}</span></div>
       <ul className="mlist">
-        {ms.map(m => <li key={m.id} className={m.t !== undefined ? 'on' : ''} title={m.t !== undefined ? `${m.name} · ${hms(m.t - run.t0)}` : m.name}>
+        {ms.map(m => <li key={m.id} className={m.t !== undefined ? 'on' : ''} data-full={m.name}>
           <i aria-hidden="true" /><span>{m.name}</span></li>)}
       </ul>
     </section>
