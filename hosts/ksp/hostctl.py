@@ -15,7 +15,8 @@
   restart   build first (a plugin that doesn't compile leaves the game running as it was), then
             stop and start: KSP loads plugins only at startup
   check     exit 0 when the game is running, its grader plugin wrote state in the last 20 s, and
-            a game is open (not the loading screen or main menu)
+            a game is open (not the loading screen or main menu); a scene change in a game that
+            was up within SCENE_LOAD_GRACE still counts as up
   save      ask the game to save now
 
 Plugins. KSP loads compiled .dll files from GameData. Each folder in GameData that has .cs files
@@ -67,6 +68,7 @@ LINKED = ["KSP_x64_Data", "MonoBleedingEdge", "GameData/Squad"]
 SKIPPED = {"saves", "Ships", "Launcher.exe", "Launcher_Data", "settings.cfg", "KSP.log", "Logs",
            "PartDatabase.cfg", "thumbs", "Missions", "screenshots", "harness", "agent-io"}
 GAME_SCENES = {"SPACECENTER", "EDITOR", "FLIGHT", "TRACKSTATION"}
+SCENE_LOAD_GRACE = 120   # s a scene change may stall the game's state before check calls it down
 # The game's settings for a run: windowed, keeps simulating when another window has focus (the
 # agent's inputs and screenshots don't need focus), no splash screen or start-up dialogs. Keys the file doesn't name
 # keep the game's defaults; the game writes the whole file back on exit.
@@ -237,17 +239,39 @@ class Host:
         return f"host restarted in {time.monotonic() - t0:.0f} s"
 
     def check(self) -> tuple[bool, str]:
-        if not self._game_pid():
+        pid = self._game_pid()
+        if not pid:
             return False, "game not running"
         st = self._state()
         if st is None:
             return False, "the grader plugin hasn't written state"
         age = time.time() - float(st.get("real_time") or 0)
+        scene = st.get("scene")
+        if age <= 20 and scene in GAME_SCENES:
+            self._mark_up(pid)
+            return True, f"game up in {scene}"
+        # Switching scenes (to a vessel, the editor, the Space Center) shows LOADING and can stall the
+        # game's state for a while. The same game, in a game scene a moment ago, is still up.
+        since = self._up_since(pid)
+        if since is not None and time.time() - since < SCENE_LOAD_GRACE and scene not in ("MAINMENU", "SETTINGS"):
+            return True, f"game loading a scene (state {age:.0f} s old, scene {scene})"
         if age > 20:
             return False, f"the game's state is {age:.0f} s old (frozen or still loading)"
-        if st.get("scene") not in GAME_SCENES:
-            return False, f"no game open (scene {st.get('scene')}){': ' + st['error'] if st.get('error') else ''}"
-        return True, f"game up in {st.get('scene')}"
+        return False, f"no game open (scene {scene}){': ' + st['error'] if st.get('error') else ''}"
+
+    def _mark_up(self, pid: int) -> None:
+        try:
+            (self.dir / "last-up.json").write_text(json.dumps({"pid": pid, "t": time.time()}), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _up_since(self, pid: int) -> float | None:
+        """When this same game process was last seen up in a game scene, if it was."""
+        try:
+            d = json.loads((self.dir / "last-up.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return float(d["t"]) if d.get("pid") == pid else None
 
     def save(self, timeout: float = 30) -> str:
         done = self.ksp / "harness" / "saved.txt"
