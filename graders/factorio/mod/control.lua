@@ -14,6 +14,7 @@
 -- Actions. Cumulative counts of what a player did, from events the game raises for a player's
 -- own controls (whatever drove them: a person, or a mod acting through the player's controls):
 --   build    on_built_entity          an entity placed by a player
+--            script_raised_built      an entity a mod placed and announced (raise_built)
 --   mine     on_player_mined_entity   an entity mined by a player
 --   craft    on_pre_player_crafted_item  a hand-crafting request (one per request, any count)
 --   rotate   on_player_rotated_entity
@@ -456,6 +457,8 @@ end
 
 script.on_event(defines.events.on_player_mined_entity, function(e) count_action("mine"); mined_allowance(e) end)
 script.on_event(defines.events.on_built_entity, function() count_action("build") end)
+-- A mod placing an entity for the player (raise_built) is a build a person would have done by hand.
+script.on_event(defines.events.script_raised_built, function() count_action("build") end)
 script.on_event(defines.events.on_pre_player_crafted_item, function() count_action("craft") end)
 script.on_event(defines.events.on_player_rotated_entity, function() count_action("rotate") end)
 script.on_event(defines.events.on_robot_mined_entity, mined_allowance)
