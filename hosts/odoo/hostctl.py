@@ -8,6 +8,7 @@
   reset      stop and delete the containers and volumes: the next start builds a fresh database
              (and deletes the old keys file, which no longer matches anything)
   check      exit 0 when Odoo answers its health check and the keys file exists
+  (start / bootstrap take --agent-web-password PW: the agent user also gets that web password, for raw runs)
   bootstrap  (re)run the setup-time bootstrap by hand
   agent-key  --out FILE: write {"url", "db", "login", "key"} for the agent user only (chmod 600), with the URL
              the agent's container uses; the runner puts this in the agent's workspace (host/odoo.json)
@@ -86,12 +87,13 @@ def wait_healthy(timeout: float) -> bool:
     return False
 
 
-def start(timeout: float) -> int:
+def start(timeout: float, agent_web_password: str = "") -> int:
     compose("up", "-d", "--wait", "db")
     if not KEYS.exists():
         # Odoo's own image would start serving an empty database; bootstrap needs it initialised first.
         print("no keys file: bootstrapping a fresh database", flush=True)
-        return subprocess.call([sys.executable, str(HERE / "bootstrap.py")])
+        extra = ["--agent-web-password", agent_web_password] if agent_web_password else []
+        return subprocess.call([sys.executable, str(HERE / "bootstrap.py"), *extra])
     compose("up", "-d", "odoo")
     if not wait_healthy(timeout):
         print("Odoo did not answer /web/health in time", file=sys.stderr)
@@ -104,6 +106,8 @@ def main() -> int:
     ap.add_argument("action", choices=["start", "stop", "reset", "check", "bootstrap", "agent-key"])
     ap.add_argument("--timeout", type=float, default=240)
     ap.add_argument("--out", help="agent-key: where to write the agent's connection file")
+    ap.add_argument("--agent-web-password", default="", help="start/bootstrap: also give the agent user this web "
+                    "password (raw, input-only runs; the hero run has none)")
     ap.add_argument("--run-dir", help="accepted for host-config symmetry; unused")
     a = ap.parse_args()
     if a.action == "check":
@@ -117,12 +121,13 @@ def main() -> int:
         os.chmod(out, 0o600)
         return 0
     if a.action == "start":
-        return start(a.timeout)
+        return start(a.timeout, a.agent_web_password)
     if a.action == "stop":
         compose("stop")
         return 0
     if a.action == "bootstrap":
-        return subprocess.call([sys.executable, str(HERE / "bootstrap.py")])
+        extra = ["--agent-web-password", a.agent_web_password] if a.agent_web_password else []
+        return subprocess.call([sys.executable, str(HERE / "bootstrap.py"), *extra])
     compose("down", "-v", "--remove-orphans")
     KEYS.unlink(missing_ok=True)
     print("volumes removed; the next start builds a fresh database")

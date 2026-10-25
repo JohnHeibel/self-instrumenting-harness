@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>UTC clock</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; color: #fff;
+         font: 600 34px/1 Menlo, "SF Mono", monospace; letter-spacing: .04em; }
+  small { color: #9aa; margin-right: 18px; font-weight: 400; font-size: 22px; }
+</style>
+<body><small>UTC</small><span id="t"></span></body>
+<script>
+  const t = document.getElementById("t");
+  const tick = () => { t.textContent = new Date().toISOString().replace("T", " ").replace("Z", ""); };
+  tick(); setInterval(tick, 50);
+</script>
