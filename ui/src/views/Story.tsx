@@ -127,15 +127,14 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
           <div className="left">
             {game}
             <MetricCharts run={run} at={at} compare={compare} widths={[272, 272, 272, 272]} />
-            <Kits run={run} at={at} onOpen={setOpen} />
           </div>
           <Room run={run} at={at} now={now} variant="chat" />
           <aside className="stats">
             <Backdrop active={active} />
             {headline}
             <section className="climbbox"><Climb run={run} at={at} w={454} h={230} onSeek={seek} /></section>
-            <Figures run={run} at={at} />
             <Ledger run={run} at={at} />
+            <Kits run={run} at={at} onOpen={setOpen} />
           </aside>
           <div className="tl">{timeline}</div>
         </>}

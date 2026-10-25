@@ -222,7 +222,7 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .v-b { grid-template-columns: 560px 1fr 456px; grid-template-rows: 64px 1fr 62px; grid-template-areas: "head head head" "left room stats" "tl tl tl"; }
 .v-b .left { grid-area: left; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
 .v-b .left .game { height: 315px; flex: none; }
-.v-b .left .kits { flex: 1; min-height: 0; overflow: hidden; }
+.v-b .stats .kits { min-height: 0; overflow: hidden; } .v-b .hk { grid-template-columns: repeat(3, 1fr); }
 .v-b .room { grid-area: room; }
 .v-b .stats { grid-area: stats; position: relative; display: flex; flex-direction: column; gap: 14px; }
 .v-b .stats .backdrop { left: -300px; top: 380px; width: 900px; height: 506px; }
