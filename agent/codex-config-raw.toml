@@ -1,0 +1,39 @@
+# Codex config for baseline runs: the harness's screenshot and input tools only. Copy it to <run>/codex-home/config.toml before the first start.
+
+# The container is the sandbox, so Codex's own sandbox and approval prompts are off.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+# mcp_tool_list_changed (below) is under development, so every thread/start otherwise sends
+# a "warning" notification about it. Checked on 0.164.0: the key is accepted and stops it.
+suppress_unstable_features_warning = true
+
+web_search = "disabled"
+include_apply_patch_tool = false
+
+[features]
+# Baseline run with the harness's screenshot and input tools only: no shell, code or files.
+shell_tool = false
+unified_exec = false
+unified_exec_tty = false
+shell_snapshot = false
+multi_agent = false
+computer_use = false
+browser_use = false
+browser_use_external = false
+image_generation = false
+code_mode_host = false
+plugins = false
+apps = false
+hooks = false
+skill_search = false
+# Off by default and marked under development: lets hooks loaded mid-session appear as tools.
+mcp_tool_list_changed = true
+
+[mcp_servers.harness]
+url = "http://host.docker.internal:8765/mcp"
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+# Un-annotated tools otherwise count as destructive and are denied when approvals are off.
+default_tools_approval_mode = "approve"
+# Show harness tools as top-level tools: not behind tool_search, not inside code mode.
+omit_tools_from = ["deferred", "code_mode"]

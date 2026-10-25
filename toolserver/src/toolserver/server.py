@@ -452,6 +452,8 @@ def main() -> None:
     ap.add_argument("--host-config", type=Path, help="hosts/<host>.toml: install dir and reload actions")
     ap.add_argument("--agent-container", help="run extension tools in this container (default harness-agent-<run-id>); "
                                               "'local' runs them on this machine in the workspace")
+    ap.add_argument("--without-tools", default="",
+                    help="comma-separated harness tools to leave out of this run (e.g. a baseline with input tools only)")
     ap.add_argument("--no-spectator", action="store_true",
                     help="don't write <run>/live/latest.jpg (a host picture every 5 s for people watching)")
     args = ap.parse_args()
@@ -466,9 +468,15 @@ def main() -> None:
     if not args.no_spectator:
         spectator.start(Target(title=args.window_title or host_config.window_title, process=host_config.process,
                                mode=host_config.capture), args.run_dir)
-    build_server(log, args.host, args.port, args.window_title or "",
-                 host_config=host_config, workspace=workspace, executor=executor,
-                 archive_dir=args.run_dir / "extensions").run(transport="streamable-http")
+    mcp = build_server(log, args.host, args.port, args.window_title or "",
+                       host_config=host_config, workspace=workspace, executor=executor,
+                       archive_dir=args.run_dir / "extensions")
+    without = [t.strip() for t in args.without_tools.split(",") if t.strip()]
+    for name in without:
+        mcp.remove_tool(name)
+    if without:
+        log.write("tools_removed", tools=without)
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

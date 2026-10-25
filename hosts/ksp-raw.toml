@@ -1,0 +1,34 @@
+# Host config for Kerbal Space Program 1.12, for baseline runs with input tools only (no plugin).
+# Same game copy and grader as ksp.toml; only the notes differ.
+#
+# {run_dir}: this run's directory; {config_dir}: this file's directory; {python}: the harness's
+# Python. Commands run from {config_dir}. hosts/ksp/hostctl.py gives each run its own copy of the
+# game under {run_dir}/host/ksp/ (large files hard-linked from the install), so the user's own
+# install, settings and saves are untouched. Needs Visual Studio (or Build Tools) for csc.
+
+[host]
+name = "ksp"
+window_title = "Kerbal Space Program"
+process = "KSP_x64.exe"
+# KSP draws its menus and dialogs inside its one window.
+capture = "window"
+# Up when the game runs and has the run's save open (not loading, not the main menu).
+up_check = ["{python}", "ksp/hostctl.py", "check", "--run-dir", "{run_dir}"]
+start = ["{python}", "ksp/hostctl.py", "start", "--run-dir", "{run_dir}"]
+stop = ["{python}", "ksp/hostctl.py", "stop", "--final", "--run-dir", "{run_dir}"]
+start_timeout_s = 480
+notes = """
+The game is Kerbal Space Program 1.12.5 (no expansions), a sandbox save with every part
+unlocked; it opened at the Space Center. It runs on a host machine; you reach it through your
+tools only. The game keeps running while you think: physics doesn't pause unless you pause it.
+"""
+
+[extensions]
+# Where load_extension copies an extension's in_host directory: this run's GameData.
+install_dir = "{run_dir}/host/ksp/GameData"
+reload_timeout_s = 600
+
+[extensions.reload]
+# "none": copy files only (the next restart builds and loads them).
+none = []
+restart = ["{python}", "ksp/hostctl.py", "restart", "--run-dir", "{run_dir}"]

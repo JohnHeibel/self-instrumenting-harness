@@ -101,6 +101,7 @@ class Config:
     compact_tokens: int | None = 200_000      # Codex compacts the thread past this many context tokens
     port: int = 8765
     toolserver: bool = True
+    without_tools: list[str] | None = None    # harness tools left out (a baseline); kept across resumes
     host_check: hostcheck.HostCheck | None = None  # None: the host config's up_check
     cwd: str = "/home/agent/work"
     budget_seconds: float | None = None
@@ -216,7 +217,11 @@ class Runner:
                 kill_tree(old)
                 self.log.write("marker", label=f"killed tool server {old} left by a crashed runner",
                                kind="toolserver_restart")
-            self.toolserver = ToolServer(self.run_dir, run_id, self.cfg.port, self.cfg.host_config)
+            if self.cfg.without_tools is not None:
+                self.state.extra["without_tools"] = self.cfg.without_tools
+                self._save()
+            self.toolserver = ToolServer(self.run_dir, run_id, self.cfg.port, self.cfg.host_config,
+                                         self.state.extra.get("without_tools"))
             self._start_toolserver()
 
         self.state.extra.setdefault("last_snapshot_at", self.cfg.clock())
@@ -755,6 +760,8 @@ def main(argv: list[str] | None = None) -> int:
                     "the brief changed")
     ap.add_argument("--reopen", action="store_true", help="continue a run that already ended, on the same thread")
     ap.add_argument("--no-toolserver", action="store_true")
+    ap.add_argument("--without-tools", help="comma-separated harness tools to leave out of this run, e.g. "
+                    "load_extension,run_script for a baseline with input tools only; kept on resume")
     ap.add_argument("--agent-cmd", help="JSON list; replaces the agent container (tests, fakes)")
     ap.add_argument("--stall-timeout", type=float, default=1800)
     ap.add_argument("--build", action="store_true", help="docker build the agent image first")
@@ -775,6 +782,8 @@ def main(argv: list[str] | None = None) -> int:
                  brief=args.brief_file.read_text(encoding="utf-8"),
                  reasoning_summary=args.reasoning_summary, compact_tokens=args.compact_tokens or None, port=args.port, image=args.image,
                  auth_json=args.auth_json, toolserver=not args.no_toolserver,
+                 without_tools=[t.strip() for t in args.without_tools.split(",") if t.strip()]
+                 if args.without_tools is not None else None,
                  agent_cmd=json.loads(args.agent_cmd) if args.agent_cmd else None,
                  host_check=hostcheck.resolve(args.host_check, hc) if args.host_check else None, stall_timeout=args.stall_timeout,
                  budget_seconds=args.budget_hours * 3600 if args.budget_hours else None,

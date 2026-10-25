@@ -17,9 +17,11 @@ class ToolServerError(Exception):
 
 
 class ToolServer:
-    def __init__(self, run_dir: Path, run_id: str, port: int, host_config: Path) -> None:
+    def __init__(self, run_dir: Path, run_id: str, port: int, host_config: Path,
+                 without_tools: list[str] | None = None) -> None:
         self.run_dir, self.run_id, self.port = run_dir, run_id, port
         self.host_config = host_config
+        self.without_tools = without_tools or []
         self.proc: subprocess.Popen | None = None
 
     def start(self, timeout: float = 30) -> None:
@@ -30,6 +32,8 @@ class ToolServer:
         cmd = [sys.executable, "-m", "toolserver.server", "--port", str(self.port),
                "--run-dir", str(self.run_dir), "--run-id", self.run_id]
         cmd += ["--host-config", str(self.host_config)]
+        if self.without_tools:
+            cmd += ["--without-tools", ",".join(self.without_tools)]
         # Extension tools run in the agent container, which the tool server finds by its
         # default name harness-agent-<run-id>: the name agent.container_name gives it.
         self.proc = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
