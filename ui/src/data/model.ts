@@ -79,9 +79,18 @@ export type Metrics = {
   context?: number  // raw context of the newest request: its input_tokens + cached_input_tokens
 }
 /** One point of a metric series: the four efficiency numbers over a stretch of the run (a bin, or the run so far). */
-/** Cache-weighted tokens of one `usage` record (docs/BRIEF.md "Metrics"): uncached input and output in full, cached input at
- *  a tenth. The runner's `input_tokens` excludes cached input. */
-export const cacheWeighted = (u: Rec) => (Number(u.input_tokens) || 0) + (Number(u.output_tokens) || 0) + 0.1 * (Number(u.cached_input_tokens) || 0)
+/** Cache-weighted tokens of one `usage` record (docs/BRIEF.md "Metrics"; costs.weighted()): uncached input and output in
+ *  full, cached input at a tenth. The spec's `input_tokens` includes cached input (Codex runs); older Claude runs logged it
+ *  without (input < cached gives them away), so there it is fresh input already. */
+export const cacheWeighted = (u: Rec) => {
+  const input = Number(u.input_tokens) || 0, cached = Number(u.cached_input_tokens) || 0, output = Number(u.output_tokens) || 0
+  return (input >= cached ? input - cached : input) + 0.1 * cached + output
+}
+/** Raw context of one request: `input_tokens` when it includes cached input (spec), else input + cached (older Claude runs). */
+export const contextOf = (u: Rec) => {
+  const input = Number(u.input_tokens) || 0, cached = Number(u.cached_input_tokens) || 0
+  return input >= cached ? input : input + cached
+}
 /** One point of a headline series: over a 15-minute bin, or over the run from the series origin to t1. */
 export type MetricPoint = { t0: number; t1: number; cwPerAction?: number; actPerStep?: number; handsPct?: number }
 export type MetricSeries = { bins: MetricPoint[]; cum: MetricPoint[]; start: number; binMs: number }
@@ -444,7 +453,7 @@ export class Run {
       tokPerStep: s.steps ? s.tokens / s.steps : undefined, tokPerAction: s.actions ? s.tokens / s.actions : undefined,
       cwPerMilestone: milestones ? cw / milestones : undefined, cwPerAction: actions ? cw / actions : undefined,
       actPerStep: steps && this.upTo('program_actions', at).length ? actions / steps : undefined,
-      context: u ? (Number(u.input_tokens) || 0) + (Number(u.cached_input_tokens) || 0) : undefined,
+      context: u ? contextOf(u) : undefined,
     }
   }
 
