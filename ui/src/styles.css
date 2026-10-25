@@ -623,3 +623,24 @@ button.tile:hover { border-color: var(--rule-hi); }
 .dh .walker sisyphus-backdrop-v3 { display: block; width: 100%; height: 100%;
   --sisy-ground: transparent !important; --sisy-figure: transparent !important; --sisy-line: #ffffff !important; --sisy-mottle: transparent !important;
   --sisy-ray: transparent !important; --sisy-halo: transparent; --sisy-ink-stroke: #ffffff; --sisy-ink-stroke-w: 9px; }
+
+/* Compare toggle and the comparison screen: two recordings side by side, one scrubber, each run's own block under it */
+.cmpbtn { border: 2px solid var(--rule-hi); color: var(--ink2); font-size: 17px; padding: 3px 12px; }
+.cmpbtn:hover { color: var(--ink); border-color: var(--ink); }
+.cmpbtn.on { background: var(--accent); border-color: var(--accent); color: #0b0d10; }
+.cmp-names b { color: var(--ink); font-weight: 600; }
+.v-cmp { grid-template-columns: 1fr; grid-template-rows: 62px 1fr 48px; grid-template-areas: "head" "pair" "scrub"; }
+.cmp-pair { grid-area: pair; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+.cmp-side { display: grid; grid-template-rows: 540px auto auto; align-content: start; min-height: 0; border-right: 2px solid var(--rule); }
+.cmp-side:last-child { border-right: 0; }
+.v-cmp .hero { grid-area: auto; position: relative; background: var(--frame); }
+.cmp-side .goalbox { padding: 12px 20px 10px; flex: none; }
+.cmp-name { flex: 1; font-size: 22px; color: var(--ink2); }
+.cmp-side .mlist { grid-template-columns: repeat(3, 1fr); font-size: 14px; }
+.cmp-side .mcharts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 4px 20px 14px; }
+.cmp-side .mchart { height: 158px; }
+.cmp-side .mchart b { font-size: 34px; }
+.cmp-side .mchart .ml { font-size: 13px; }
+.cmp-scrub { grid-area: scrub; border-top: 2px solid var(--rule); border-bottom: 0; height: 48px; }
+.cmp-scrub .ch.up { top: 4px; height: 18px; } .cmp-scrub .ch.down { top: 26px; height: 18px; background: var(--ink2); }
+.cmp-loading { grid-area: pair; display: grid; place-items: center; color: var(--faint); }

@@ -5,6 +5,9 @@ import { HeaderWalk } from '../Backdrop'
 import { HookDetail } from '../components/HookDetail'
 import { Event, Header, Kits, Ledger, Screen } from '../components/panels'
 import { Calls, Climb, Figures, MilestoneList, Reasoning, Room } from '../components/stories'
+import { CompareView } from '../components/compare'
+import { useRunOnce } from '../data/useRunOnce'
+import { source } from '../data/source'
 import { CallWindow, DemoHeader, DemoMetrics, GoalBox, ReasonStrip, Scrubber, TaskLog, ToolTiles, ToolWindow, VideoHero, HowDrawer } from '../components/demo'
 import { MetricCharts } from '../components/MetricCharts'
 import { span } from '../util'
@@ -35,6 +38,20 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   const [tool, setTool] = useState<string | null>(() => params.get('tool'))
   const [help, setHelp] = useState(false)
   const [call, setCall] = useState<CallItem | null>(null)
+  // Comparison: the run's raw baseline from runs/compare.json; one clock (ms from each run's own start).
+  const [pair, setPair] = useState<string | null>(null)
+  const [comparing, setComparing] = useState(() => params.get('compare') === '1')
+  const [rel, setRel] = useState(() => Number(params.get('ct')) * 1000 || 0)
+  const [cmpPlaying, setCmpPlaying] = useState(false)
+  useEffect(() => { source.pairs?.().then(p => setPair(p[run.recs[0]?.run_id ?? ''] ?? null), () => {}) }, [run.recs])
+  const baseline = useRunOnce(comparing ? pair : null)
+  useEffect(() => {
+    if (!comparing || !cmpPlaying) return
+    let last = performance.now(), raf = 0
+    const tick = (t: number) => { const dt = (t - last) * speed; last = t; setRel(r => r + dt); raf = requestAnimationFrame(tick) }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [comparing, cmpPlaying, speed])
   // #call=last opens the newest task-log row (for linking a moment with its detail open).
   useEffect(() => { if (params.get('call') === 'last') setCall(run.calls(at).slice(-1)[0] ?? null) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   const [open, setOpen] = useState<string | null>(() => params.get('hook'))
@@ -112,10 +129,22 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
       {g && <p className="deck">{g.serves && <>for {g.serves} · </>}set {span(at - g.t)} ago</p>}
     </section>
   )
+  const header = <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} walk={<HeaderWalk speed={speed} />}
+    pair={pair} comparing={comparing && !!pair} onCompare={() => { setComparing(c => !c); setPlaying(false); setCmpPlaying(false) }} clock={comparing && pair ? rel : undefined} />
+  if (v === 'demo' && comparing && pair) return (
+    <div className="stage-fit demo-stage">
+      <div className="canvas v-demo v-cmp" style={{ transform: `scale(${scale})` }}>
+        {header}
+        <CompareView a={run} b={baseline} rel={rel} setRel={setRel} playing={cmpPlaying} setPlaying={setCmpPlaying} speed={speed}
+          imageUrlFor={name => r => source.imageUrl(name, r)} />
+        {help && <HowDrawer onClose={() => setHelp(false)} />}
+      </div>
+    </div>
+  )
   if (v === 'demo') return (
     <div className="stage-fit demo-stage">
       <div className="canvas v-demo" style={{ transform: `scale(${scale})` }}>
-        <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} walk={<HeaderWalk speed={speed} />} />
+        {header}
         <VideoHero run={run} runName={run.recs[0]?.run_id ?? ''} at={at} now={now} playing={playing} speed={speed} following={following} spectator={spectator} imageUrl={imageUrl} />
         <div className="strip">
           <Scrubber run={run} at={at} playing={playing} onPlay={setPlaying} onSeek={seek} />

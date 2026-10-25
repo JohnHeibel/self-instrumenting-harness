@@ -18,6 +18,12 @@ export const httpSource: DataSource = {
 
   imageUrl: (run, rec) => (rec.artifact ? `/runs/${enc(run)}/${rec.artifact}` : undefined),
 
+  async pairs() {
+    const r = await fetch('/runs/compare.json', { cache: 'no-store' }).catch(() => null)
+    const v = r?.ok ? await r.json().catch(() => null) : null
+    return v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([, b]) => typeof b === 'string')) as Record<string, string> : {}
+  },
+
   async video(run) {
     const r = await fetch(`/runs/${enc(run)}/video.json`, { cache: 'no-store' }).catch(() => null)
     if (!r?.ok) return null

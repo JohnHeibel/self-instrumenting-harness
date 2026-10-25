@@ -12,6 +12,7 @@ const RUNS = path.resolve(process.env.HARNESS_RUNS ?? path.join(path.dirname(fil
  *  GET /api/runs/<name>/records   -> all *.jsonl records in the run (?since=<ISO ts>: only newer ones)
  *  GET /runs/<name>/shots/<img>   -> screenshot thumbnails
  *  GET /runs/<name>/live/latest.jpg -> the spectator frame (the host window, every few seconds)
+ *  GET /runs/compare.json         -> run pairs for the comparison view
  *  GET /runs/<name>/video.json and the video file it names -> the run's recording (byte ranges)
  *  Nothing else under runs/ is served (a run directory also holds credentials). */
 function localRuns(): Plugin {
@@ -46,6 +47,12 @@ function localRuns(): Plugin {
             })).filter(r => !since || (typeof r.ts === 'string' && r.ts >= since))
           res.setHeader('Cache-Control', 'no-store')
           return send(res, 200, 'application/json', JSON.stringify(records))
+        }
+        // Run pairs for the comparison view: runs/compare.json {"<harness run>": "<raw baseline run>"}.
+        if (url === '/runs/compare.json') {
+          const file = path.join(RUNS, 'compare.json')
+          res.setHeader('Cache-Control', 'no-store')
+          return fs.existsSync(file) ? send(res, 200, 'application/json', fs.readFileSync(file)) : send(res, 404, 'text/plain', 'not found')
         }
         // A run's recorded video: <run>/video.json and the file it names (<run>/<name>.mp4|webm, or one folder down, e.g. <run>/cam/<name>.webm),
         // with byte ranges so the player can seek.

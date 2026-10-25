@@ -113,7 +113,7 @@ function SegmentChart({ def, value, segs, prevSegs, run, at, start, milestones, 
   const hs = hover !== null ? segs[hover] : undefined
   const prevPath = prevSegs?.filter(s => s.id && s.t1 + prevShift <= at).map(s => `M${x(s.t0 + prevShift)},${y(s.cw)}H${x(s.t1 + prevShift)}`).join('')
   return (
-    <Frame def={def} value={value} W={W} axis={<TimeAxis span={span} x={x} start={start} W={W} />} scaleHi={segs.length ? fmt(hi) : undefined} scaleLo={segs.length ? '0' : undefined}
+    <Frame def={def} value={value} W={W} axis={<TimeAxis span={span} x={x} start={start} W={W} />} scaleHi={segs.length && value !== undefined ? fmt(hi) : undefined} scaleLo={segs.length ? '0' : undefined}
       hover={hs && `${hs.name ?? 'in progress'} · ${fmt(hs.cw)}`} legend={prevSegs?.length ? prevName : undefined}
       onMove={e => { const r = e.currentTarget.getBoundingClientRect(); const t = start + (((e.clientX - r.left) * (W / r.width) - PL) / (W - PL - PR)) * span; const i = segs.findIndex(s => t >= s.t0 && t < s.t1); setHover(i >= 0 ? i : null) }}
       onLeave={() => setHover(null)}>
@@ -140,7 +140,7 @@ function BinChart({ def, value, bins, cum, prev, run, at, start, milestones, pre
   const now = cum[cum.length - 1]
   const hb = hover !== null ? bins[hover] : undefined, hc = hover !== null ? cum[hover] : undefined
   return (
-    <Frame def={def} value={value} W={W} axis={<TimeAxis span={span} x={x} start={start} W={W} />} scaleHi={vals.length ? fmt(hi, def) : undefined} scaleLo={vals.length ? (def.pct ? '0%' : '0') : undefined}
+    <Frame def={def} value={value} W={W} axis={<TimeAxis span={span} x={x} start={start} W={W} />} scaleHi={vals.length && value !== undefined ? fmt(hi, def) : undefined} scaleLo={vals.length ? (def.pct ? '0%' : '0') : undefined}
       hover={hb && `${hms(hb.t0 - run.t0)} · 15 min ${fmt(hb[k], def)} · run ${fmt(hc?.[k], def)}`} legend={prev?.length && k === 'cwPerAction' ? prevName : undefined}
       onMove={e => { const r = e.currentTarget.getBoundingClientRect(); const t = start + (((e.clientX - r.left) * (W / r.width) - PL) / (W - PL - PR)) * span; const i = bins.findIndex(b => t >= b.t0 && t < b.t1); setHover(i >= 0 ? i : null) }}
       onLeave={() => setHover(null)}>
