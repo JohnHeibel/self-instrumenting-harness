@@ -114,8 +114,8 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
     <div className="stage-fit demo-stage">
       <div className="canvas v-demo" style={{ transform: `scale(${scale})` }}>
         <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} />
-        <div className="left">
-          <VideoHero run={run} runName={run.recs[0]?.run_id ?? ''} at={at} now={now} playing={playing} speed={speed} following={following} spectator={spectator} imageUrl={imageUrl} />
+        <VideoHero run={run} runName={run.recs[0]?.run_id ?? ''} at={at} now={now} playing={playing} speed={speed} following={following} spectator={spectator} imageUrl={imageUrl} />
+        <div className="strip">
           <Scrubber run={run} at={at} playing={playing} onPlay={setPlaying} onSeek={seek} />
           <GoalBox run={run} at={at} />
           <ReasonStrip run={run} at={at} />

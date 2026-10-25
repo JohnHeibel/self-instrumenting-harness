@@ -151,7 +151,7 @@ export function ToolTiles({ run, at, open, onOpen }: { run: Run; at: number; ope
     <section className="tiles">
       <h2>tools it built</h2>
       <div className="tgrid">
-        {kits.map(k => {
+        {[...kits.map(k => {
           const v = k.versions[k.versions.length - 1]
           return (
             <button key={kitKey(k)} className={`tile ${k === newest ? 'newest' : ''} ${open === kitKey(k) ? 'open' : ''}`} onClick={() => onOpen(kitKey(k))}>
@@ -160,7 +160,7 @@ export function ToolTiles({ run, at, open, onOpen }: { run: Run; at: number; ope
               <span className="tt">{v ? span(at - v.t) : DASH}</span>
             </button>
           )
-        })}
+        }), ...Array.from({ length: Math.max(0, 8 - kits.length) }, (_, i) => <span key={`empty${i}`} className="tile empty" aria-hidden="true" />)]}
       </div>
     </section>
   )
