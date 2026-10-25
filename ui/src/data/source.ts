@@ -34,6 +34,8 @@ export interface DataSource {
   imageUrl(run: string, rec: TRec): string | undefined
   /** The run's recorded video, if it has one. */
   video?(run: string): Promise<VideoInfo | null>
+  /** Harness run → its raw baseline run (runs/compare.json). */
+  pairs?(): Promise<Record<string, string>>
 }
 
 /** SpacetimeDB first; when it can't be reached (listing or loading fails), the run files over HTTP. */
@@ -55,6 +57,7 @@ function withFallback(primary: DataSource, secondary: DataSource): DataSource {
     },
     imageUrl: (run, rec) => use.imageUrl(run, rec),
     video: run => (secondary.video ? secondary.video(run) : Promise.resolve(null)),
+    pairs: () => (secondary.pairs ? secondary.pairs() : Promise.resolve({})),
   }
 }
 

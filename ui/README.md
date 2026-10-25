@@ -28,6 +28,8 @@ Both produce the same records, so nothing above `src/data/source.ts` knows which
 
 `#v=demo` (the default): header "Sisyphean" (run switcher, model · agent, replay speed, clock, "?" with the parts linked to their source), the recorded video as the hero with chapter marks (milestones, tool versions, deaths) on the scrubber, the goal with every milestone, the newest reasoning, the four headline numbers, the task log (click a row for its arguments and result; `#call=last` opens the newest), and tiles for the tools the agent built (click one for its versions, code and the change each version made; `#tool=extension:<name>` opens one).
 
+**Compare**: `runs/compare.json` pairs a harness run with its raw baseline (`{"odoo-hero-smoke": "odoo-live-01"}`); for a paired run the header shows a Compare button (`#compare=1`, `ct=<s>` for the shared clock). Both recordings play side by side from their own starts on one clock and one scrubber, each with its own milestones and four headline numbers; nothing is compared.
+
 **Video**: put the recording in the run directory with `video.json`: `{"file": "obs.mp4", "start_utc": "2026-10-24T23:55:00.723Z"}` (`file` may also be one folder down, e.g. `cam/<name>.webm`; mp4 or webm). Optional `crop: {top, left, right, bottom}` (video pixels) and `frame_crop` (the saved frames; default: the top 5.6%, the host window's title bar) are applied in CSS; the files stay untouched. `start_utc` is the UTC time of the video's first frame; the player seeks the video to the event-log time. At speeds up to 16× it plays at that rate; faster, it is seeked. Without a video the run's saved frames show.
 
 **Look**: palette sampled from the ModdedBench screenshot (charcoal ground with a faint grid, near-black panels, amber headings and state); Menlo for text, Monocraft (OFL, `public/fonts/Monocraft.ttf`, self-hosted) for code. Metric charts start at 0 with the current value about halfway up; the top moves only when the value leaves 25–90% of it or the run-so-far line passes it.
@@ -49,9 +51,9 @@ Both produce the same records, so nothing above `src/data/source.ts` knows which
 
 The single accent (terracotta) marks state changes only: a milestone reached, a tool improved, a death or break. Type: Marcellus (display), Archivo at a condensed width (labels), Azeret Mono (data). Data panels are cool slate, the goal and Now panels warm stone.
 
-## Backdrop
+## Sisyphus
 
-`src/Backdrop.tsx` is the only file that names the background animation. To swap it, change its one import and element. The current one is `src/backdrop/sisyphus-v3.js`, a `<sisyphus-backdrop-v3>` web component; `styles.css` (`.figure .backdrop`) crops it to the figure, stone and slope in a panel at the foot of the side column, at full opacity, recoloured one quiet step above the page ground. He pushes only while the agent's hands are busy (`Run.handsActive`: a hands span from the costs.py rules in the last 5 s of run time, and the runner not off), and otherwise eases to a standstill. The playback rate (`src/pushRate.ts`) chases 1 or 0 as a critically damped spring: about 3 s over the full range in either direction, easing in and out; a flip mid-ramp turns from the current speed; activity must be gone 0.4 s of wall time before he starts to slow. It follows the view's position, so replay at speed and scrubbing drive it too. He holds still under reduced motion.
+`src/Backdrop.tsx` (`HeaderWalk`) is the only place he appears: the red-figure asset (`src/backdrop/sisyphus-v3.js`) re-posed on level ground (its `flat` attribute), drawn as faint white line art behind everything in the demo header, pushing the boulder left to right. At 1× he takes a step every 2 s and covers about 9 px a second, so a crossing takes about 226 s; then a 3.5 s pause and he comes in from the left again. Walking speed and the pause scale with the replay speed, capped at 144× (a crossing never under ~1.5 s). He walks on wall-clock time, always. `#walkat=<s>` holds him that many seconds into a crossing (for stills).
 
 ## Fake runs for development
 

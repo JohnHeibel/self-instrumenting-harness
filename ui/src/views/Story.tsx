@@ -1,10 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CallItem, Run, TRec } from '../data/model'
 import type { Spectator } from '../data/source'
-import { Backdrop } from '../Backdrop'
+import { HeaderWalk } from '../Backdrop'
 import { HookDetail } from '../components/HookDetail'
 import { Event, Header, Kits, Ledger, Screen } from '../components/panels'
 import { Calls, Climb, Figures, MilestoneList, Reasoning, Room } from '../components/stories'
+import { CompareView } from '../components/compare'
+import { useRunOnce } from '../data/useRunOnce'
+import { source } from '../data/source'
 import { CallWindow, DemoHeader, DemoMetrics, GoalBox, ReasonStrip, Scrubber, TaskLog, ToolTiles, ToolWindow, VideoHero, HowDrawer } from '../components/demo'
 import { MetricCharts } from '../components/MetricCharts'
 import { span } from '../util'
@@ -35,6 +38,20 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   const [tool, setTool] = useState<string | null>(() => params.get('tool'))
   const [help, setHelp] = useState(false)
   const [call, setCall] = useState<CallItem | null>(null)
+  // Comparison: the run's raw baseline from runs/compare.json; one clock (ms from each run's own start).
+  const [pair, setPair] = useState<string | null>(null)
+  const [comparing, setComparing] = useState(() => params.get('compare') === '1')
+  const [rel, setRel] = useState(() => Number(params.get('ct')) * 1000 || 0)
+  const [cmpPlaying, setCmpPlaying] = useState(false)
+  useEffect(() => { source.pairs?.().then(p => setPair(p[run.recs[0]?.run_id ?? ''] ?? null), () => {}) }, [run.recs])
+  const baseline = useRunOnce(comparing ? pair : null)
+  useEffect(() => {
+    if (!comparing || !cmpPlaying) return
+    let last = performance.now(), raf = 0
+    const tick = (t: number) => { const dt = (t - last) * speed; last = t; setRel(r => r + dt); raf = requestAnimationFrame(tick) }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [comparing, cmpPlaying, speed])
   // #call=last opens the newest task-log row (for linking a moment with its detail open).
   useEffect(() => { if (params.get('call') === 'last') setCall(run.calls(at).slice(-1)[0] ?? null) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   const [open, setOpen] = useState<string | null>(() => params.get('hook'))
@@ -98,7 +115,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   const openHook = open ? hooks.find(h => h.name === open) : undefined
   const v = (['demo', 'a', 'b', 'c', 'a1', 'a2', 'a3', 's1', 's2', 's3', 'm1', 'm2', 'm3'].includes(params.get('v') ?? '') ? params.get('v') : 'demo') as V
   const seek = (t: number) => setAt(Math.max(run.t0, Math.min(run.t1, t)))
-  const active = !(following && !live) && run.handsActive(at)
   const g = run.latest('goal', at)
   const game = (
     <div className="box game">
@@ -113,10 +129,22 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
       {g && <p className="deck">{g.serves && <>for {g.serves} · </>}set {span(at - g.t)} ago</p>}
     </section>
   )
+  const header = <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} walk={<HeaderWalk speed={speed} />}
+    pair={pair} comparing={comparing && !!pair} onCompare={() => { setComparing(c => !c); setPlaying(false); setCmpPlaying(false) }} clock={comparing && pair ? rel : undefined} />
+  if (v === 'demo' && comparing && pair) return (
+    <div className="stage-fit demo-stage">
+      <div className="canvas v-demo v-cmp" style={{ transform: `scale(${scale})` }}>
+        {header}
+        <CompareView a={run} b={baseline} rel={rel} setRel={setRel} playing={cmpPlaying} setPlaying={setCmpPlaying} speed={speed}
+          imageUrlFor={name => r => source.imageUrl(name, r)} />
+        {help && <HowDrawer onClose={() => setHelp(false)} />}
+      </div>
+    </div>
+  )
   if (v === 'demo') return (
     <div className="stage-fit demo-stage">
       <div className="canvas v-demo" style={{ transform: `scale(${scale})` }}>
-        <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} />
+        {header}
         <VideoHero run={run} runName={run.recs[0]?.run_id ?? ''} at={at} now={now} playing={playing} speed={speed} following={following} spectator={spectator} imageUrl={imageUrl} />
         <div className="strip">
           <Scrubber run={run} at={at} playing={playing} onPlay={setPlaying} onSeek={seek} />
@@ -137,8 +165,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   return (
     <div className="stage-fit">
       <div className={`canvas v-${v}${v[0] === 'a' && v.length === 2 ? ' v-at' : ''}${v[0] === 's' || v[0] === 'm' ? ' v-st' : ''}${v[0] === 'm' ? ' v-mt' : ''}`} style={{ transform: `scale(${scale})` }}>
-        {v.length === 2 && <Backdrop active={active} />}
-        {v[0] === 'm' && <Slope />}
         <Header run={run} at={at} now={now} onJump={jumpLive} />
         {(v[0] === 's' || v[0] === 'm') && <>
           {headline}
@@ -172,7 +198,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
           <div className="lead">{game}</div>
           <div className="tl"><Kits run={run} at={at} onOpen={setOpen} />{timeline}</div>
           <aside className="stats">
-            <Backdrop active={active} />
             <Figures run={run} at={at} />
             <section className="climbbox"><Climb run={run} at={at} w={388} h={190} onSeek={seek} labels={false} /></section>
             <Ledger run={run} at={at} />
@@ -186,7 +211,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
           </div>
           <Room run={run} at={at} now={now} variant="chat" />
           <aside className="stats">
-            <Backdrop active={active} />
             {headline}
             <section className="climbbox"><Climb run={run} at={at} w={454} h={230} onSeek={seek} /></section>
             <Ledger run={run} at={at} />
@@ -196,7 +220,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
         </>}
         {v === 'c' && <>
           <section className="mountain">
-            <Backdrop active={active} />
             {headline}
             <Climb run={run} at={at} w={1250} h={540} onSeek={seek} />
           </section>
@@ -209,12 +232,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
       </div>
     </div>
   )
-}
-
-/** The slope Sisyphus climbs, as one line from the bottom edge of the screen to the top edge, continuing the surface of the
- *  asset's slope under his feet (the figure is placed so it stands on it; see .v-mt > .backdrop in styles.css). */
-function Slope() {
-  return <svg className="slope" width={1920} height={1080} viewBox="0 0 1920 1080" aria-hidden="true"><line x1={152.5} y1={1080} x2={1538.6} y2={0} /></svg>
 }
 
 function useFit(): number {

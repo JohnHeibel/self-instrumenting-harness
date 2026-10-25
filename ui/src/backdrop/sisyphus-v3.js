@@ -8,6 +8,9 @@
  * ramp under him (the rear foot swings past and plants higher while the other leg drives back), and
  * the ground and boulder advance in sync with the planted feet.
  * Attributes: palette, opacity (0..1, default 1), paused (boolean), phase (0..1 freezes the cycle).
+ * `flat`: the same figure re-posed on level ground: no slope (the soles plant flat on a horizontal line at the soles'
+ * height), the boulder set down on that line where his hands still meet it, and no ground, cracks, rays or bands drawn.
+ * --sisy-ink-stroke / --sisy-ink-stroke-w stroke the silhouettes, for line-art styles.
  */
 (function () {
   const NS = 'http://www.w3.org/2000/svg';
@@ -30,6 +33,9 @@
   const STEP_BACK = 165;       // lift-off point of the driving (rear) foot
   const ROT_FLAT = -SLOPE_DEG; // sole flat on the slope (deg)
   const ROT_TOE = ROT_FLAT + 40; // heel-up at toe-off
+  // flat: level ground 212 art px below the hip (the legs' reach on the slope's lower side, so he strides rather than
+  // crouches); the boulder (drawn centred at 597,347) sits on it with its centre as far from the hands as on the slope
+  const FLAT_C = [637, 653];
   const HEAVE_ROT = 2.0;
   const HIP_SURGE = 5;          // hip pushes toward the stone with each heave
   const HIP_BOB = 8;            // hip drops into each plant, rises as the legs pass
@@ -405,7 +411,7 @@
       this.shadowRoot.innerHTML = `<style>
         :host{display:block;position:relative;overflow:hidden;contain:strict} :host([bands="none"]) .bands{display:none}
         svg{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:var(--sisy-opacity,1);transition:opacity .6s}
-        .ground{fill:var(--sisy-ground)} .ink{fill:var(--sisy-figure)} .inc{fill:var(--sisy-line)}
+        .ground{fill:var(--sisy-ground)} .ink{fill:var(--sisy-figure);stroke:var(--sisy-ink-stroke,none);stroke-width:var(--sisy-ink-stroke-w,0);stroke-linejoin:round} .inc{fill:var(--sisy-line)}
         .band{fill:var(--sisy-figure)} .bandbg{fill:var(--sisy-ground)}
         .crack .inc{fill:var(--sisy-line)}
         .rayd{fill:var(--sisy-ray)} .rayl{stroke:var(--sisy-ray);stroke-width:1.7;stroke-dasharray:11 7;fill:none}
@@ -454,16 +460,19 @@
       xL = PVX + (xL - PVX) / WORLD_SCALE; xR = PVX + (xR - PVX) / WORLD_SCALE;
       // the slope: one straight line at SLOPE_DEG, tangent to the boulder, from the base band up past the edge
       const M = data.parts.mountain;
-      const th = SLOPE_DEG * D2R;
+      const flat = this.hasAttribute('flat');
+      this._flat = flat;
+      this._rotFlat = flat ? 0 : ROT_FLAT; this._rotToe = this._rotFlat + 40;
+      const th = (flat ? 0 : SLOPE_DEG) * D2R;
       this._u = [Math.cos(th), -Math.sin(th)];           // up the slope
       this._n = [Math.sin(th), Math.cos(th)];            // into the ground
-      const Cb = [597, 347], Rb = 247;
+      const Cb = flat ? FLAT_C : [597, 347], Rb = 247;
       this._T = [Cb[0] + Rb * this._n[0], Cb[1] + Rb * this._n[1]]; // boulder contact
       const lineY = (x) => this._T[1] - (x - this._T[0]) * Math.tan(th);
       const yMax = PVY + (944.5 - PVY) / WORLD_SCALE;                                // stop above the tongue row of the base band
-      const x0 = this._T[0] + (this._T[1] - yMax) / Math.tan(th);
+      const x0 = flat ? xL : this._T[0] + (this._T[1] - yMax) / Math.tan(th);
       const slopeD = `M${xL} ${yMax} L${x0} ${yMax} L${xR} ${lineY(xR)} L${xR} ${yMax} Z`;
-      const slopeG = add(scene, 'g', { 'clip-path': 'url(#below-band)' });
+      const slopeG = add(scene, 'g', { 'clip-path': 'url(#below-band)', style: flat ? 'display:none' : '' });
       const bb = add(defs, 'clipPath', { id: 'below-band', clipPathUnits: 'userSpaceOnUse' });
       add(bb, 'rect', { x: xL, y: 82.5, width: xR - xL, height: 900 });
       add(slopeG, 'path', { class: 'ink', d: slopeD });
@@ -481,7 +490,7 @@
 
       // boulder rolls about its centre
       const B = data.parts.boulder;
-      this._boulder = add(scene, 'g', {});
+      this._boulder = add(add(scene, 'g', flat ? { transform: `translate(${FLAT_C[0] - 597},${FLAT_C[1] - 347})` } : {}), 'g', {});
       this._boulder.appendChild(partEl('boulder', data));
 
       const mk = (name, haloLayer, outline) => {
@@ -578,6 +587,7 @@
       this._C = [597, 347];
       this._R = 247;
       this._D0 = len(v(this._C, J.hand));
+      if (this._flat) this._C = FLAT_C;
     }
 
     _time() {
@@ -623,7 +633,7 @@
       if (p < DUTY) {
         const sgm = Math.min(1, (this._ground(t) - this._ground(tPlant)) / L);
         const toe = [F[0] + (R[0] - F[0]) * sgm, F[1] + (R[1] - F[1]) * sgm];
-        const rot = ROT_FLAT + (sgm > 0.66 ? (ROT_TOE - ROT_FLAT) * easeIO((sgm - 0.66) / 0.34) : 0);
+        const rot = this._rotFlat + (sgm > 0.66 ? (this._rotToe - this._rotFlat) * easeIO((sgm - 0.66) / 0.34) : 0);
         return { toe, rot, planted: true, stance: p / DUTY };
       }
       const s = (p - DUTY) / (1 - DUTY);
@@ -631,7 +641,7 @@
       const e = 1 - Math.pow(1 - smooth(s), 1.7);
       const lift = LIFT * Math.pow(Math.sin(Math.PI * Math.min(1, s * 1.04)), 0.8) * (1 - 0.25 * s);
       const toe = [R[0] + (F[0] - R[0]) * e - this._n[0] * lift, R[1] + (F[1] - R[1]) * e - this._n[1] * lift];
-      const rot = ROT_TOE + (ROT_FLAT - 6 - ROT_TOE) * easeIO(Math.min(1, s / 0.75)) + 6 * smooth(clamp01((s - 0.75) / 0.25));
+      const rot = this._rotToe + (this._rotFlat - 6 - this._rotToe) * easeIO(Math.min(1, s / 0.75)) + 6 * smooth(clamp01((s - 0.75) / 0.25));
       return { toe, rot, planted: false, stance: 0 };
     }
 
@@ -700,7 +710,7 @@
       const openA = clamp01(1 - (a.sh - a.th) / restBend), openB = clamp01(1 - (b.sh - b.th) / restBend);
       // feet (rigid sandals)
       const setT = (el, tr) => { el.setAttribute('transform', tr); if (el._halo) el._halo.setAttribute('transform', tr); };
-      const toeRot = (f) => f.planted ? ROT_FLAT : f.rot - 14;
+      const toeRot = (f) => f.planted ? this._rotFlat : f.rot - 14;
       this._footDA.draw(a.ankle, J.ankleA, fA.rot, toeRot(fA));
       this._footDB.draw(b.ankle, J.ankleA, fB.rot, toeRot(fB));
       // bones
@@ -774,7 +784,7 @@
       this._forearm.update([CHm, FAm]);
 
       // boulder roll and ground scroll advance together during the press
-      this._boulder.setAttribute('transform', `rotate(${((g / this._R) / D2R % 360).toFixed(3)} ${C[0]} ${C[1]})`);
+      this._boulder.setAttribute('transform', `rotate(${((g / this._R) / D2R % 360).toFixed(3)} 597 347)`);  // art coordinates (flat: inside the move)
       const ux = this._u[0], uy = this._u[1];
       for (const [el2, i] of this._cracks) {
         const o = i * CRACK_PERIOD - (g % CRACK_PERIOD);

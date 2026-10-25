@@ -9,7 +9,10 @@ import { SPEEDS, diffLines, hms, span } from '../util'
 const DASH = '—'
 
 /** Header: title, run switcher, model · agent, replay speed, run clock, and the "?" drawer. */
-export function DemoHeader({ run, at, speed, onSpeed, onHelp }: { run: Run; at: number; speed: number; onSpeed: (s: number) => void; onHelp: () => void }) {
+export function DemoHeader({ run, at, speed, onSpeed, onHelp, walk, pair, comparing, onCompare, clock }: {
+  run: Run; at: number; speed: number; onSpeed: (s: number) => void; onHelp: () => void; walk?: React.ReactNode
+  pair?: string | null; comparing?: boolean; onCompare?: () => void; clock?: number
+}) {
   const [runs, setRuns] = useState<string[]>([])
   const current = run.recs[0]?.run_id ?? ''
   useEffect(() => { source.listRuns().then(r => setRuns(r.map(x => x.name)), () => setRuns([])) }, [])
@@ -21,15 +24,21 @@ export function DemoHeader({ run, at, speed, onSpeed, onHelp }: { run: Run; at: 
   }
   return (
     <header className="dh">
+      {walk}
       <span className="dtitle">Sisyphean</span>
-      <select className="runs" value={current} onChange={e => go(e.target.value)} aria-label="Run">
-        {(runs.includes(current) ? runs : [current, ...runs]).map(r => <option key={r} value={r}>{r}</option>)}
-      </select>
-      <span className="rig">{[h.model, h.agent].filter(Boolean).join(' · ') || DASH}</span>
+      {comparing
+        ? <span className="rig cmp-names"><b>{current}</b> · <b>{pair}</b></span>
+        : <>
+          <select className="runs" value={current} onChange={e => go(e.target.value)} aria-label="Run">
+            {(runs.includes(current) ? runs : [current, ...runs]).map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <span className="rig">{[h.model, h.agent].filter(Boolean).join(' · ') || DASH}</span>
+        </>}
+      {pair && <button className={`cmpbtn ${comparing ? 'on' : ''}`} onClick={onCompare}>Compare</button>}
       <span className="speeds" role="group" aria-label="Replay speed">
         {SPEEDS.map(s => <button key={s} className={s === speed ? 'on' : ''} onClick={() => onSpeed(s)}>{s}×</button>)}
       </span>
-      <span className="dclock">{hms(at - run.t0)}</span>
+      <span className="dclock">{hms(clock ?? at - run.t0)}</span>
       <button className="help" onClick={onHelp} aria-label="How it works">?</button>
     </header>
   )

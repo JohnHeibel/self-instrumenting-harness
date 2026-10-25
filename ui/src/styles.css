@@ -456,8 +456,6 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
   --sisy-ground: transparent !important; --sisy-figure: transparent !important; --sisy-line: var(--outline) !important;
   --sisy-mottle: transparent !important; --sisy-ray: transparent !important; --sisy-halo: transparent !important;
   clip-path: polygon(0 0, 97.6% 0, 25.4% 100%, 0 100%); }
-.v-mt > .slope { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; }
-.v-mt > .slope line { stroke: var(--outline); stroke-width: 1.2; opacity: .5; }
 
 /* ---------- Demo (#v=demo, the default): wireframe v4 ----------
    Palette sampled from the ModdedBench screenshot (images/3.webp): ground #3a3c42 with a faint 104 px grid of #33363b
@@ -616,3 +614,35 @@ button.tile:hover { border-color: var(--rule-hi); }
 
 /* Code in Monocraft */
 .v-demo .tcode pre, .v-demo .tcode pre *, .v-demo .cbody pre.cargs { font-family: "Monocraft", Menlo, ui-monospace, monospace; }
+
+/* Sisyphus walks across the header, behind everything in it: white line art (silhouettes stroked, nothing filled), faint */
+.dh { position: relative; overflow: hidden; }
+.dh > :not(.walk) { position: relative; z-index: 1; }
+.dh .walk { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.dh .walker { position: absolute; left: 0; top: 0; will-change: transform; opacity: .32; }
+.dh .walker sisyphus-backdrop-v3 { display: block; width: 100%; height: 100%;
+  --sisy-ground: transparent !important; --sisy-figure: transparent !important; --sisy-line: #ffffff !important; --sisy-mottle: transparent !important;
+  --sisy-ray: transparent !important; --sisy-halo: transparent; --sisy-ink-stroke: #ffffff; --sisy-ink-stroke-w: 9px; }
+
+/* Compare toggle and the comparison screen: two recordings side by side, one scrubber, each run's own block under it */
+.cmpbtn { border: 2px solid var(--rule-hi); color: var(--ink2); font-size: 17px; padding: 3px 12px; }
+.cmpbtn:hover { color: var(--ink); border-color: var(--ink); }
+.cmpbtn.on { background: var(--accent); border-color: var(--accent); color: #0b0d10; }
+.cmp-names b { color: var(--ink); font-weight: 600; }
+.v-cmp { grid-template-columns: 1fr; grid-template-rows: 62px 1fr; grid-template-areas: "head" "pair"; }
+.cmp-body { grid-area: pair; display: flex; flex-direction: column; min-height: 0; }
+.cmp-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 16px; }
+.cmp-videos { height: 520px; padding-top: 12px; flex: none; }
+.v-cmp .hero { grid-area: auto; position: relative; background: var(--frame); }
+.cmp-scrub { margin: 10px 16px 0; height: 44px; flex: none; border: 2px solid var(--rule); }
+.cmp-scrub .ch.up { top: 3px; height: 17px; } .cmp-scrub .ch.down { top: 22px; height: 17px; background: var(--ink2); }
+.cmp-stats { flex: 1; min-height: 0; padding-top: 6px; }
+.cmp-side { display: flex; flex-direction: column; min-height: 0; }
+.cmp-side .goalbox { padding: 10px 4px 8px; flex: none; }
+.cmp-name { flex: 1; font-size: 22px; color: var(--ink2); }
+.cmp-side .mlist { grid-template-columns: repeat(3, 1fr); font-size: 14px; }
+.cmp-side .mcharts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 4px 0 14px; }
+.cmp-side .mchart { height: 158px; }
+.cmp-side .mchart b { font-size: 34px; }
+.cmp-side .mchart .ml { font-size: 13px; }
+.cmp-loading { grid-area: pair; display: grid; place-items: center; color: var(--faint); }
