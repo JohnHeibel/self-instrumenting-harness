@@ -76,7 +76,7 @@ export type Metrics = {
   tokens: number; cw: number; steps: number; actions: number; milestones: number
   tokPerHour?: number; handsPct?: number; tokPerStep?: number; tokPerAction?: number
   cwPerMilestone?: number; cwPerAction?: number; actPerStep?: number
-  context?: number  // raw context of the newest request: its input_tokens + cached_input_tokens
+  context?: number  // raw context of the newest request (contextOf)
 }
 /** One point of a metric series: the four efficiency numbers over a stretch of the run (a bin, or the run so far). */
 /** Cache-weighted tokens of one `usage` record (docs/BRIEF.md "Metrics"; costs.weighted()): uncached input and output in

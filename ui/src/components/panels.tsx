@@ -89,7 +89,7 @@ export function Ledger({ run, at }: { run: Run; at: number }) {
     ['cw tokens', num(m?.cw), 'diag', 'Σ usage input + output + 0.1 × cached input'],
     ['raw tok / hour', num(m?.tokPerHour), 'diag', 'diagnostic: Σ usage total_tokens growth ÷ wall hours (time_use.py)'],
     ['raw tok / step', num(m?.tokPerStep), 'diag', 'diagnostic: Σ usage total_tokens growth ÷ usage records'],
-    ['context / req', num(m?.context), 'diag', 'diagnostic: newest usage input_tokens + cached_input_tokens'],
+    ['context / req', num(m?.context), 'diag', 'diagnostic: newest request context (input_tokens, which includes cached input; input + cached for older Claude runs)'],
   ]
   return (
     <dl className="box ledger" aria-label="Counts">
