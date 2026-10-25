@@ -7,7 +7,7 @@ const fmt = (v: number | undefined, f: (n: number) => string = big) => (v === un
 const pct = (v?: number) => fmt(v, x => `${Math.round(x * 100)}%`)
 const dec = (v?: number) => fmt(v, x => x.toFixed(1))
 
-const FROM_LABEL: Record<RoomItem['from'], string> = {
+const FROM_LABEL: Record<string, string> = {
   player: 'player', supervisor: 'supervisor', harness: 'harness', 'tool review': 'tool review', runner: 'runner', grader: 'grader',
 }
 
@@ -29,7 +29,7 @@ export function StateLine({ run, at, now }: { run: Run; at: number; now: number 
 
 /** The room: the player's words and goals, what its watchers told it, and the grader's verdicts, newest at the bottom,
  *  cut at the replay position. Each line is a record's own text, cut at a sentence end. */
-export function Room({ run, at, now, variant }: { run: Run; at: number; now: number; variant: 'letters' | 'chat' | 'inscriptions' }) {
+export function Room({ run, at, now, variant }: { run: Run; at: number; now: number; variant: 'letters' | 'chat' | 'inscriptions' | 'app' }) {
   const items = run.room(at, variant === 'chat' ? 60 : 40)
   const box = useRef<HTMLDivElement>(null)
   const last = items[items.length - 1]
@@ -38,10 +38,27 @@ export function Room({ run, at, now, variant }: { run: Run; at: number; now: num
     <section className={`room room-${variant}`} aria-label="The room">
       <div className="roomhead"><StateLine run={run} at={at} now={now} /></div>
       <div className="roombody" ref={box}>
-        {items.map(i => <Line key={`${i.t}${i.kind}${i.text.slice(0, 12)}`} item={i} run={run} />)}
+        {items.map(i => variant === 'app' ? <Msg key={`${i.t}${i.kind}${i.text.slice(0, 12)}`} item={i} run={run} /> : <Line key={`${i.t}${i.kind}${i.text.slice(0, 12)}`} item={i} run={run} />)}
         {!items.length && <p className="quiet">{DASH}</p>}
       </div>
     </section>
+  )
+}
+
+const INITIALS: Record<string, string> = { player: 'P', supervisor: 'S', harness: 'H', 'tool review': 'TR', runner: 'R' }
+
+/** A message-app row: avatar initials, sender and time, then the bubble. The grader's verdicts are system rows. */
+function Msg({ item: i, run }: { item: RoomItem; run: Run }) {
+  if (i.from === 'grader') return <div className={`sys ${i.kind}`}><span>{i.kind === 'milestone' ? `milestone · ${i.text}` : i.text}</span><time>{hms(i.t - run.t0)}</time></div>
+  const own = i.from === 'player'
+  return (
+    <div className={`msg ${own ? 'own' : 'watch'} from-${i.from.replace(/\s+/g, '-')} k-${i.kind}`} title={i.full}>
+      <span className="av" aria-hidden="true">{INITIALS[i.from] ?? i.from.slice(0, 1).toUpperCase()}</span>
+      <div className="mb">
+        <div className="mhd"><b>{FROM_LABEL[i.from] ?? i.from}</b><time>{hms(i.t - run.t0)}</time></div>
+        <p>{i.kind === 'goal' && <em>goal </em>}{i.text}</p>
+      </div>
+    </div>
   )
 }
 
@@ -52,7 +69,7 @@ function Line({ item: i, run }: { item: RoomItem; run: Run }) {
   const own = i.from === 'player'
   return (
     <div className={`rl ${own ? 'own' : 'watch'} from-${i.from.replace(' ', '-')} k-${i.kind}`} title={i.full}>
-      <div className="who"><span>{FROM_LABEL[i.from]}</span><time>{hms(i.t - run.t0)}</time></div>
+      <div className="who"><span>{FROM_LABEL[i.from] ?? i.from}</span><time>{hms(i.t - run.t0)}</time></div>
       <p>{i.kind === 'goal' ? <><em>goal</em> {i.text}</> : i.text}</p>
     </div>
   )

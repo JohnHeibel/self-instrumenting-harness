@@ -11,7 +11,7 @@ import { Timeline } from '../components/Timeline'
 import { SPEEDS, useNow } from '../util'
 
 /** Three directions, chosen with #v=a|b|c: a broadsheet front page, the room first, the climb. */
-type V = 'a' | 'b' | 'c'
+type V = 'a' | 'b' | 'c' | 'a1' | 'a2' | 'a3'
 
 /** A run, live or finished: follows the newest moment by default; scrub, play at timelapse speed, jump between
  *  key moments, open any hook. `t=live` in the URL means following. */
@@ -90,7 +90,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
 
   const hooks = run.hooks(at)
   const openHook = open ? hooks.find(h => h.name === open) : undefined
-  const v = (['a', 'b', 'c'].includes(params.get('v') ?? '') ? params.get('v') : 'a') as V
+  const v = (['a', 'b', 'c', 'a1', 'a2', 'a3'].includes(params.get('v') ?? '') ? params.get('v') : 'a1') as V
   const seek = (t: number) => setAt(Math.max(run.t0, Math.min(run.t1, t)))
   const active = !(following && !live) && run.handsActive(at)
   const g = run.latest('goal', at)
@@ -109,8 +109,21 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   )
   return (
     <div className="stage-fit">
-      <div className={`canvas v-${v}`} style={{ transform: `scale(${scale})` }}>
+      <div className={`canvas v-${v}${v.length === 2 ? ' v-at' : ''}`} style={{ transform: `scale(${scale})` }}>
+        {v.length === 2 && <Backdrop active={active} />}
         <Header run={run} at={at} now={now} onJump={jumpLive} />
+        {v.length === 2 && <>
+          {headline}
+          <aside className="stats">
+            {v === 'a2'
+              ? <><section className="climbbox"><Climb run={run} at={at} w={374} h={300} onSeek={seek} /></section><Figures run={run} at={at} /></>
+              : <><Figures run={run} at={at} /><section className="climbbox"><Climb run={run} at={at} w={374} h={200} onSeek={seek} /></section></>}
+            <Ledger run={run} at={at} />
+          </aside>
+          <div className="lead">{game}</div>
+          <div className="tl"><Kits run={run} at={at} onOpen={setOpen} />{timeline}</div>
+          <Room run={run} at={at} now={now} variant="app" />
+        </>}
         {v === 'a' && <>
           {headline}
           <div className="lead">{game}</div>

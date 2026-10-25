@@ -106,7 +106,7 @@ export type Kit = {
 }
 /** One line in "the room": the player's own words and goals, what the people and programs watching it told it, and the
  *  grader's verdicts, in time order. `text` is the record's own text, cut at a sentence end (never generated). */
-export type RoomFrom = 'player' | 'supervisor' | 'harness' | 'tool review' | 'runner' | 'grader'
+export type RoomFrom = 'player' | 'supervisor' | 'harness' | 'tool review' | 'runner' | 'grader' | (string & {})
 export type RoomItem = {
   t: number; from: RoomFrom; kind: 'say' | 'goal' | 'nudge' | 'stuck' | 'failed' | 'review' | 'idle' | 'handoff' | 'reset' | 'note' | 'milestone' | 'death'
   text: string; full?: string; missing?: string
@@ -524,23 +524,23 @@ export class Run {
       } else if (r.type === 'goal' && r.text) {
         out.push({ t: r.t, from: 'player', kind: 'goal', text: String(r.text), full: r.serves ? `for ${r.serves}` : undefined })
       } else if (r.type === 'marker') {
-        const k = String(r.kind)
+        // Message markers name their sender in `from` (runner f86e4e7); older runs fall back to the kind.
+        const k = String(r.kind), text = String(r.text ?? '')
+        const from = (fallback: RoomFrom): RoomFrom => (typeof r.from === 'string' && r.from ? r.from : fallback)
         if (k === 'supervisor_nudge') {
-          const body = String(r.text ?? '').replace(/^Guidance from the people running this run[^:\n]*:\s*/i, '')
-          out.push({ t: r.t, from: 'supervisor', kind: 'nudge', text: body ? sentence(body, 190) : String(r.label ?? 'nudge'), full: body || undefined,
-            missing: body ? undefined : 'marker supervisor_nudge has no text' })
+          const body = text.replace(/^Guidance from the people running this run[^:\n]*:\s*/i, '')
+          out.push({ t: r.t, from: from('supervisor'), kind: 'nudge', text: body ? sentence(body, 190) : String(r.label ?? 'nudge'), full: body || undefined })
         } else if (k === 'idle_nudge') {
-          out.push({ t: r.t, from: 'runner', kind: 'idle', text: r.text ? sentence(String(r.text), 170) : 'idle nudge', full: r.text,
-            missing: r.text ? undefined : 'marker idle_nudge has no text' })
+          out.push({ t: r.t, from: from('runner'), kind: 'idle', text: text ? sentence(text, 170) : 'idle nudge', full: text || undefined })
         } else if (k === 'context_handoff') {
-          out.push({ t: r.t, from: 'runner', kind: 'handoff', text: r.text ? sentence(String(r.text), 170)
-            : `context at ${Math.round((Number(r.context_tokens) || 0) / 1000)}k tokens: hand off`, full: r.text, missing: r.text ? undefined : 'marker context_handoff has no text' })
+          out.push({ t: r.t, from: from('runner'), kind: 'handoff', text: text ? sentence(text, 170)
+            : `context at ${Math.round((Number(r.context_tokens) || 0) / 1000)}k tokens: hand off`, full: text || undefined })
         } else if (k === 'context_reset') {
-          out.push({ t: r.t, from: 'runner', kind: 'reset', text: 'fresh session' })
+          out.push({ t: r.t, from: from('runner'), kind: 'reset', text: 'fresh session' })
         } else if (k === 'agent_died') {
           out.push({ t: r.t, from: 'grader', kind: 'death', text: String(r.label ?? 'died') })
-        } else if (r.text && !['prompt_goal', 'prompt_continue', 'interrupt', 'context_handoff_done'].includes(k)) {
-          out.push({ t: r.t, from: 'runner', kind: 'note', text: sentence(String(r.text), 170), full: String(r.text) })  // update notes, brief diffs
+        } else if (text && !['prompt_goal', 'prompt_continue', 'interrupt', 'context_handoff_done'].includes(k)) {
+          out.push({ t: r.t, from: from(k === 'update_note' ? 'supervisor' : 'runner'), kind: 'note', text: sentence(text.split('\n').find(l => l.trim()) ?? text, 170), full: text })  // update notes, brief/goal diffs
         }
       } else if (r.type === 'notice') {
         const text = String(r.text ?? '')
