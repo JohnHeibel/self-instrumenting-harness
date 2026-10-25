@@ -34,6 +34,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,8 @@ MAX_SOURCE_BYTES = 64 * 1024
 MAX_RESULT_CHARS = 20_000
 LANGS = {".lua": "lua", ".py": "python", ".cs": "csharp", ".java": "java", ".js": "javascript",
          ".ts": "typescript", ".sh": "shell", ".rs": "rust", ".go": "go", ".rb": "ruby"}
+
+RELOADING = "RELOADING"   # in the run dir while a reload command runs; the runner reads it
 
 
 # --------------------------------------------------------------------------- host config
@@ -529,7 +532,18 @@ class Extensions:
         argv = self.host.reload_actions[action]
         if not argv:
             return True, ""
-        code, out, err = await _exec(argv, self.host.config_dir, "", self.host.reload_timeout_s)
+        # A reload may take the host down on purpose (a restart). RELOADING tells the runner so,
+        # until the deadline, so it neither starts the host itself nor interrupts the agent.
+        flag = self.archive_dir.parent / RELOADING
+        try:
+            flag.write_text(json.dumps({"action": action, "until": time.time() + self.host.reload_timeout_s + 30}),
+                            encoding="utf-8")
+        except OSError:
+            pass
+        try:
+            code, out, err = await _exec(argv, self.host.config_dir, "", self.host.reload_timeout_s)
+        finally:
+            flag.unlink(missing_ok=True)
         return code == 0, _tail(out + err)
 
 

@@ -17,7 +17,9 @@ It owns the run directory and the tool server's lifecycle, writes runner.jsonl
 - Failures back off 30 s, 60 s, ... up to 1 h, and the run gives up after 12 in a row. When
   Codex reports a rate limit reached with a reset time, the backoff waits until then instead.
   A completed turn, or any turn longer than 10 minutes, resets the count.
-- No turn starts while the host is down; a host that goes down mid-turn interrupts it.
+- No turn starts while the host is down; a host that goes down mid-turn interrupts it. While the
+  tool server runs an extension reload (RELOADING), a down host is the reload's own restart: the
+  runner neither starts the host nor interrupts the agent, until the reload's deadline.
 - Every turn after the first gets the same fixed CONTINUE_PROMPT, except a wake-up: when the tool
   server writes WAKE (an urgent notice from one of the agent's own rules or tasks), the runner
   interrupts the agent's thinking and starts a turn that tells it what happened. While the agent is
@@ -77,6 +79,7 @@ RUN_FILES = "run"   # workspace/run/: BRIEF.md, GOAL.md, HOST.md, rewritten on e
 RATE_LIMIT_MARGIN_S = 60
 INTERRUPT_RESEND = 15            # resend turn/interrupt this often until the turn ends
 INPUT_BLOCKED = "INPUT_BLOCKED"   # written by the tool server while input can't reach the host
+RELOADING = "RELOADING"   # written by the tool server while an extension reload (maybe a host restart) runs
 
 
 class Stalled(Exception):
@@ -204,7 +207,7 @@ class Runner:
                                   extra={"goal": self.cfg.goal, "brief": self._brief(), "host": self.host.name})
             self._save()
         self._write_run_files()
-        for f in ("STOPPING", "RUNNING"):      # left by the last stop, or by a tool server that died
+        for f in ("STOPPING", "RUNNING", RELOADING):      # left by the last stop, or by a tool server that died
             (self.run_dir / f).unlink(missing_ok=True)
 
         if self.cfg.toolserver:
@@ -237,7 +240,10 @@ class Runner:
                 self._wait(self.cfg.host_poll)
                 continue
             up, detail = self.host_check()
-            if not up and self._start_host(detail):
+            reloading = None if up else self._reloading()
+            if reloading:
+                detail = f"{reloading} ({detail})"   # the reload brings it back; don't start a second one
+            elif not up and self._start_host(detail):
                 up, detail = self.host_check()
             if not up:
                 self._set_counting(False)
@@ -381,7 +387,7 @@ class Runner:
             return "input_blocked"
         if self._wake_due():
             return "wake"
-        if check_host:
+        if check_host and not self._reloading():   # a reload's own restart isn't a host failure
             up, detail = self.host_check()
             if not up:
                 self.mapper.state("host_down", detail)
@@ -419,6 +425,16 @@ class Runner:
             tmp.write_text(json.dumps((old + keys)[-200:]), encoding="utf-8")
             tmp.replace(t)
         return "\n".join(f"- {i.get('source', '?')}: {i.get('text', '')}" for i in items)[:2000]
+
+    def _reloading(self) -> str | None:
+        """While the tool server runs an extension reload (before its deadline): a detail, else None."""
+        try:
+            d = json.loads((self.run_dir / RELOADING).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if time.time() > float(d.get("until", 0)):
+            return None
+        return f"host reloading for an extension ({d.get('action', '?')})"
 
     def _input_blocked(self) -> str | None:
         """The tool server's INPUT_BLOCKED detail while input can't reach the host, else None."""

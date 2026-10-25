@@ -283,3 +283,31 @@ def test_wall_clock_deadline_ends_the_run(h):
     clock = Clock()
     script = {"processes": [{"turns": [[{"usage": 1}]] * 50}]}
     assert h.runner(script, clock=clock, sleep=clock.sleep, until=T0 - 1).run() == "deadline"
+
+
+def test_a_reload_restarting_the_host_is_waited_out_not_restarted_or_interrupted(h):
+    import json as _json
+    import time as _time
+    flag = h.run_dir / "RELOADING"
+    checks = {"n": 0}
+
+    def check():   # down while the tool server's reload restarts it, then back
+        checks["n"] += 1
+        if checks["n"] == 1:
+            flag.write_text(_json.dumps({"action": "restart", "until": _time.time() + 60}))
+        if checks["n"] == 4:
+            flag.unlink()
+        return checks["n"] >= 4, "host window"
+    script = {"processes": [{"turns": [[{"usage": 100}]]}]}
+    r = h.runner(script, host_toml=HOST_CTL, host_check=check, budget_tokens=50, sleep=lambda s: None)
+    assert r.run() == "budget_tokens"
+    assert not (h.run_dir / "starts").exists()                     # the runner never started a second one
+    downs = [s["text"] for s in h.records("agent_state") if s["state"] == "host_down"]
+    assert downs and all("reloading for an extension (restart)" in d for d in downs)
+    # Mid-turn, a reload's restart doesn't interrupt the agent (whose load_extension call is waiting on it).
+    r._end_reason = lambda: None
+    flag.write_text(_json.dumps({"action": "restart", "until": _time.time() + 60}))
+    assert r._interrupt_reason(check_host=True) is None
+    # A reload past its deadline no longer holds anything back.
+    flag.write_text(_json.dumps({"action": "restart", "until": _time.time() - 1}))
+    assert r._reloading() is None

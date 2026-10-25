@@ -503,8 +503,13 @@ def test_host_config_placeholders_and_reload_runs_from_the_config_dir(tmp_path):
     assert hc.up_check == [sys.executable, "check.py", str(run.resolve())]
     assert hc.start[-1] == str(run.resolve()) and hc.stop == []
     assert hc.notes == f"state is in {run.resolve()}/out"
-    ok, out = asyncio.run(Extensions._reload(SimpleNamespace(host=hc), "here"))
+    ok, out = asyncio.run(Extensions._reload(SimpleNamespace(host=hc, archive_dir=run / "extensions"), "here"))
     assert ok and out.strip() == str(cfg_dir.resolve())
+    # While a reload runs, RELOADING in the run dir tells the runner the host may go down on purpose.
+    run.mkdir(exist_ok=True)
+    hc.reload_actions["peek"] = [sys.executable, "-c", f"import os; print(os.path.exists(r'{run / 'RELOADING'}'))"]
+    ok, out = asyncio.run(Extensions._reload(SimpleNamespace(host=hc, archive_dir=run / "extensions"), "peek"))
+    assert ok and out.strip() == "True" and not (run / "RELOADING").exists()
     with pytest.raises(ValueError, match="no run directory"):
         HostConfig.load(cfg)
     cfg.write_text('[host]\nstart = "ctl.py start"\n')
