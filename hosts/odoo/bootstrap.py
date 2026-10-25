@@ -7,7 +7,7 @@ What it does (the agent never sees any of it):
   1. drops the `odoo` database if there is one, and installs a fresh one without demo data:
      base, sale_management, purchase, stock, account (Invoicing), then loads the generic chart of accounts (template generic_coa)
   2. in an `odoo shell` in a one-off container: sets a random admin
-     password, and creates three users without passwords (they can only be used through their API keys):
+     password, and creates users without passwords (they can only be used through their API keys):
        sisyphus_agent   Sales (all documents), Purchase, Inventory and Invoicing user rights, plus creating
                         contacts and products; not Settings or Administration
        sisyphus_auditor a read-only group made here (read access to the models the grader looks at, nothing else)
@@ -83,13 +83,35 @@ world = make("sisyphus_world", "Sisyphus World Simulator", groups(
     "stock.group_stock_manager", "account.group_account_invoice", "base.group_partner_manager",
     "product.group_product_manager"))
 
+# Read-only observer for the follow-the-agent camera (hosts/odoo/cam.py): the one user with a web password.
+# Read access on every model the agent's groups can use (no write/create/unlink anywhere) plus the agent's menus.
+observer_group = env["res.groups"].create({"name": "Sisyphus Observer (read only)", "implied_ids": [(6, 0, groups("base.group_user"))]})
+agent_gids = set(agent[gf].all_implied_ids.ids) | set(agent[gf].ids)
+seen = set()
+for acc in env["ir.model.access"].sudo().search([("group_id", "in", list(agent_gids)), ("perm_read", "=", True)]):
+    if acc.model_id.id in seen:
+        continue
+    seen.add(acc.model_id.id)
+    env["ir.model.access"].create({"name": "sisyphus observer read " + acc.model_id.model, "model_id": acc.model_id.id,
+                                   "group_id": observer_group.id, "perm_read": True, "perm_write": False,
+                                   "perm_create": False, "perm_unlink": False})
+mg = "group_ids" if "group_ids" in env["ir.ui.menu"]._fields else "groups_id"
+visible = env["ir.ui.menu"].with_user(agent)._visible_menu_ids()   # the agent's menus, so the observer sees the same apps
+for menu in env["ir.ui.menu"].sudo().with_context(ir_ui_menu_full_list=True).browse(list(visible)):
+    if menu[mg]:
+        menu.write({mg: [(4, observer_group.id)]})
+observer_pw = secrets.token_urlsafe(18)
+observer = make("sisyphus_observer", "Sisyphus Observer", [observer_group.id, ref("base.group_user").id])
+observer.password = observer_pw
+
 keys = {}
 for u in (agent, auditor, intake, world):
     # sudo: a key that does not expire (a run can last days); the user's own rights cap keys at 90 days
     keys[u.login] = env["res.users.apikeys"].with_user(u).sudo()._generate(None, "sisyphus", None)
 env.cr.commit()
 print(%(mark)r + json.dumps({"admin_password": admin_pw, "keys": keys,
-                             "uids": {u.login: u.id for u in (agent, auditor, intake, world)}}))
+                             "uids": {u.login: u.id for u in (agent, auditor, intake, world)},
+                             "observer_password": observer_pw}))
 '''
 
 
@@ -121,6 +143,7 @@ def main() -> int:
     for who, login in (("agent", "sisyphus_agent"), ("auditor", "sisyphus_auditor"), ("intake", "sisyphus_intake"),
                      ("world", "sisyphus_world")):
         keys[who] = {"login": login, "key": out["keys"][login], "uid": out["uids"][login]}
+    keys["observer"] = {"login": "sisyphus_observer", "password": out["observer_password"]}   # web login only, no API key
     h.KEYS.write_text(json.dumps(keys, indent=2))
     os.chmod(h.KEYS, 0o600)
     h.compose("up", "-d", "odoo")

@@ -1,0 +1,56 @@
+# Hero-run variant of odoo.toml: the agent reaches Odoo through the logging proxy on 8070 (hosts/odoo/apiproxy.py).
+# Host config: Odoo Community 19.0 (pinned dated image) + PostgreSQL in Docker, on the Mac.
+# Data only. {config_dir}/odoo/hostctl.py starts, stops, resets and checks it; odoo/bootstrap.py builds the
+# fresh database once (apps, users, keys). The agent writes its own tools, which call Odoo's JSON-2 API.
+#
+# Setup on a machine: docker with the compose plugin (Colima is fine). Then
+#   python hosts/odoo/hostctl.py reset      # optional: a fresh database
+#   python hosts/odoo/hostctl.py start      # bootstraps on first start; keys land in ~/.sisyphus/odoo/odoo-keys.json
+# The grader (graders/odoo/grader.py) and the demand injector (graders/odoo/demand.py) read the same keys file.
+# The runner must put the agent user's key (and only that) into the agent's workspace as
+# /home/agent/work/host/odoo.json (see odoo/hostctl.py `agent-key`).
+
+[host]
+name = "odoo"
+# Odoo is a web app; a browser window is optional (see notes). With no matching window a screenshot reports
+# that; everything else works through the API.
+window_title = "sisyphus-odoo-no-browser-window"   # matches no window on purpose: API only, no screenshots
+process = ""
+capture = "window"
+up_check = ["{python}", "odoo/hostctl.py", "check", "--run-dir", "{run_dir}"]
+start = ["{python}", "odoo/hostctl.py", "start", "--run-dir", "{run_dir}"]
+stop = ["{python}", "odoo/hostctl.py", "stop", "--run-dir", "{run_dir}"]
+start_timeout_s = 900
+# Odoo's HTTP port, which the agent's sandbox reaches as host.docker.internal.
+agent_ports = [8070]
+notes = """
+Odoo Community 19.0 runs on this machine with one database, `odoo`, which has Sales, Purchase, Inventory and
+Invoicing and a generic chart of accounts, and no demo data. You are the user `sisyphus_agent`. Reach Odoo from your sandbox at
+http://host.docker.internal:8070. Your API key and database name are in /home/agent/work/host/odoo.json.
+The one way in is the JSON-2 API: POST /json/2/<model>/<method> with the headers Authorization: bearer <key>,
+X-Odoo-Database: <db> and Content-Type: application/json, and the method's arguments as a JSON object
+(for example search_read with domain and fields, or create with vals_list; ids go in "ids"). Odoo runs each call
+as your user and refuses what your rights or the record rules refuse; an error answers with a JSON message.
+Limit: call only the public methods the interface itself calls (read, search, create, write, unlink, action_*,
+button_*), never a method whose name starts with an underscore, and use no other login. Fields and methods are
+discoverable with fields_get and the docs. The web client is the same Odoo at the same address, but you have
+no password for it.
+"""
+
+[input]
+# Background mode: a screenshot only ever captures a matched window, never falls back to the whole screen.
+background = true
+
+[extensions]
+# No in-host extension: there is nothing to install into Odoo as this user. Tools run in your sandbox.
+reload_timeout_s = 30
+
+[extensions.reload]
+none = []
+
+[docs]
+sources = [
+  { name = "external-api", url = "https://www.odoo.com/documentation/19.0/developer/reference/external_api.html", format = "html" },
+  { name = "orm-api", url = "https://www.odoo.com/documentation/19.0/developer/reference/backend/orm.html", format = "html" },
+  { name = "security", url = "https://www.odoo.com/documentation/19.0/developer/reference/backend/security.html", format = "html" },
+]
