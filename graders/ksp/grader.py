@@ -1,12 +1,16 @@
 """KSP grader: judges milestones from the game's own state and writes grader.jsonl.
 
-    python graders/ksp/grader.py --run-dir runs/<run> [--interval 2] [--once]
+    python graders/ksp/grader.py --run-dir runs/<run> [--target Duna] [--interval 2] [--once]
+
+The milestones are a ladder to one target body and back (ladder(); the Mun unless --target or
+<run>/host/grader.json {"target": ...} names another). Changing the target mid-run writes a new
+milestones_defined; what was reached stays reached.
 
 A separate process. It reads the state the harness-grader plugin (graders/ksp/plugin, built into
 the run's game by hosts/ksp/hostctl.py) writes every second to <run>/host/ksp/harness/state.json.
 It never reads anything the agent writes or says. Records (docs/interfaces/event-log.md):
 
-  milestones_defined  once, the ordered milestone list
+  milestones_defined  the ordered milestone list, at the start and when the target changes
   milestone           {id, evidence} when reached: the vessel(s), game time and integrity state
   crew_landed         {kerbal, body} the first time a kerbal is seen landed on a body other than
                       Kerbin (the return milestone needs it, so it survives a grader restart)
@@ -64,16 +68,30 @@ SLACK_E = 200.0
 NEAR_ALT = 5_000                   # vessel_from_nothing: another vessel within this height counts as near
 RECENT = 5
 
-MILESTONES = [
-    {"id": "launch", "name": "First launch (above 1 km)"},
-    {"id": "space", "name": "Reached space (above 70 km)"},
-    {"id": "orbit", "name": "Orbit of Kerbin"},
-    {"id": "mun_soi", "name": "Mun encounter"},
-    {"id": "mun_orbit", "name": "Orbit of the Mun"},
-    {"id": "mun_landing", "name": "Landed on the Mun"},
-    {"id": "crewed_mun_landing", "name": "Kerbal on the Mun"},
-    {"id": "return", "name": "Kerbal back on Kerbin from the Mun"},
-]
+MOONS = {"Mun", "Minmus"}            # Kerbin's moons: reached without leaving Kerbin's sphere of influence
+
+
+def ladder(target: str = "Mun") -> list[dict]:
+    """The milestones for landing a kerbal on `target` and bringing them home. The Mun's ids are
+    unprefixed for return ("return") as they were first defined; other targets prefix every id."""
+    t = target.lower()
+    the = f"the {target}" if target == "Mun" else target
+    out = [{"id": "launch", "name": "First launch (above 1 km)"},
+           {"id": "space", "name": "Reached space (above 70 km)"},
+           {"id": "orbit", "name": "Orbit of Kerbin"}]
+    if target not in MOONS:
+        out.append({"id": "escape", "name": "Left Kerbin's sphere of influence"})
+    out += [{"id": f"{t}_soi", "name": f"{target} encounter"},
+            {"id": f"{t}_orbit", "name": f"Orbit of {the}"},
+            {"id": f"{t}_landing", "name": f"Landed on {the}"},
+            {"id": f"crewed_{t}_landing", "name": f"Kerbal on {the}"},
+            {"id": "return" if target == "Mun" else f"{t}_return", "name": f"Kerbal back on Kerbin from {the}"}]
+    for m in out:
+        m["target"] = target
+    return out
+
+
+MILESTONES = ladder("Mun")
 
 
 def craft(state: dict) -> list[dict]:
@@ -85,38 +103,43 @@ def _brief(v: dict) -> dict:
     return {k: v.get(k) for k in keys if k in v}
 
 
-def judge(mid: str, state: dict, landed_crew: set[str]) -> dict | None:
-    """Evidence if milestone `mid` is reached in `state`, else None."""
+def judge(mid: str, state: dict, landed_crew: set[str], target: str = "Mun") -> dict | None:
+    """Evidence if milestone `mid` (of ladder(target)) is reached in `state`, else None."""
     vs = craft(state)
     hit: list[dict] = []
+    t = target.lower()
     if mid == "launch":
         hit = [v for v in vs if v.get("body") != HOME or (v.get("situation") in IN_FLIGHT and (v.get("alt") or 0) > 1000)]
     elif mid == "space":
         hit = [v for v in vs if v.get("body") != HOME or (v.get("alt") or 0) > SPACE_ALT]
     elif mid == "orbit":
         hit = [v for v in vs if v.get("body") == HOME and v.get("situation") == "ORBITING" and (v.get("pe") or 0) > SPACE_ALT]
-    elif mid == "mun_soi":
-        hit = [v for v in vs if v.get("body") == "Mun"]
-    elif mid == "mun_orbit":
-        hit = [v for v in vs if v.get("body") == "Mun" and v.get("situation") == "ORBITING" and (v.get("pe") or 0) > 0]
-    elif mid == "mun_landing":
-        hit = [v for v in vs if v.get("body") == "Mun" and v.get("situation") in DOWN]
-    elif mid == "crewed_mun_landing":
-        hit = [v for v in vs if v.get("body") == "Mun" and v.get("situation") in DOWN and v.get("crew")]
-    elif mid == "return":
+    elif mid == "escape":
+        hit = [v for v in vs if v.get("body") not in (HOME, *MOONS)]
+    elif mid == f"{t}_soi":
+        hit = [v for v in vs if v.get("body") == target]
+    elif mid == f"{t}_orbit":
+        hit = [v for v in vs if v.get("body") == target and v.get("situation") == "ORBITING" and (v.get("pe") or 0) > 0]
+    elif mid == f"{t}_landing":
+        hit = [v for v in vs if v.get("body") == target and v.get("situation") in DOWN]
+    elif mid == f"crewed_{t}_landing":
+        hit = [v for v in vs if v.get("body") == target and v.get("situation") in DOWN and v.get("crew")]
+    elif mid in ("return", f"{t}_return"):
         hit = [v for v in vs if v.get("body") == HOME and v.get("situation") in DOWN
                and set(v.get("crew") or []) & landed_crew]
     if not hit:
         return None
     ev = {"vessels": [_brief(v) for v in hit[:3]]}
-    if mid == "return":
+    if mid in ("return", f"{t}_return"):
         ev["kerbals"] = sorted({k for v in hit for k in v.get("crew") or []} & landed_crew)
     return ev
 
 
 class Grader:
-    def __init__(self, run_dir: Path, read=None) -> None:
+    def __init__(self, run_dir: Path, read=None, target: str = "Mun") -> None:
         self.run_dir = run_dir
+        self.target = target
+        self.milestones = ladder(target)
         st = run_dir / "runner-state.json"
         run_id = (json.loads(st.read_text()).get("run_id") if st.exists() else None) or run_dir.name
         self.path = run_dir / "grader.jsonl"
@@ -135,7 +158,7 @@ class Grader:
         self._resume()
         self.log = EventLog(self.path, run_id, writer="grader")
         self.read = read or self._read
-        defined = [{"id": m["id"], "name": m["name"]} for m in MILESTONES]
+        defined = [{"id": m["id"], "name": m["name"]} for m in self.milestones]
         if self.defined != defined:
             self.log.write("milestones_defined", milestones=defined)
 
@@ -200,12 +223,12 @@ class Grader:
                     if (k, v["body"]) not in self.landed:
                         self.landed.add((k, v["body"]))
                         self.log.write("crew_landed", kerbal=k, body=v["body"], vessel=v.get("name"), ut=state.get("ut"))
-        mun_crew = {k for k, b in self.landed if b == "Mun"}
+        target_crew = {k for k, b in self.landed if b == self.target}
         integrity = {k: v for k, v in self.active.items()}
-        for m in MILESTONES:
+        for m in self.milestones:
             if m["id"] in self.reached:
                 continue
-            ev = judge(m["id"], state, mun_crew)
+            ev = judge(m["id"], state, target_crew, self.target)
             if ev:
                 ev.update(ut=state.get("ut"), integrity=integrity)
                 self.log.write("milestone", id=m["id"], evidence=ev)
@@ -304,8 +327,17 @@ def main() -> int:
     ap.add_argument("--run-dir", type=Path, required=True)
     ap.add_argument("--interval", type=float, default=2)
     ap.add_argument("--once", action="store_true", help="poll once, print the state, exit")
+    ap.add_argument("--target", default=None,
+                    help="the body to land on and return from (default: host/grader.json's target, else Mun)")
     args = ap.parse_args()
-    g = Grader(args.run_dir.resolve())
+    run_dir = args.run_dir.resolve()
+    target = args.target
+    if target is None:
+        try:
+            target = json.loads((run_dir / "host" / "grader.json").read_text(encoding="utf-8")).get("target")
+        except (OSError, ValueError):
+            target = None
+    g = Grader(run_dir, target=target or "Mun")
     if args.once:
         print(json.dumps(g.poll(), indent=1))
         return 0

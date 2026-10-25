@@ -134,3 +134,26 @@ def test_stale_or_missing_state_is_a_grader_status(tmp_path):
     assert gr.poll(now=T0 + 60) is None
     assert gr.poll(now=T0) is not None
     assert [r["ok"] for r in records(tmp_path, "grader_status")] == [False, True]
+
+
+def test_a_duna_ladder_needs_an_escape_and_its_own_crewed_landing(tmp_path):
+    feed = Feed()
+    gr = g.Grader(tmp_path, read=feed)                    # a Mun run first: Jeb lands on the Mun
+    feed.set([vessel(situation="LANDED", body="Mun", alt=1_000, speed=9, energy=-3.2e5)], ut=10)
+    gr.poll(now=T0)
+    gr = g.Grader(tmp_path, read=feed, target="Duna")     # then the goal moves to Duna
+    ids = [m["id"] for m in records(tmp_path, "milestones_defined")[-1]["milestones"]]
+    assert ids == ["launch", "space", "orbit", "escape", "duna_soi", "duna_orbit", "duna_landing",
+                   "crewed_duna_landing", "duna_return"]
+    feed.set([vessel(situation="SPLASHED", alt=0, speed=170, energy=-5.6e6)], ut=20)
+    gr.poll(now=T0)                                       # back from the Mun is not back from Duna
+    assert "duna_return" not in gr.reached and "escape" not in gr.reached
+    steps = [[vessel(situation="ESCAPING", body="Sun", alt=1.3e10, speed=9000, energy=-4e8)],
+             [vessel(situation="ORBITING", body="Duna", alt=300_000, pe=60_000, speed=900, energy=-1e5)],
+             [vessel(situation="LANDED", body="Duna", alt=2_000, speed=0, energy=-3e5)],
+             [vessel(situation="LANDED", alt=70, speed=175, energy=-5.6e6)]]
+    for i, vs in enumerate(steps):
+        feed.set(vs, ut=1e6 + 1e4 * i)
+        gr.poll(now=T0)
+    got = [r["id"] for r in records(tmp_path, "milestone")]
+    assert got[-6:] == ["escape", "duna_soi", "duna_orbit", "duna_landing", "crewed_duna_landing", "duna_return"]

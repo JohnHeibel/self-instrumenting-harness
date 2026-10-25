@@ -30,7 +30,9 @@ not a .dll. The "restart" reload compiles every .cs file in that folder into one
 the latest language version, against all of the game's own assemblies: Assembly-CSharp,
 UnityEngine and the rest, .NET Framework 4.x API), then saves the game, restarts it (about 30 s)
 and reopens the save. A compile error fails the reload and comes back to you with the
-compiler's messages; the game keeps running as it was. "none" only copies files.
+compiler's messages; the game keeps running as it was. "none" only copies files. After a restart
+the game can no longer revert a flight launched before it (KSP only reverts within one session);
+quicksave before a launch if you want a way back.
 
 The game's API: /home/agent/work/host/api.txt lists every public type and member of the game's
 assemblies, one per line (grep it, e.g. grep -n "class Vessel " or grep -n "onStageActivate").
