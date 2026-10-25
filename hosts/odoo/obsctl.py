@@ -58,7 +58,12 @@ def install(run_dir: str | None = None) -> None:
         g.write_text(f"[General]\nFirstRun=true\nConfirmOnExit=false\nEnableAutoUpdates=false\n\n"
                      f"[Basic]\nProfile={NAME}\nProfileDir={NAME}\nSceneCollection={NAME}\nSceneCollectionFile={NAME}\n")
     WS_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    if not WS_CONFIG.exists() or not json.loads(WS_CONFIG.read_text()).get("server_password"):
+    if WS_CONFIG.exists() and json.loads(WS_CONFIG.read_text()).get("server_password"):
+        cfg = json.loads(WS_CONFIG.read_text())   # OBS rewrites this file on quit: re-enable the server every time
+        cfg.update(server_enabled=True, server_port=PORT, auth_required=True, alerts_enabled=False, first_load=False)
+        WS_CONFIG.write_text(json.dumps(cfg, indent=2))
+        os.chmod(WS_CONFIG, 0o600)
+    else:
         WS_CONFIG.write_text(json.dumps({"alerts_enabled": False, "auth_required": True, "first_load": False,
                                          "server_enabled": True, "server_password": secrets.token_urlsafe(16),
                                          "server_port": PORT}, indent=2))
