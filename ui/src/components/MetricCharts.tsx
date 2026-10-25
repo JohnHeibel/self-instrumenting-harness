@@ -1,13 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { MetricPoint, Metrics, Run, Segment } from '../data/model'
 import { big, hms } from '../util'
 
 type Key = 'cwPerAction' | 'actPerStep' | 'handsPct'
-type Def = { label: string; how: string; w: number; key?: Key; log?: boolean; pct?: boolean; dec?: boolean; value: (m?: Metrics) => number | undefined }
+type Def = { label: string; how: string; w: number; key?: Key; pct?: boolean; dec?: boolean; value: (m?: Metrics) => number | undefined }
 // docs/BRIEF.md "Metrics", in its order. Widths in canvas px sum with three 16px gutters to the game's 1240.
 const DEFS: Def[] = [
   { label: 'cw tokens / milestone', how: 'cache-weighted tokens so far ÷ milestones reached; bars: cw spent in each segment between milestones', w: 400, value: m => m?.cwPerMilestone },
-  { label: 'cw tokens / action', how: 'cache-weighted tokens ÷ Σ program_actions.count; bars: 15-minute bins', w: 300, key: 'cwPerAction', log: true, value: m => m?.cwPerAction },
+  { label: 'cw tokens / action', how: 'cache-weighted tokens ÷ Σ program_actions.count; bars: 15-minute bins', w: 300, key: 'cwPerAction', value: m => m?.cwPerAction },
   { label: 'actions / step', how: 'Σ program_actions.count ÷ usage records; bars: 15-minute bins', w: 260, key: 'actPerStep', dec: true, value: m => m?.actPerStep },
   { label: 'hands busy', how: 'hands-busy time ÷ (wall − off), costs.py rules; bars: 15-minute bins', w: 232, key: 'handsPct', pct: true, value: m => m?.handsPct },
 ]
@@ -72,12 +72,31 @@ function Frame({ def, value, W, scaleHi, scaleLo, hover, legend, children, onMov
         {axis}
       </svg>
       <figcaption style={{ right: 12 }}>
-        <span className="ml">{def.label}{def.log && <em>log</em>}</span>
+        <span className="ml">{def.label}</span>
         <b>{fmt(value, def)}</b>
         {hover ? <span className="mh">{hover}</span> : legend && <span className="mh">— {legend}</span>}
       </figcaption>
     </figure>
   )
+}
+
+/** 1, 2, 2.5 or 5 × 10^k, the smallest at or above v. */
+function nice(v: number): number {
+  if (!(v > 0)) return 1
+  const p = 10 ** Math.floor(Math.log10(v))
+  return ([1, 2, 2.5, 5, 10].find(m => m * p >= v - 1e-9) ?? 10) * p
+}
+
+/** The y-axis top: 0 at the bottom, the current value about halfway (top = 2 × value, rounded to a clean number). It only
+ *  moves when the value leaves 25–90% of the range, or the run-so-far line rises past the top; bars above it are cut at the
+ *  top. Percentages keep 0–100%. */
+function useTop(value: number | undefined, lineMax: number, pct?: boolean): number {
+  const top = useRef<number>(undefined)
+  if (pct) return 1
+  const v = value !== undefined && Number.isFinite(value) && value > 0 ? value : 0
+  const t = top.current
+  if (t === undefined || v > 0.9 * t || (v > 0 && v < 0.25 * t) || lineMax > t) top.current = nice(Math.max(2 * v, lineMax, 1e-9))
+  return top.current!
 }
 
 function Ticks({ milestones, at, x }: { milestones: number[]; at: number; x: (t: number) => number }) {
@@ -89,7 +108,7 @@ function Ticks({ milestones, at, x }: { milestones: number[]; at: number; x: (t:
 function SegmentChart({ def, value, segs, prevSegs, run, at, start, milestones, prevName, prevShift }: Common & { def: Def; value?: number; segs: Segment[]; prevSegs?: Segment[] }) {
   const [hover, setHover] = useState<number | null>(null)
   const { W, span, x } = useAxis(run, start, def.w, at)
-  const hi = Math.max(1, ...segs.map(s => s.cw), ...(prevSegs ?? []).map(s => s.cw))
+  const hi = useTop(value, 0)
   const y = (v: number) => H - PB - Math.min(1, v / hi) * (H - PT - PB)
   const hs = hover !== null ? segs[hover] : undefined
   const prevPath = prevSegs?.filter(s => s.id && s.t1 + prevShift <= at).map(s => `M${x(s.t0 + prevShift)},${y(s.cw)}H${x(s.t1 + prevShift)}`).join('')
@@ -113,22 +132,19 @@ function BinChart({ def, value, bins, cum, prev, run, at, start, milestones, pre
   const [hover, setHover] = useState<number | null>(null)
   const k = def.key!
   const { W, span, x } = useAxis(run, start, def.w, at)
-  const vals = [...bins, ...cum, ...(prev ?? [])].map(p => p[k]).filter((v): v is number => v !== undefined && Number.isFinite(v) && (!def.log || v > 0))
-  const hi = def.pct ? 1 : Math.max(def.dec ? 0.1 : 1, ...vals)
-  const lo = def.log ? Math.max(1, Math.min(...vals)) : 0
-  const y = (v: number) => {
-    const f = def.log ? (Math.log10(Math.max(v, lo)) - Math.log10(lo)) / Math.max(1e-9, Math.log10(hi) - Math.log10(lo)) : v / hi
-    return H - PB - Math.max(0, Math.min(1, f)) * (H - PT - PB)
-  }
+  const vals = [...bins, ...cum].map(p => p[k]).filter((v): v is number => v !== undefined && Number.isFinite(v))
+  const lineMax = Math.max(0, ...cum.map(p => p[k]).filter((v): v is number => v !== undefined && Number.isFinite(v)))
+  const hi = useTop(value, lineMax, def.pct)
+  const y = (v: number) => H - PB - Math.max(0, Math.min(1, v / hi)) * (H - PT - PB)
   const line = (pts: MetricPoint[], dx = 0) => pts.filter(p => p[k] !== undefined).map((p, i) => `${i ? 'L' : 'M'}${x(p.t1 + dx).toFixed(1)},${y(p[k]!).toFixed(1)}`).join('')
   const now = cum[cum.length - 1]
   const hb = hover !== null ? bins[hover] : undefined, hc = hover !== null ? cum[hover] : undefined
   return (
-    <Frame def={def} value={value} W={W} axis={<TimeAxis span={span} x={x} start={start} W={W} />} scaleHi={vals.length ? fmt(hi, def) : undefined} scaleLo={vals.length ? (def.log ? fmt(lo) : def.pct ? '0%' : '0') : undefined}
-      hover={hb && `${hms(hb.t0 - run.t0)} · 15 min ${fmt(hb[k], def)} · run ${fmt(hc?.[k], def)}`} legend={prev?.length && def.log ? prevName : undefined}
+    <Frame def={def} value={value} W={W} axis={<TimeAxis span={span} x={x} start={start} W={W} />} scaleHi={vals.length ? fmt(hi, def) : undefined} scaleLo={vals.length ? (def.pct ? '0%' : '0') : undefined}
+      hover={hb && `${hms(hb.t0 - run.t0)} · 15 min ${fmt(hb[k], def)} · run ${fmt(hc?.[k], def)}`} legend={prev?.length && k === 'cwPerAction' ? prevName : undefined}
       onMove={e => { const r = e.currentTarget.getBoundingClientRect(); const t = start + (((e.clientX - r.left) * (W / r.width) - PL) / (W - PL - PR)) * span; const i = bins.findIndex(b => t >= b.t0 && t < b.t1); setHover(i >= 0 ? i : null) }}
       onLeave={() => setHover(null)}>
-      {bins.map((b, i) => b[k] !== undefined && (!def.log || b[k]! > 0) && (
+      {bins.map((b, i) => b[k] !== undefined && (
         <rect key={b.t0} x={x(b.t0) + 1} width={Math.max(1, x(b.t1) - x(b.t0) - 2)} y={y(b[k]!)} height={H - PB - y(b[k]!)} className={i === hover ? 'bar on' : 'bar'} />
       ))}
       {prev && <path d={line(prev.filter(p => p.t1 + prevShift <= at), prevShift)} className="prev" />}

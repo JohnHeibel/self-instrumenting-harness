@@ -1,6 +1,6 @@
-/* Offline: every font is local. The demo's pixel font is public/fonts/Monocraft.ttf (OFL, github.com/IdreesInc/Monocraft);
-   until that file is in place the browser uses the monospace fallback. The other views use the system's Times New Roman. */
-@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft.ttf") format("truetype"), url("/fonts/Monocraft.otf") format("opentype"); font-display: block; }
+/* Offline: no web fonts from the network. The demo uses the system monospace (Menlo); its code (tool window code and diffs,
+   call arguments) uses Monocraft, self-hosted from public/fonts (OFL, github.com/IdreesInc/Monocraft v4.2.1). */
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft.ttf") format("truetype"); font-display: swap; }
 
 /* Sisyphus story view, three directions (#v=a broadsheet, b the room first, c the climb).
    Palette: Gruvbox by Pavel Pertsev (github.com/morhetz/gruvbox, README "Palette"). Light (a, b): bg0 #fbf1c7, bg0_h #f9f5d7,
@@ -460,21 +460,25 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .v-mt > .slope line { stroke: var(--outline); stroke-width: 1.2; opacity: .5; }
 
 /* ---------- Demo (#v=demo, the default): wireframe v4 ----------
-   Palette: Melange dark (github.com/savq/melange-nvim, palettes/dark.lua): bg #292522, float #34302C, sel #403A36,
-   ui #867462, com #C1A78E, fg #ECE1D7; green #78997A / #85B695, deep green #233524, ochre #E49B5D (the accent: state
-   changes only), dark yellow #8B7449. Font: Monocraft (OFL, self-hosted in public/fonts). Square edges.
-   One backing surface (float) runs under the header, the right column and the strip under the video; only the metric
-   cards, the task log, the reasoning and the tool cells sit in inset blocks (bg, bordered). The video is flush. */
-.v-demo { color-scheme: dark; --bg: #292522; --surface: #34302C; --panel: #292522; --panel2: #403A36; --wash: #403A36; --rule: #403A36; --rule-hi: #867462;
-  --ink: #ECE1D7; --ink2: #C1A78E; --muted: #C1A78E; --faint: #867462; --accent: #E49B5D; --green: #85B695; --frame: #1b1816; --figure: #ECE1D7;
-  font-family: "Monocraft", ui-monospace, Menlo, monospace; font-size: 20px; background: var(--surface);
+   Palette sampled from the ModdedBench screenshot (images/3.webp): ground #3a3c42 with a faint 104 px grid of #33363b
+   lines, inset panels #0b0d10, rules #44464d, text #e6e8e9 / #a4a5a7 / #6e7074, headings and state in amber #e4b074,
+   the event banner amber #fcbc44 with near-black text, gold #dbb788 for targets, muted red #c38173 for failures.
+   Font: Menlo (system monospace); code in Monocraft. Square edges. One backing surface (the ground, with its grid) runs under the header,
+   the right column and the strip under the video; metric cards, task log, reasoning and tool cells sit in inset panels. */
+.v-demo { color-scheme: dark; --bg: #0b0d10; --surface: #3a3c42; --panel: #0b0d10; --panel2: #1f2329; --wash: #1f2329; --rule: #44464d; --rule-hi: #6e7074;
+  --ink: #e6e8e9; --ink2: #a4a5a7; --muted: #a4a5a7; --faint: #6e7074; --accent: #e4b074; --green: #e4b074; --gold: #dbb788; --red: #c38173;
+  --banner: #fcbc44; --frame: #0b0d10; --figure: #e6e8e9;
+  font-family: Menlo, ui-monospace, "SF Mono", Monaco, monospace; font-size: 20px;
+  background-color: var(--surface);
+  background-image: linear-gradient(#33363b 2px, transparent 2px), linear-gradient(90deg, #33363b 2px, transparent 2px);
+  background-size: 104px 104px; background-position: -2px -2px;
   grid-template-columns: 1190px 1fr; grid-template-rows: 62px 669px 1fr; gap: 0; padding: 0;
   grid-template-areas: "head head" "video right" "strip right"; }
-.v-demo, .v-demo * { border-radius: 0 !important; font-family: "Monocraft", ui-monospace, Menlo, monospace; }
+.v-demo, .v-demo * { border-radius: 0 !important; font-family: Menlo, ui-monospace, "SF Mono", Monaco, monospace; }
 .v-demo button, .v-demo select { font: inherit; }
 .v-demo h2 { font-size: 17px; font-weight: 600; letter-spacing: .04em; text-transform: lowercase; color: var(--green); }
 .v-demo time, .v-demo td { font-variant-numeric: tabular-nums; }
-.demo-stage { background: #34302C; }
+.demo-stage { background: #3a3c42; }
 
 .dh { grid-area: head; display: flex; align-items: center; gap: 28px; padding: 0 24px; border-bottom: 2px solid var(--rule); }
 .dtitle { font-size: 34px; font-weight: 700; color: var(--ink); }
@@ -493,11 +497,12 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .v-demo .hero video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--frame); }
 .v-demo .screen figcaption { font-size: 16px; background: var(--frame); color: var(--ink2); font-style: normal; }
 .v-demo .screen .inset { background: var(--frame); } .v-demo .screen .inset span { font-style: normal; color: var(--ink2); }
-.v-demo .event { background: var(--surface); color: var(--ink); border-top: 4px solid var(--accent); padding: 10px 16px; max-width: 70%; }
-.v-demo .event .etag { color: var(--accent); font-size: 17px; letter-spacing: .04em; }
-.v-demo .event .etag small { color: var(--ink2); }
+.v-demo .event { background: var(--banner); color: #0b0d10; border-top: 0; padding: 10px 16px; max-width: 70%; }
+.v-demo .event .etag { color: #0b0d10; font-size: 17px; letter-spacing: .04em; }
+.v-demo .event .etag small { color: #3a2f1f; }
+.v-demo .event .ebody { color: #3a2f1f; }
 .v-demo .event b { font-size: 23px; }
-.v-demo .event .ebody { color: var(--ink2); font-size: 17px; }
+.v-demo .event .ebody { font-size: 17px; }
 
 /* The strip under the video: scrubber flush on top, then goal and milestones, then the reasoning as an inset line */
 .strip { grid-area: strip; display: flex; flex-direction: column; min-height: 0; border-right: 2px solid var(--rule); }
@@ -507,7 +512,7 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .scrub .track { position: relative; flex: 1; height: 100%; background: var(--panel); cursor: pointer; }
 .scrub .past { position: absolute; left: 0; top: 0; bottom: 0; background: var(--panel2); }
 .scrub .ch { position: absolute; top: 8px; width: 6px; height: 24px; margin-left: -3px; padding: 0; background: var(--ink2); }
-.scrub .ch.milestone { background: var(--green); } .scrub .ch.tool { background: #8B7449; height: 12px; top: 14px; } .scrub .ch.death { background: var(--accent); }
+.scrub .ch.milestone { background: var(--gold); } .scrub .ch.tool { background: var(--ink2); height: 12px; top: 14px; } .scrub .ch.death { background: var(--red); }
 .scrub .head { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--ink); }
 .scrub .dur { font-size: 17px; color: var(--ink2); padding: 0 16px; font-variant-numeric: tabular-nums; }
 .goalbox { padding: 12px 24px 8px; display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; overflow: hidden; }
@@ -518,7 +523,7 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .mlist li { display: flex; gap: 7px; min-width: 0; }
 .mlist li span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .mlist li i { flex: none; width: 10px; height: 10px; margin-top: 3px; border: 2px solid var(--faint); display: inline-block; }
-.mlist li.on { color: var(--ink); } .mlist li.on i { background: var(--green); border-color: var(--green); }
+.mlist li.on { color: var(--ink); } .mlist li.on i { background: var(--gold); border-color: var(--gold); }
 .rstrip { display: flex; align-items: baseline; gap: 16px; background: var(--panel); border: 2px solid var(--rule); margin: 0 24px 14px; padding: 8px 14px; height: 70px; flex: none; }
 .rstrip b { font-size: 21px; color: var(--green); font-variant-numeric: tabular-nums; }
 .rstrip p { font-size: 19px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -529,10 +534,10 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .v-demo .right > :last-child { border-bottom: 0; }
 .v-demo .mcharts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .v-demo .mchart { height: 158px; background: var(--panel); border: 2px solid var(--rule); }
-.v-demo .mchart .bar { fill: #8B7449; opacity: .45; } .v-demo .mchart .bar.open { fill: none; stroke: #8B7449; }
+.v-demo .mchart .bar { fill: #e4b074; opacity: .22; } .v-demo .mchart .bar.on { opacity: .4; } .v-demo .mchart .bar.open { fill: none; stroke: #e4b074; opacity: .5; }
 .v-demo .mchart .cum { stroke: var(--ink2); opacity: .7; } .v-demo .mchart .prev { stroke: var(--faint); }
-.v-demo .mchart .mt { stroke: var(--faint); } .v-demo .mchart .mt.on { stroke: var(--green); }
-.v-demo .mchart .ax { stroke: var(--rule-hi); } .mchart .tk { fill: var(--faint); font-size: 12px; font-family: inherit; } .v-demo .mchart .sc { fill: var(--faint); font-size: 12px; font-family: "Monocraft", ui-monospace, Menlo, monospace; }
+.v-demo .mchart .mt { stroke: var(--faint); } .v-demo .mchart .mt.on { stroke: var(--gold); }
+.v-demo .mchart .ax { stroke: var(--rule-hi); } .mchart .tk { fill: var(--faint); font-size: 12px; font-family: inherit; } .v-demo .mchart .sc { fill: var(--faint); font-size: 12px; font-family: Menlo, ui-monospace, "SF Mono", Monaco, monospace; }
 .v-demo .mchart figcaption { flex-direction: column; }
 .v-demo .mchart b { order: -1; font-size: 46px; font-weight: 700; line-height: 1; }
 .v-demo .mchart .ml { font-size: 15px; font-style: normal; color: var(--ink2); }
@@ -550,9 +555,9 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .v-demo .calls td.tm { display: none; }
 .v-demo .calls td.tn { width: 40%; color: var(--ink); } .v-demo .calls td.tn .ct { color: var(--ink2); }
 .v-demo .calls td.ta { color: var(--ink2); font-size: 14px; }
-.v-demo .calls td.ok { width: 72px; color: var(--accent); font-size: 14px; }
+.v-demo .calls td.ok { width: 72px; color: var(--red); font-size: 14px; }
 .v-demo .calls td.du { width: 70px; text-align: right; color: var(--ink2); font-size: 14px; }
-.v-demo .calls tr.fail td.tn { color: var(--accent); }
+.v-demo .calls tr.fail td.tn { color: var(--red); }
 
 /* Tools: an even block grid that fills its area (4 × 2 cells), every cell bordered; more tools scroll by whole rows */
 .tiles { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
@@ -584,9 +589,9 @@ button.tile:hover { border-color: var(--rule-hi); }
 .tcode { display: grid; grid-template-columns: 1fr 230px; gap: 14px; min-height: 0; }
 .tcode pre { margin: 0; overflow: auto; background: var(--panel); padding: 8px 0; font-size: 14px; line-height: 1.4; color: var(--ink2); scrollbar-width: thin; scrollbar-color: var(--rule-hi) transparent; }
 .tcode pre div > div { padding: 0 12px; white-space: pre; }
-.tcode pre .add { background: #233524; color: var(--ink); }
+.tcode pre .add { background: #3a2f1f; color: var(--ink); }
 .tcode pre .fpath { color: var(--green); padding: 6px 12px 2px; }
-.tcode .added { background: #233524; padding: 10px 12px; align-self: start; font-size: 16px; overflow-wrap: anywhere; max-height: 100%; overflow: hidden; }
+.tcode .added { background: #3a2f1f; padding: 10px 12px; align-self: start; font-size: 16px; overflow-wrap: anywhere; max-height: 100%; overflow: hidden; }
 .tcode .added b { display: block; color: var(--green); margin-bottom: 6px; }
 .tcode .added p { color: var(--ink); line-height: 1.3; }
 
@@ -603,8 +608,11 @@ button.tile:hover { border-color: var(--rule-hi); }
 /* Task log rows open their call */
 .v-demo .calls tr.click { cursor: pointer; } .v-demo .calls tr.click:hover td { background: var(--panel2); } .v-demo .calls tr.open td { background: var(--panel2); }
 .cwin { height: auto; max-height: 600px; grid-template-rows: auto 1fr; }
-.cwin .okc { color: var(--green); } .cwin .failc { color: var(--accent); }
+.cwin .okc { color: var(--gold); } .cwin .failc { color: var(--red); }
 .cbody { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: auto; }
 .cbody pre { margin: 0; background: var(--panel); border: 2px solid var(--rule); padding: 10px 12px; font-size: 15px; line-height: 1.4; color: var(--ink2); white-space: pre-wrap; overflow-wrap: anywhere; }
-.cbody pre.cres { color: var(--ink); } .cbody pre.cres.fail { color: var(--accent); }
+.cbody pre.cres { color: var(--ink); } .cbody pre.cres.fail { color: var(--red); }
 .gl1 h1.long { font-size: 22px; -webkit-line-clamp: 3; }
+
+/* Code in Monocraft */
+.v-demo .tcode pre, .v-demo .tcode pre *, .v-demo .cbody pre.cargs { font-family: "Monocraft", Menlo, ui-monospace, monospace; }

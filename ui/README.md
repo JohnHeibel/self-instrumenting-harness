@@ -30,6 +30,8 @@ Both produce the same records, so nothing above `src/data/source.ts` knows which
 
 **Video**: put the recording in the run directory with `video.json`: `{"file": "obs.mp4", "start_utc": "2026-10-24T23:55:00.723Z"}` (`file` may also be one folder down, e.g. `cam/<name>.webm`; mp4 or webm). Optional `crop: {top, left, right, bottom}` (video pixels) and `frame_crop` (the saved frames; default: the top 5.6%, the host window's title bar) are applied in CSS; the files stay untouched. `start_utc` is the UTC time of the video's first frame; the player seeks the video to the event-log time. At speeds up to 16× it plays at that rate; faster, it is seeked. Without a video the run's saved frames show.
 
+**Look**: palette sampled from the ModdedBench screenshot (charcoal ground with a faint grid, near-black panels, amber headings and state); Menlo for text, Monocraft (OFL, `public/fonts/Monocraft.ttf`, self-hosted) for code. Metric charts start at 0 with the current value about halfway up; the top moves only when the value leaves 25–90% of it or the run-so-far line passes it.
+
 **Data**: SpacetimeDB on `ws://127.0.0.1:3000` by default (`VITE_SPACETIMEDB_HOST` to point elsewhere, `off` for files only); when it can't be reached the run files over HTTP are used. Videos are always served by the dev server.
 
 ## Layout and numbers
