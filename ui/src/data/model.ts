@@ -104,6 +104,13 @@ export type Kit = {
   kind: 'extension' | 'script'; name: string; versions: ToolVersion[]; restored: number[]
   hooks: HookUse[]; calls: number; lastCall?: number
 }
+/** One line in "the room": the player's own words and goals, what the people and programs watching it told it, and the
+ *  grader's verdicts, in time order. `text` is the record's own text, cut at a sentence end (never generated). */
+export type RoomFrom = 'player' | 'supervisor' | 'harness' | 'tool review' | 'runner' | 'grader'
+export type RoomItem = {
+  t: number; from: RoomFrom; kind: 'say' | 'goal' | 'nudge' | 'stuck' | 'failed' | 'review' | 'idle' | 'handoff' | 'reset' | 'note' | 'milestone' | 'death'
+  text: string; full?: string; did?: { n: number; top: [string, number][] }; missing?: string
+}
 export type UsageInfo = { requests: number; input: number; cached: number; output: number; reasoning: number; contextWindow?: number; t: number }
 
 const AGENT_STATES: Record<string, string> = {
@@ -146,6 +153,7 @@ export class Run {
   private fullBins_?: Sums[]
   private preSums_?: Sums
   private handsMerged_?: Span[]
+  private room_?: RoomItem[]
   private spans_?: { hands: Span[]; tools: Span[]; off: Span[] }
 
   constructor(records: Rec[]) {
@@ -498,6 +506,74 @@ export class Run {
     }
   }
 
+  /** The room up to `at`, oldest first, at most `n` lines. Built once for the whole run, then cut at `at`. */
+  room(at: number, n = 80): RoomItem[] {
+    if (!this.room_) this.room_ = this.buildRoom()
+    return this.room_.slice(Math.max(0, upper(this.room_, at) - n), upper(this.room_, at))
+  }
+
+  private buildRoom(): RoomItem[] {
+    const out: RoomItem[] = []
+    const names = new Map(this.milestonesDefined.map(m => [m.id, m.name]))
+    let calls = new Map<string, number>(), nCalls = 0
+    const flushDid = () => {
+      const top = [...calls.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+      const did = nCalls ? { n: nCalls, top } : undefined
+      calls = new Map(); nCalls = 0
+      return did
+    }
+    const seenMs = new Set<string>()
+    for (const r of this.recs) {
+      if (r.type === 'tool_call') {  // the agent's own calls (not inside its scripts or tasks), summarised on its next message
+        const via = String(r.via ?? '')
+        if (!byAgent(r) || via === 'script' || via === 'forward' || via.startsWith('task:') || r.tool === 'costs') continue
+        const name = r.tool === 'run_script' ? 'run_script' : String(r.tool)
+        calls.set(name, (calls.get(name) ?? 0) + 1); nCalls++
+      } else if (r.type === 'agent_message' && r.text) {
+        const prev = [...out].reverse().find(x => x.from === 'player' && x.kind === 'say')
+        if (prev && prev.full === r.text && r.t - prev.t < 5000) continue  // the same words recorded twice (commentary, then final)
+        out.push({ t: r.t, from: 'player', kind: 'say', text: sentence(r.text, 170), full: r.text, did: flushDid() })
+      } else if (r.type === 'goal' && r.text) {
+        out.push({ t: r.t, from: 'player', kind: 'goal', text: String(r.text), full: r.serves ? `for ${r.serves}` : undefined })
+      } else if (r.type === 'marker') {
+        const k = String(r.kind)
+        if (k === 'supervisor_nudge') {
+          const body = String(r.text ?? '').replace(/^Guidance from the people running this run[^:\n]*:\s*/i, '')
+          out.push({ t: r.t, from: 'supervisor', kind: 'nudge', text: body ? sentence(body, 190) : String(r.label ?? 'nudge'), full: body || undefined,
+            missing: body ? undefined : 'marker supervisor_nudge has no text' })
+        } else if (k === 'idle_nudge') {
+          out.push({ t: r.t, from: 'runner', kind: 'idle', text: r.text ? sentence(String(r.text), 170) : 'idle nudge', full: r.text,
+            missing: r.text ? undefined : 'marker idle_nudge has no text' })
+        } else if (k === 'context_handoff') {
+          out.push({ t: r.t, from: 'runner', kind: 'handoff', text: r.text ? sentence(String(r.text), 170)
+            : `context at ${Math.round((Number(r.context_tokens) || 0) / 1000)}k tokens: hand off`, full: r.text, missing: r.text ? undefined : 'marker context_handoff has no text' })
+        } else if (k === 'context_reset') {
+          out.push({ t: r.t, from: 'runner', kind: 'reset', text: 'fresh session' })
+        } else if (k === 'agent_died') {
+          out.push({ t: r.t, from: 'grader', kind: 'death', text: String(r.label ?? 'died') })
+        } else if (r.text && !['prompt_goal', 'prompt_continue', 'interrupt', 'context_handoff_done'].includes(k)) {
+          out.push({ t: r.t, from: 'runner', kind: 'note', text: sentence(String(r.text), 170), full: String(r.text) })  // update notes, brief diffs
+        }
+      } else if (r.type === 'notice') {
+        const text = String(r.text ?? '')
+        if (r.source === 'harness') out.push({ t: r.t, from: 'tool review', kind: 'review', text: sentence(text.split('\n')[0].replace(/\s*Since the last review:?\s*$/, ''), 170), full: text })
+        else if (r.urgent) {
+          const stuck = /^(t\d+) \((.+?)\) has held your hands ([\d.]+) min and keeps making the same acting call \((\d+) times: (\S+)/.exec(text)
+          const again = /This is the (\w+) time (\S+) failed with this same error/.exec(text)
+          out.push(stuck ? { t: r.t, from: 'harness', kind: 'stuck', text: `${stuck[1]} (${stuck[2]}) repeated ${stuck[5]} ${stuck[4]}× in ${stuck[3]} min. Stuck?`, full: text }
+            : again ? { t: r.t, from: 'harness', kind: 'failed', text: `${again[1]} identical failure of ${again[2]}. Look before rerunning.`, full: text }
+            : /^ok:/.test(text) ? { t: r.t, from: 'harness', kind: 'note', text: `${r.source} finished.`, full: text }
+            : /^stopped:/.test(text) ? { t: r.t, from: 'harness', kind: 'note', text: `${r.source} stopped.`, full: text }
+            : { t: r.t, from: 'harness', kind: 'failed', text: `${r.source} ${sentence(text.replace(/^failed:\s*/, 'failed: '), 150)}`, full: text })
+        }
+      } else if (r.type === 'milestone' && !seenMs.has(r.id)) {
+        seenMs.add(r.id)
+        out.push({ t: r.t, from: 'grader', kind: 'milestone', text: names.get(r.id) ?? r.id })
+      }
+    }
+    return out
+  }
+
   /** Background tasks running at `at`, newest first. */
   openTasks(at: number): OpenTask[] {
     const open = new Map<string, OpenTask>()
@@ -738,6 +814,17 @@ export class Run {
     ]
     return ms.sort((a, b) => a.t - b.t)
   }
+}
+
+/** The text up to the last sentence end within `n` characters (or cut at a word, with an ellipsis), whitespace and
+ *  markdown emphasis collapsed. Deterministic; nothing is summarised. */
+export function sentence(text: string, n: number): string {
+  const s = text.replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim()
+  if (s.length <= n) return s
+  const cut = s.slice(0, n)
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '), cut.lastIndexOf(': '))
+  if (end > n * 0.35) return cut.slice(0, end + 1)
+  return cut.slice(0, cut.lastIndexOf(' ') > 0 ? cut.lastIndexOf(' ') : n).replace(/[,;:]$/, '') + '…'
 }
 
 const short = (v: unknown, n = 90) => {

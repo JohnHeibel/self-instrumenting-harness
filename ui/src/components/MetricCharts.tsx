@@ -17,7 +17,8 @@ const fmt = (v: number | undefined, d: Pick<Def, 'pct' | 'dec'> = {}) => v === u
 
 /** The four headline numbers, each over a chart across the run, milestones as ticks on the time axis, and the previous
  *  comparable run as a thin reference line when one was loaded. */
-export function MetricCharts({ run, at, compare }: { run: Run; at: number; compare?: Run | null }) {
+export function MetricCharts({ run, at, compare, widths }: { run: Run; at: number; compare?: Run | null; widths?: number[] }) {
+  const defs = widths ? DEFS.map((d, i) => ({ ...d, w: widths[i] ?? d.w })) : DEFS
   const m = run.metrics(at)
   const series = run.metricSeries(at)
   const segs = run.segments(at)
@@ -30,8 +31,8 @@ export function MetricCharts({ run, at, compare }: { run: Run; at: number; compa
   const common = { run, at, start, milestones, prevName: compare?.recs[0]?.run_id, prevShift: prev ? start - prev.start : 0 }
   return (
     <section className="mcharts" aria-label="Headline metrics over the run">
-      <SegmentChart def={DEFS[0]} value={DEFS[0].value(m)} segs={segs} prevSegs={prev?.g} {...common} />
-      {DEFS.slice(1).map(d => <BinChart key={d.label} def={d} value={d.value(m)} bins={series?.bins ?? []} cum={series?.cum ?? []} prev={prev?.s?.cum} {...common} />)}
+      <SegmentChart def={defs[0]} value={defs[0].value(m)} segs={segs} prevSegs={prev?.g} {...common} />
+      {defs.slice(1).map(d => <BinChart key={d.label} def={d} value={d.value(m)} bins={series?.bins ?? []} cum={series?.cum ?? []} prev={prev?.s?.cum} {...common} />)}
     </section>
   )
 }

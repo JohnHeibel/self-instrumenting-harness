@@ -3,11 +3,15 @@ import type { Run, TRec } from '../data/model'
 import type { Spectator } from '../data/source'
 import { Backdrop } from '../Backdrop'
 import { HookDetail } from '../components/HookDetail'
-import { Actions, Event, Goal, Header, Kits, Ledger, Now, Screen } from '../components/panels'
+import { Event, Header, Kits, Ledger, Screen } from '../components/panels'
+import { Climb, Figures, Room } from '../components/stories'
 import { MetricCharts } from '../components/MetricCharts'
-import { Column } from '../components/Column'
+import { hms, span } from '../util'
 import { Timeline } from '../components/Timeline'
 import { SPEEDS, useNow } from '../util'
+
+/** Three directions, chosen with #v=a|b|c: a broadsheet front page, the room first, the climb. */
+type V = 'a' | 'b' | 'c'
 
 /** A run, live or finished: follows the newest moment by default; scrub, play at timelapse speed, jump between
  *  key moments, open any hook. `t=live` in the URL means following. */
@@ -86,29 +90,66 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
 
   const hooks = run.hooks(at)
   const openHook = open ? hooks.find(h => h.name === open) : undefined
+  const v = (['a', 'b', 'c'].includes(params.get('v') ?? '') ? params.get('v') : 'a') as V
+  const seek = (t: number) => setAt(Math.max(run.t0, Math.min(run.t1, t)))
+  const active = !(following && !live) && run.handsActive(at)
+  const g = run.latest('goal', at)
+  const game = (
+    <div className="box game">
+      <Screen run={run} at={at} now={now} following={following} spectator={spectator} imageUrl={imageUrl} />
+      <Event run={run} at={at} />
+    </div>
+  )
+  const timeline = <Timeline run={run} at={at} playing={playing} speed={speed} live={live} onJump={jumpLive} onSeek={seek} onPlay={setPlaying} onSpeed={setSpeed} />
+  const headline = (
+    <section className="headline">
+      <h1>{g?.text ?? (run.goalTitle || '—')}</h1>
+      <p className="deck">{g ? <>{g.serves && <>for {g.serves} · </>}set {span(at - g.t)} ago</> : 'run goal; no set_goal yet'}</p>
+    </section>
+  )
   return (
     <div className="stage-fit">
-      <div className="canvas" style={{ transform: `scale(${scale})` }}>
-        <Column side="left" height={1032} />
-        <Column side="right" height={1032} />
+      <div className={`canvas v-${v}`} style={{ transform: `scale(${scale})` }}>
         <Header run={run} at={at} now={now} onJump={jumpLive} />
-        <div className="box hero">
-          <Screen run={run} at={at} now={now} following={following} spectator={spectator} imageUrl={imageUrl} />
-          <Event run={run} at={at} />
-        </div>
-        <MetricCharts run={run} at={at} compare={compare} />
-        <Timeline run={run} at={at} playing={playing} speed={speed} live={live} onJump={jumpLive}
-                  onSeek={t => setAt(Math.max(run.t0, Math.min(run.t1, t)))} onPlay={setPlaying} onSpeed={setSpeed} />
-        <aside className="side">
-          <Goal run={run} at={at} />
-          <Now run={run} at={at} now={now} />
-          <Ledger run={run} at={at} />
-          <Kits run={run} at={at} onOpen={setOpen} />
-          <div className="sidefoot">
-            <Actions run={run} at={at} />
-            <div className="figure"><Backdrop active={!(following && !live) && run.handsActive(at)} /></div>
+        {v === 'a' && <>
+          {headline}
+          <div className="lead">{game}<p className="caption">{run.started?.host ?? 'host'} · {hms(at - run.t0)} into the run</p></div>
+          <div className="tl"><Kits run={run} at={at} onOpen={setOpen} />{timeline}</div>
+          <aside className="stats">
+            <Backdrop active={active} />
+            <Figures run={run} at={at} />
+            <section className="climbbox"><h2>The climb</h2><Climb run={run} at={at} w={388} h={190} onSeek={seek} labels={false} /></section>
+            <Ledger run={run} at={at} />
+          </aside>
+          <Room run={run} at={at} now={now} variant="letters" />
+        </>}
+        {v === 'b' && <>
+          <div className="left">
+            {game}
+            <MetricCharts run={run} at={at} compare={compare} widths={[272, 272, 272, 272]} />
+            <Kits run={run} at={at} onOpen={setOpen} />
           </div>
-        </aside>
+          <Room run={run} at={at} now={now} variant="chat" />
+          <aside className="stats">
+            <Backdrop active={active} />
+            {headline}
+            <section className="climbbox"><Climb run={run} at={at} w={454} h={230} onSeek={seek} /></section>
+            <Figures run={run} at={at} title="Score" />
+            <Ledger run={run} at={at} />
+          </aside>
+          <div className="tl">{timeline}</div>
+        </>}
+        {v === 'c' && <>
+          <section className="mountain">
+            <Backdrop active={active} />
+            {headline}
+            <Climb run={run} at={at} w={1250} h={540} onSeek={seek} />
+          </section>
+          {game}
+          <Room run={run} at={at} now={now} variant="inscriptions" />
+          <section className="tablet"><Figures run={run} at={at} title="Tablet" /><Kits run={run} at={at} onOpen={setOpen} /><Ledger run={run} at={at} /></section>
+          <div className="tl">{timeline}</div>
+        </>}
         {openHook && <HookDetail hook={openHook} run={run} onClose={() => setOpen(null)} />}
       </div>
     </div>
