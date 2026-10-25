@@ -110,6 +110,15 @@ def start(run_dir: Path) -> int:
                                           "show_cursor": True, "hide_obs": False}, True)
     cl.set_input_settings("UTC clock", {"is_local_file": True, "local_file": str(HERE / "obs" / "clock.html"),
                                        "width": 1920, "height": 60}, True)
+    # Place the two items at run time: OBS resets transforms it loads from the file when the *_rel fields are absent
+    # or zero (it saved bounds 0x0, i.e. invisible items), so the layout is set here.
+    for src, y, h in (("Agent window", 0, 1020), ("UTC clock", 1020, 60)):
+        item = cl.get_scene_item_id("Raw", src).scene_item_id
+        cl.set_scene_item_transform("Raw", item, {
+            "positionX": 0.0, "positionY": float(y), "alignment": 5, "rotation": 0.0, "scaleX": 1.0, "scaleY": 1.0,
+            "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0, "boundsWidth": 1920.0, "boundsHeight": float(h),
+            "cropLeft": 0, "cropRight": 0, "cropTop": 0, "cropBottom": 0})
+        cl.set_scene_item_enabled("Raw", item, True)
     run_dir.mkdir(parents=True, exist_ok=True)
     cl.set_record_directory(str(run_dir))
     cl.set_profile_parameter("Output", "FilenameFormatting", "odoo-raw")
