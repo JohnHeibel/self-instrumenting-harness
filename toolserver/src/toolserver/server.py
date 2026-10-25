@@ -454,17 +454,24 @@ def main() -> None:
                                               "'local' runs them on this machine in the workspace")
     ap.add_argument("--without-tools", default="",
                     help="comma-separated harness tools to leave out of this run (e.g. a baseline with input tools only)")
+    ap.add_argument("--max-tool-timeout", type=float, default=None,
+                    help="cap (seconds) on any extension tool's timeout_s; overrides [extensions] max_tool_timeout_s")
     ap.add_argument("--no-spectator", action="store_true",
                     help="don't write <run>/live/latest.jpg (a host picture every 5 s for people watching)")
     args = ap.parse_args()
 
     host_config = HostConfig.load(args.host_config, args.run_dir)
+    if args.max_tool_timeout:
+        host_config.max_tool_timeout_s = args.max_tool_timeout
     workspace = args.run_dir / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     container = args.agent_container or f"harness-agent-{args.run_id}"
     executor = LocalExecutor(workspace) if container == "local" else ContainerExecutor(container)
     log = EventLog(args.run_dir / "events.jsonl", args.run_id)
     log.write("server_started", host=args.host, port=args.port, host_config=host_config.name)
+    if host_config.forward_offset and host_config.agent_ports:
+        from . import forward
+        forward.start(log, host_config.agent_ports, host_config.forward_offset)
     if not args.no_spectator:
         spectator.start(Target(title=args.window_title or host_config.window_title, process=host_config.process,
                                mode=host_config.capture), args.run_dir)

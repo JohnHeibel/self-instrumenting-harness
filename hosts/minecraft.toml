@@ -1,0 +1,57 @@
+# Host config: Minecraft Java 1.21.1 + NeoForge + Minescript 4.0, a Prism Launcher instance on macOS.
+# Data only. {config_dir}/minecraft/hostctl.py starts and stops the client. The agent writes its own
+# Minescript scripts (Python, run from game chat) and the programs that talk to them.
+
+[host]
+name = "minecraft"
+window_title = "Minecraft"
+process = "java"
+# One game window; GUIs are drawn inside it.
+capture = "window"
+up_check = ["{python}", "minecraft/hostctl.py", "check"]
+start = ["{python}", "minecraft/hostctl.py", "start"]
+stop = ["{python}", "minecraft/hostctl.py", "stop"]
+start_timeout_s = 300
+# The agent's own Minescript script may serve HTTP on this port (see notes).
+agent_ports = [8777]
+# Calls go through a logging forwarder on port+offset (toolserver/forward.py): reach the bridge at
+# host.docker.internal:18777 so every call is recorded as a hook call.
+forward_offset = 10000
+notes = """
+Minecraft Java 1.21.1 (NeoForge 21.1.264) with the Minescript 4.0 mod, one client window on a Mac. A survival
+world is already open and you are its only player; the window should stay in front. Keyboard focus and
+the mouse belong to the game: Esc opens the pause menu (click Back to Game to return), T opens chat, E your
+inventory, 1-9 the hotbar, and the mouse looks around while no screen is open.
+Minescript runs Python scripts (the Mac's python3, a real process each time) that you start by typing their name
+in chat: press T, type \\name (for a script in a folder, \\folder/name), press Enter. Your in-host files land in
+the game's minescript folder as the install_as folder. A script is read from disk on every run, so an edit takes
+effect on the next run with no restart; running one by typing takes about a second. \\jobs lists running scripts
+and \\killjob <id> stops one. A script can serve HTTP on 0.0.0.0:8777 (the only port open to your sandbox). Your sandbox must call it at
+host.docker.internal:18777, a forwarder that records each call in the run log (the raw 8777 is not logged): run one bridge script that answers queries and starts or stops actions, and keep
+your sandbox tools thin. The script must make all Minescript calls from its main thread.
+The `minescript` module (read_docs lists its API; the installed 4.0 has: player_position, player_orientation,
+player_set_orientation, player_inventory, player_hand_items, player_get_targeted_block and _entity, player_health,
+screen_name, container_get_items, world_info, getblock, getblocklist, entities, players, press_key_bind and
+player_press_forward/backward/left/right/jump/sprint/sneak/use/attack/drop/swap_hands, player_inventory_select_slot,
+register_*_listener events, chat, echo, and a Java reflection API (java_class, java_member, java_call_method,
+java_access_field) that reaches any class in the client, including the open screen, menu and block data). Hold
+a key with press_key_bind(name, True), sleep, then release it. Chat commands that change the game are cheats
+(see the goal); Minescript's own backslash commands are not.
+Screenshots show the game window only. Input goes to whatever is frontmost, so do not click outside the game.
+The world's files (advancements, stats) are written every few minutes by the game; a grader reads them.
+"""
+
+[extensions]
+# Where load_extension copies an extension's in_host directory: the instance's minescript folder.
+install_dir = "~/Library/Application Support/PrismLauncher/instances/sisyphus-neoforge/minecraft/minescript"
+reload_timeout_s = 30
+
+[extensions.reload]
+# Scripts are re-read on each run, so installing the files is the whole reload.
+none = []
+
+[docs]
+sources = [
+  # Latest Minescript docs; the installed 4.0 lacks some newer calls (its minescript.py docstrings are authoritative).
+  { name = "minescript-api", url = "https://raw.githubusercontent.com/maxuser0/minescript/main/docs/README.md", format = "markdown" },
+]

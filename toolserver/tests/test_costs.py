@@ -43,6 +43,21 @@ def test_report_without_logs(tmp_path):
     assert report(tmp_path, 30, now=NOW) == "Last 30 min: 0 tool calls, 0 failed."
 
 
+def test_report_shows_milestone_costs(tmp_path):
+    _write(tmp_path / "runner.jsonl", [
+        {"ts": "2026-01-01T10:00:00Z", "type": "usage", "total_tokens": 0, "uncached_tokens": 0},
+        {"ts": "2026-01-01T10:10:00Z", "type": "usage", "total_tokens": 9, "uncached_tokens": 50_000},
+        {"ts": "2026-01-01T10:20:00Z", "type": "usage", "total_tokens": 19, "uncached_tokens": 60_000},
+    ])
+    _write(tmp_path / "grader.jsonl", [
+        {"ts": "2026-01-01T10:10:30Z", "type": "milestone", "id": "a"},
+        {"ts": "2026-01-01T10:10:30Z", "type": "milestone", "id": "b"},
+        {"ts": "2026-01-01T10:20:30Z", "type": "milestone", "id": "c"},
+    ])
+    text = report(tmp_path, 60, now=datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc))
+    assert "a, b: 10 min, 1 requests, 50,000 uncached tokens" in text
+    assert "c: 10 min, 1 requests, 10,000 uncached tokens" in text
+
 def test_report_shows_program_actions_per_step_from_any_log(tmp_path):
     _write(tmp_path / "runner.jsonl", [
         {"ts": "2026-01-01T11:10:00Z", "type": "usage", "total_tokens": 0, "uncached_tokens": 0, "input_tokens": 10},

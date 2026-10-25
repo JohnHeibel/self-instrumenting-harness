@@ -268,4 +268,34 @@ def report(run_dir: Path, minutes: float = 60, now: datetime | None = None) -> s
         if gaps:
             lines.append(f"Time between calls (your thinking): median {gaps[len(gaps) // 2]:.0f} s, "
                          f"longest {gaps[-1]:.0f} s.")
+    lines += _milestones(run_dir)
     return "\n".join(lines)
+
+
+def _milestones(run_dir: Path) -> list[str]:
+    """What each milestone cost, from the grader's records: minutes since the previous one, model
+    requests and uncached tokens spent in between. Judge the trend: it should fall."""
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    ms = [r for r in _records(run_dir / "grader.jsonl", epoch) if r.get("type") == "milestone"]
+    usage = [r for r in _records(run_dir / "runner.jsonl", epoch) if r.get("type") == "usage"]
+    if not ms or not usage:
+        return []
+    t = lambda r: datetime.fromisoformat(r["ts"].replace("Z", "+00:00"))
+    # milestones the grader found in one pass (same second) share a cost: show them as a group
+    groups: list[list[dict]] = []
+    for m in sorted(ms, key=t):
+        if groups and (t(m) - t(groups[-1][-1])).total_seconds() < 2:
+            groups[-1].append(m)
+        else:
+            groups.append([m])
+    out = ["Milestones (cost since the previous one; the trend should fall):"]
+    prev_t, prev_u = t(usage[0]), usage[0]
+    for g in groups[-8:]:
+        at = t(g[0])
+        u = [r for r in usage if t(r) <= at]
+        u = u[-1] if u else usage[0]
+        out.append(f"  {', '.join(m.get('id', '?') for m in g)}: {(at - prev_t).total_seconds() / 60:.0f} min, "
+                   f"{max(0, len([r for r in usage if prev_t < t(r) <= at]))} requests, "
+                   f"{max(0, u.get('uncached_tokens', 0) - prev_u.get('uncached_tokens', 0)):,} uncached tokens")
+        prev_t, prev_u = at, u
+    return out

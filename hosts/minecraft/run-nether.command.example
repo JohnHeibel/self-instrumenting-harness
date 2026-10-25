@@ -1,0 +1,61 @@
+#!/bin/zsh
+# Template: launch the Minecraft "peaceful -> Nether" run (goals/minecraft-nether.md). Copy it out of the repo
+# (e.g. to ~/sisyphus-work/run-nether.command), chmod +x it, and run it after the manual steps below.
+#
+# The run starts completely fresh: nothing from run 1's workspace is copied. The workspace starts empty.
+#
+# MANUAL STEPS (a person or the orchestrator with computer use; the harness cannot do these):
+#  1. Start Minecraft:   (cd toolserver && uv run python ../hosts/minecraft/hostctl.py start)
+#  2. Create the world in the GUI (hostctl does not create worlds; sisyphus-mc1 was made the same way):
+#       Singleplayer > Create New World
+#         World Name:      sisyphus-mc2          (the folder name under saves/ the grader reads)
+#         Game Mode:       Survival
+#         Difficulty:      PEACEFUL               <- this is how peaceful is set: level.dat Difficulty = 0
+#         Allow Commands:  OFF                    (cheats off; the grader flags it otherwise)
+#         More > Seed:     sisyphus2              (a new seed: run 1's spawn was next to water and a pillager outpost)
+#         Generate Structures: ON, Bonus Chest: OFF
+#       Create New World. Leave the player standing in the world, no screen open.
+#     Do NOT set peaceful on an existing normal-difficulty world with Esc > Options > Difficulty or /difficulty:
+#     the grader expects 0 from the start and flags any change, and the goal forbids it for the agent.
+#  3. Check:  python3 graders/minecraft/grader.py --run-dir /tmp/x --world sisyphus-mc2 --milestones nether --once
+#     (needs "signals": difficulty_changed false). This script also refuses to start if Difficulty is not 0.
+#  4. The Minescript bridge (port 8777) is started by the agent from game chat, as in run 1; macOS permission
+#     popups that appear: click "Don't Allow".
+#
+# Edit UNTIL (wall-clock end, UTC) or leave empty to run until STOP is created in the run dir.
+UNTIL="${UNTIL:-}"
+WORLD=sisyphus-mc2
+cd "${REPO:-$HOME/Projects/harness-minecraft}" || exit 1
+R=$HOME/sisyphus-runs/mc-nether-01
+SAVES="$HOME/Library/Application Support/PrismLauncher/instances/sisyphus-neoforge/minecraft/saves"
+
+# Refuse to start on the wrong world or difficulty (level.dat Difficulty must be 0 = peaceful).
+D=$(python3 - "$SAVES/$WORLD/level.dat" <<'PY'
+import sys; sys.path.insert(0, "graders/minecraft")
+import nbt
+try: print(nbt.load(sys.argv[1])["Data"].get("Difficulty"))
+except Exception as e: print("unreadable:", e)
+PY
+)
+[ "$D" = "0" ] || { echo "world $WORLD: Difficulty is '$D', not 0 (peaceful). See the manual steps above."; exit 1; }
+
+# Fresh start: never reuse a run dir, and move whatever earlier agents installed into the game's minescript
+# folder (bridges, plugins) out of reach, into this run's dir. Minescript's own files stay.
+[ -e "$R" ] && { echo "$R already exists: every run starts fresh, pick a new run dir."; exit 1; }
+mkdir -p "$R/previous-in-game"      # the runner creates an empty workspace
+MS="$SAVES/../minescript"
+for f in "$MS"/*(N); do
+  case "${f:t}" in config.txt|system|blockpacks) ;; *) mv "$f" "$R/previous-in-game/" ;; esac
+done
+pkill -f "minescript/.*\.py" 2>/dev/null   # bridges still running from an earlier run
+(cd toolserver && uv run python ../hosts/minecraft/hostctl.py focus)
+sleep 1
+# Grader first, so it is watching before the agent acts.
+pkill -f "graders/minecraft/grader.py"
+(cd toolserver && nohup uv run python ../graders/minecraft/grader.py --run-dir "$R" --world "$WORLD" \
+    --milestones nether --expected-difficulty 0 --interval 20 > "$R/grader.out" 2>&1 &)
+sleep 2
+ARGS=(--host-config hosts/minecraft.toml --run-dir "$R" --goal-file goals/minecraft-nether.md
+      --reset-context-tokens 150000 --idle-minutes 5 --model claude-opus-5-5)
+[ -n "$UNTIL" ] && ARGS+=(--until "$UNTIL")
+exec uv run --project runner python runner/claude_runner.py "${ARGS[@]}" > "$R/runner.out" 2>&1

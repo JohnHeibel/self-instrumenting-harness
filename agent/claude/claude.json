@@ -1,0 +1,11 @@
+{
+  "hasCompletedOnboarding": true,
+  "bypassPermissionsModeAccepted": true,
+  "mcpServers": {
+    "harness": {
+      "type": "http",
+      "url": "http://host.docker.internal:8765/mcp",
+      "alwaysLoad": true
+    }
+  }
+}
