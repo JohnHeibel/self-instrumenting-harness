@@ -18,10 +18,10 @@ const EL_W = 1920 * S, EL_H = 1080 * S
 const FIG_X = 639 * S, FIG_W = 715 * S, FIG_TOP = 412 * S
 const PX_PER_ART = 0.95 * (1080 / 1024) * S        // art px → screen px (world scale × scene scale × element scale)
 const HEADER_W = 1920
-/** At 1×: one step every 0.5 s, so one stride cycle (two steps) per second; he then covers about 35 px a second. */
-const CYCLES_PER_S = 1
-/** Fastest effective speed: a crossing (~56 s at 1×) never takes less than about 1.5 s. */
-export const WALK_CAP = 36
+/** At 1×: one step every 2 s, so a stride cycle (two steps) every 4 s; he covers about 9 px a second. */
+const CYCLES_PER_S = 0.25
+/** Fastest effective speed: a crossing (~226 s at 1×) never takes less than about 1.5 s. */
+export const WALK_CAP = 144
 const GAP_S = 3.5
 
 /** Sisyphus pushing his boulder across the header, left to right, behind everything in it; off the right edge, a 3.5 s

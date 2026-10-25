@@ -54,21 +54,23 @@ export function CompareView({ a, b, rel, setRel, playing, setPlaying, speed, ima
 }) {
   if (!b) return <div className="cmp-loading">{DASH}</div>
   const dur = Math.max(a.t1 - a.t0, b.t1 - b.t0, 1)
-  const side = (run: Run) => {
-    const at = run.t0 + Math.min(rel, run.t1 - run.t0)
-    const name = run.recs[0]?.run_id ?? ''
-    return (
-      <div className="cmp-side" key={name}>
-        <VideoHero run={run} runName={name} at={at} now={Date.now()} playing={playing} speed={speed} following={false} spectator={null} imageUrl={imageUrlFor(name)} />
-        <MilestoneBlock run={run} at={at} />
-        <MetricCharts run={run} at={at} widths={[222, 222, 222, 222]} />
-      </div>
-    )
-  }
+  const atOf = (run: Run) => run.t0 + Math.min(rel, run.t1 - run.t0)
+  const nameOf = (run: Run) => run.recs[0]?.run_id ?? ''
   return (
-    <>
-      <div className="cmp-pair">{side(a)}{side(b)}</div>
+    <div className="cmp-body">
+      <div className="cmp-row cmp-videos">
+        {[a, b].map(run => <VideoHero key={nameOf(run)} run={run} runName={nameOf(run)} at={atOf(run)} now={Date.now()} playing={playing} speed={speed}
+          following={false} spectator={null} imageUrl={imageUrlFor(nameOf(run))} />)}
+      </div>
       <SharedScrubber a={a} b={b} rel={rel} dur={dur} playing={playing} onPlay={setPlaying} onSeek={r => setRel(Math.max(0, Math.min(dur, r)))} />
-    </>
+      <div className="cmp-row cmp-stats">
+        {[a, b].map(run => (
+          <div className="cmp-side" key={nameOf(run)}>
+            <MilestoneBlock run={run} at={atOf(run)} />
+            <MetricCharts run={run} at={atOf(run)} widths={[215, 215, 215, 215]} />
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }

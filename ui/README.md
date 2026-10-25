@@ -53,7 +53,7 @@ The single accent (terracotta) marks state changes only: a milestone reached, a 
 
 ## Sisyphus
 
-`src/Backdrop.tsx` (`HeaderWalk`) is the only place he appears: the red-figure asset (`src/backdrop/sisyphus-v3.js`) re-posed on level ground (its `flat` attribute), drawn as faint white line art behind everything in the demo header, pushing the boulder left to right. At 1× he takes a step every 0.5 s and covers about 35 px a second, so a crossing takes about 56 s; then a 3.5 s pause and he comes in from the left again. Walking speed and the pause scale with the replay speed, capped at 36× (a crossing never under ~1.5 s). He walks on wall-clock time, always. `#walkat=<s>` holds him that many seconds into a crossing (for stills).
+`src/Backdrop.tsx` (`HeaderWalk`) is the only place he appears: the red-figure asset (`src/backdrop/sisyphus-v3.js`) re-posed on level ground (its `flat` attribute), drawn as faint white line art behind everything in the demo header, pushing the boulder left to right. At 1× he takes a step every 2 s and covers about 9 px a second, so a crossing takes about 226 s; then a 3.5 s pause and he comes in from the left again. Walking speed and the pause scale with the replay speed, capped at 144× (a crossing never under ~1.5 s). He walks on wall-clock time, always. `#walkat=<s>` holds him that many seconds into a crossing (for stills).
 
 ## Fake runs for development
 
