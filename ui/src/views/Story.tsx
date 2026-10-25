@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CallItem, Run, TRec } from '../data/model'
 import type { Spectator } from '../data/source'
-import { Backdrop } from '../Backdrop'
+import { HeaderWalk } from '../Backdrop'
 import { HookDetail } from '../components/HookDetail'
 import { Event, Header, Kits, Ledger, Screen } from '../components/panels'
 import { Calls, Climb, Figures, MilestoneList, Reasoning, Room } from '../components/stories'
@@ -98,7 +98,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   const openHook = open ? hooks.find(h => h.name === open) : undefined
   const v = (['demo', 'a', 'b', 'c', 'a1', 'a2', 'a3', 's1', 's2', 's3', 'm1', 'm2', 'm3'].includes(params.get('v') ?? '') ? params.get('v') : 'demo') as V
   const seek = (t: number) => setAt(Math.max(run.t0, Math.min(run.t1, t)))
-  const active = !(following && !live) && run.handsActive(at)
   const g = run.latest('goal', at)
   const game = (
     <div className="box game">
@@ -116,7 +115,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   if (v === 'demo') return (
     <div className="stage-fit demo-stage">
       <div className="canvas v-demo" style={{ transform: `scale(${scale})` }}>
-        <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} />
+        <DemoHeader run={run} at={at} speed={speed} onSpeed={setSpeed} onHelp={() => setHelp(h => !h)} walk={<HeaderWalk speed={speed} />} />
         <VideoHero run={run} runName={run.recs[0]?.run_id ?? ''} at={at} now={now} playing={playing} speed={speed} following={following} spectator={spectator} imageUrl={imageUrl} />
         <div className="strip">
           <Scrubber run={run} at={at} playing={playing} onPlay={setPlaying} onSeek={seek} />
@@ -137,8 +136,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   return (
     <div className="stage-fit">
       <div className={`canvas v-${v}${v[0] === 'a' && v.length === 2 ? ' v-at' : ''}${v[0] === 's' || v[0] === 'm' ? ' v-st' : ''}${v[0] === 'm' ? ' v-mt' : ''}`} style={{ transform: `scale(${scale})` }}>
-        {v.length === 2 && <Backdrop active={active} />}
-        {v[0] === 'm' && <Slope />}
         <Header run={run} at={at} now={now} onJump={jumpLive} />
         {(v[0] === 's' || v[0] === 'm') && <>
           {headline}
@@ -172,7 +169,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
           <div className="lead">{game}</div>
           <div className="tl"><Kits run={run} at={at} onOpen={setOpen} />{timeline}</div>
           <aside className="stats">
-            <Backdrop active={active} />
             <Figures run={run} at={at} />
             <section className="climbbox"><Climb run={run} at={at} w={388} h={190} onSeek={seek} labels={false} /></section>
             <Ledger run={run} at={at} />
@@ -186,7 +182,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
           </div>
           <Room run={run} at={at} now={now} variant="chat" />
           <aside className="stats">
-            <Backdrop active={active} />
             {headline}
             <section className="climbbox"><Climb run={run} at={at} w={454} h={230} onSeek={seek} /></section>
             <Ledger run={run} at={at} />
@@ -196,7 +191,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
         </>}
         {v === 'c' && <>
           <section className="mountain">
-            <Backdrop active={active} />
             {headline}
             <Climb run={run} at={at} w={1250} h={540} onSeek={seek} />
           </section>
@@ -209,12 +203,6 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
       </div>
     </div>
   )
-}
-
-/** The slope Sisyphus climbs, as one line from the bottom edge of the screen to the top edge, continuing the surface of the
- *  asset's slope under his feet (the figure is placed so it stands on it; see .v-mt > .backdrop in styles.css). */
-function Slope() {
-  return <svg className="slope" width={1920} height={1080} viewBox="0 0 1920 1080" aria-hidden="true"><line x1={152.5} y1={1080} x2={1538.6} y2={0} /></svg>
 }
 
 function useFit(): number {

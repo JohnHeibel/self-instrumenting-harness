@@ -9,7 +9,7 @@ import { SPEEDS, diffLines, hms, span } from '../util'
 const DASH = '—'
 
 /** Header: title, run switcher, model · agent, replay speed, run clock, and the "?" drawer. */
-export function DemoHeader({ run, at, speed, onSpeed, onHelp }: { run: Run; at: number; speed: number; onSpeed: (s: number) => void; onHelp: () => void }) {
+export function DemoHeader({ run, at, speed, onSpeed, onHelp, walk }: { run: Run; at: number; speed: number; onSpeed: (s: number) => void; onHelp: () => void; walk?: React.ReactNode }) {
   const [runs, setRuns] = useState<string[]>([])
   const current = run.recs[0]?.run_id ?? ''
   useEffect(() => { source.listRuns().then(r => setRuns(r.map(x => x.name)), () => setRuns([])) }, [])
@@ -21,6 +21,7 @@ export function DemoHeader({ run, at, speed, onSpeed, onHelp }: { run: Run; at: 
   }
   return (
     <header className="dh">
+      {walk}
       <span className="dtitle">Sisyphean</span>
       <select className="runs" value={current} onChange={e => go(e.target.value)} aria-label="Run">
         {(runs.includes(current) ? runs : [current, ...runs]).map(r => <option key={r} value={r}>{r}</option>)}

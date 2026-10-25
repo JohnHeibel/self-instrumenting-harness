@@ -49,9 +49,9 @@ Both produce the same records, so nothing above `src/data/source.ts` knows which
 
 The single accent (terracotta) marks state changes only: a milestone reached, a tool improved, a death or break. Type: Marcellus (display), Archivo at a condensed width (labels), Azeret Mono (data). Data panels are cool slate, the goal and Now panels warm stone.
 
-## Backdrop
+## Sisyphus
 
-`src/Backdrop.tsx` is the only file that names the background animation. To swap it, change its one import and element. The current one is `src/backdrop/sisyphus-v3.js`, a `<sisyphus-backdrop-v3>` web component; `styles.css` (`.figure .backdrop`) crops it to the figure, stone and slope in a panel at the foot of the side column, at full opacity, recoloured one quiet step above the page ground. He pushes only while the agent's hands are busy (`Run.handsActive`: a hands span from the costs.py rules in the last 5 s of run time, and the runner not off), and otherwise eases to a standstill. The playback rate (`src/pushRate.ts`) chases 1 or 0 as a critically damped spring: about 3 s over the full range in either direction, easing in and out; a flip mid-ramp turns from the current speed; activity must be gone 0.4 s of wall time before he starts to slow. It follows the view's position, so replay at speed and scrubbing drive it too. He holds still under reduced motion.
+`src/Backdrop.tsx` (`HeaderWalk`) is the only place he appears: the red-figure asset (`src/backdrop/sisyphus-v3.js`) re-posed on level ground (its `flat` attribute), drawn as faint white line art behind everything in the demo header, pushing the boulder left to right. At 1× he takes a step every 0.5 s and covers about 35 px a second, so a crossing takes about 56 s; then a 3.5 s pause and he comes in from the left again. Walking speed and the pause scale with the replay speed, capped at 36× (a crossing never under ~1.5 s). He walks on wall-clock time, always. `#walkat=<s>` holds him that many seconds into a crossing (for stills).
 
 ## Fake runs for development
 
