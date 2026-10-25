@@ -532,7 +532,7 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .v-demo .mchart .bar { fill: #8B7449; opacity: .45; } .v-demo .mchart .bar.open { fill: none; stroke: #8B7449; }
 .v-demo .mchart .cum { stroke: var(--ink2); opacity: .7; } .v-demo .mchart .prev { stroke: var(--faint); }
 .v-demo .mchart .mt { stroke: var(--faint); } .v-demo .mchart .mt.on { stroke: var(--green); }
-.v-demo .mchart .ax { stroke: var(--rule-hi); } .v-demo .mchart .sc { fill: var(--faint); font-size: 12px; font-family: "Monocraft", ui-monospace, Menlo, monospace; }
+.v-demo .mchart .ax { stroke: var(--rule-hi); } .mchart .tk { fill: var(--faint); font-size: 12px; font-family: inherit; } .v-demo .mchart .sc { fill: var(--faint); font-size: 12px; font-family: "Monocraft", ui-monospace, Menlo, monospace; }
 .v-demo .mchart figcaption { flex-direction: column; }
 .v-demo .mchart b { order: -1; font-size: 46px; font-weight: 700; line-height: 1; }
 .v-demo .mchart .ml { font-size: 15px; font-style: normal; color: var(--ink2); }
@@ -599,3 +599,12 @@ button.tile:hover { border-color: var(--rule-hi); }
 .how .box b { color: var(--ink); font-weight: 600; } .how .box code { font-family: inherit; font-size: 14px; color: var(--ink2); }
 .how i { color: var(--faint); font-style: normal; }
 
+
+/* Task log rows open their call */
+.v-demo .calls tr.click { cursor: pointer; } .v-demo .calls tr.click:hover td { background: var(--panel2); } .v-demo .calls tr.open td { background: var(--panel2); }
+.cwin { height: auto; max-height: 600px; grid-template-rows: auto 1fr; }
+.cwin .okc { color: var(--green); } .cwin .failc { color: var(--accent); }
+.cbody { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: auto; }
+.cbody pre { margin: 0; background: var(--panel); border: 2px solid var(--rule); padding: 10px 12px; font-size: 15px; line-height: 1.4; color: var(--ink2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cbody pre.cres { color: var(--ink); } .cbody pre.cres.fail { color: var(--accent); }
+.gl1 h1.long { font-size: 22px; -webkit-line-clamp: 3; }

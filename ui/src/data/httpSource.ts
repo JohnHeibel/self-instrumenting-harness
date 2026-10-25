@@ -1,5 +1,5 @@
 import type { Rec } from './model'
-import type { DataSource, Watch } from './source'
+import type { Crop, DataSource, Watch } from './source'
 
 const enc = encodeURIComponent
 const LIVE_POLL_MS = 2_000, ENDED_POLL_MS = 30_000, SPECTATOR_POLL_MS = 5_000
@@ -21,10 +21,11 @@ export const httpSource: DataSource = {
   async video(run) {
     const r = await fetch(`/runs/${enc(run)}/video.json`, { cache: 'no-store' }).catch(() => null)
     if (!r?.ok) return null
-    const v = await r.json().catch(() => null) as { file?: string; start_utc?: string } | null
+    const v = await r.json().catch(() => null) as { file?: string; start_utc?: string; crop?: Partial<Crop>; frame_crop?: Partial<Crop> } | null
     const start = v?.start_utc ? Date.parse(v.start_utc) : NaN
-    if (!v?.file || !/^(video\/)?[A-Za-z0-9_.-]+\.(mp4|webm)$/.test(v.file) || !Number.isFinite(start)) return null
-    return { url: `/runs/${enc(run)}/${v.file}`, start }
+    if (!v?.file || !/^([A-Za-z0-9_-]+\/)?[A-Za-z0-9_.@-]+\.(mp4|webm)$/.test(v.file) || !Number.isFinite(start)) return null
+    const crop = (c?: Partial<Crop>): Crop | undefined => c && { top: Number(c.top) || 0, left: Number(c.left) || 0, right: Number(c.right) || 0, bottom: Number(c.bottom) || 0 }
+    return { url: `/runs/${enc(run)}/${v.file}`, start, crop: crop(v.crop), frameCrop: crop(v.frame_crop) }
   },
 
   watch(run: string, cb: Watch) {

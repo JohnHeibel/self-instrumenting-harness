@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Kit, Run, TRec } from '../data/model'
-import type { Spectator } from '../data/source'
+import type { Crop, Spectator } from '../data/source'
 import { big, hms, span } from '../util'
 
 /** Wall-clock hold time for a notice on the game view, so nothing flashes by at timelapse speed. */
@@ -257,6 +257,43 @@ export function Event({ run, at }: { run: Run; at: number }) {
   )
 }
 
+/** Crop: px off each edge in the source's pixels, or a function of the source size (frames of different sizes). */
+export type CropSpec = Crop | ((w: number, h: number) => Crop)
+
+/** An image or video with edges cropped off in CSS, fitted (contain) into its box: the box clips, and the media is scaled
+ *  and shifted so the kept region fills the fitted area. The file is untouched. */
+export function Cropped({ src, video, crop, alt, videoRef, onMeta }: {
+  src: string; video?: boolean; crop?: CropSpec; alt?: string
+  videoRef?: React.Ref<HTMLVideoElement>; onMeta?: () => void
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  const [boxSize, setBoxSize] = useState<{ w: number; h: number } | null>(null)
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setBoxSize({ w: el.clientWidth, h: el.clientHeight }))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  let style: React.CSSProperties = { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }
+  if (size && boxSize && crop) {
+    const c = typeof crop === 'function' ? crop(size.w, size.h) : crop
+    const kw = Math.max(1, size.w - c.left - c.right), kh = Math.max(1, size.h - c.top - c.bottom)
+    const k = Math.min(boxSize.w / kw, boxSize.h / kh)
+    const ox = (boxSize.w - kw * k) / 2 - c.left * k, oy = (boxSize.h - kh * k) / 2 - c.top * k
+    style = { position: 'absolute', left: ox, top: oy, width: size.w * k, height: size.h * k, maxWidth: 'none' }
+  }
+  return (
+    <div ref={box} className="cropped" style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+      {video
+        ? <video ref={videoRef} src={src} muted playsInline preload="auto" style={style}
+            onLoadedMetadata={e => { setSize({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight }); onMeta?.() }} />
+        : <img src={src} alt={alt} style={style} onLoad={e => setSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />}
+    </div>
+  )
+}
+
 /** The last image shown stays up while the next one is still loading. */
 function useSticky(url: string | undefined): string | undefined {
   const last = useRef<string>(undefined)
@@ -269,8 +306,8 @@ const STALE_SHOT_MS = 30_000
 
 /** The game: what the agent last saw, or, live and when its last look is old, the spectator frame (the host window,
  *  which the agent never gets) with the agent's last look inset. */
-export function Screen({ run, at, now, following, spectator, imageUrl }: {
-  run: Run; at: number; now: number; following: boolean; spectator: Spectator | null; imageUrl: (r: TRec) => string | undefined
+export function Screen({ run, at, now, following, spectator, imageUrl, crop }: {
+  run: Run; at: number; now: number; following: boolean; spectator: Spectator | null; imageUrl: (r: TRec) => string | undefined; crop?: CropSpec
 }) {
   const shot = run.screenshot(at)
   const shotUrl = useSticky(shot ? imageUrl(shot) : undefined)
@@ -279,8 +316,8 @@ export function Screen({ run, at, now, following, spectator, imageUrl }: {
   const specUrl = useSticky(spectator?.url)
   return (
     <figure className="screen">
-      {spec ? <img src={specUrl} alt="Host window, spectator view" />
-        : shot && shotUrl ? <img src={shotUrl} alt="Agent's last screenshot" />
+      {spec && specUrl ? (crop ? <Cropped src={specUrl} crop={crop} alt="Host window, spectator view" /> : <img src={specUrl} alt="Host window, spectator view" />)
+        : shot && shotUrl ? (crop ? <Cropped src={shotUrl} crop={crop} alt="Agent's last screenshot" /> : <img src={shotUrl} alt="Agent's last screenshot" />)
         : <div className="empty">{DASH}</div>}
       {spec ? <figcaption>spectator · {span(now - spec.t)}</figcaption>
         : shot && <figcaption>agent view · {span(age)}</figcaption>}

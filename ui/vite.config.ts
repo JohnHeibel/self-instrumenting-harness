@@ -47,9 +47,9 @@ function localRuns(): Plugin {
           res.setHeader('Cache-Control', 'no-store')
           return send(res, 200, 'application/json', JSON.stringify(records))
         }
-        // A run's recorded video: <run>/video.json and the file it names (<run>/<name>.mp4|webm or <run>/video/<name>),
+        // A run's recorded video: <run>/video.json and the file it names (<run>/<name>.mp4|webm, or one folder down, e.g. <run>/cam/<name>.webm),
         // with byte ranges so the player can seek.
-        const vid = url.match(/^\/runs\/([^/]+)\/(video\.json|(?:video\/)?[A-Za-z0-9_.-]+\.(?:mp4|webm))$/)
+        const vid = url.match(/^\/runs\/([^/]+)\/(video\.json|(?:[A-Za-z0-9_-]+\/)?[A-Za-z0-9_.@-]+\.(?:mp4|webm))$/)
         if (vid) {
           const file = safeJoin(RUNS, `${vid[1]}/${vid[2]}`)
           if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) return send(res, 404, 'text/plain', 'not found')

@@ -124,7 +124,7 @@ export type RoomItem = {
 export type ThoughtItem = { t: number; step: number; kind: 'say' | 'goal'; text: string; full: string }
 /** One of the agent's own tool calls (not those inside its scripts or tasks), numbered by step; identical consecutive calls
  *  are folded into `count`. */
-export type CallItem = { t: number; step: number; tool: string; args: string; ok: boolean; ms: number; count: number; error?: string }
+export type CallItem = { t: number; step: number; tool: string; args: string; ok: boolean; ms: number; count: number; error?: string; rec: TRec }
 export type UsageInfo = { requests: number; input: number; cached: number; output: number; reasoning: number; contextWindow?: number; t: number }
 
 const AGENT_STATES: Record<string, string> = {
@@ -237,7 +237,11 @@ export class Run {
   }
   get goal(): string { return this.started?.goal ?? '' }
   /** The run's goal headline: the first line of run_started.goal, without markdown heading marks or a "Goal:" prefix. */
-  get goalTitle(): string { return (this.goal.split('\n').find(l => l.trim()) ?? '').replace(/^#+\s*/, '').replace(/^goal:\s*/i, '') }
+  get goalTitle(): string {
+    const lines = this.goal.split('\n').map(l => l.trim()).filter(Boolean)
+    const head = lines.find(l => /^#\s/.test(l)) ?? lines.find(l => /^#+\s/.test(l)) ?? lines[0] ?? ''
+    return head.replace(/^#+\s*/, '').replace(/^goal:\s*/i, '').replace(/\*\*/g, '')
+  }
   /** Agent and model as run_started records them; effort and agent version only if a record carries them. */
   get harness(): { agent?: string; model?: string; effort?: string; version?: string } {
     const s = this.started
@@ -534,6 +538,10 @@ export class Run {
           const last = this.thoughts_[this.thoughts_.length - 1]
           if (last && last.full === r.text && r.t - last.t < 5000) continue  // the same words recorded twice
           this.thoughts_.push({ t: r.t, step: this.stepAt(r.t), kind: 'say', text: sentence(String(r.text), 260), full: String(r.text) })
+        } else if (r.type === 'reasoning' && (r.text || r.title)) {
+          // The model's reasoning summary (Codex runs): its title, then the text.
+          const full = [r.title, r.text].filter(Boolean).join(': ')
+          this.thoughts_.push({ t: r.t, step: this.stepAt(r.t), kind: 'say', text: sentence(full, 260), full })
         } else if (r.type === 'goal' && r.text) {
           this.thoughts_.push({ t: r.t, step: this.stepAt(r.t), kind: 'goal', text: String(r.text), full: String(r.text) })
         }
@@ -555,8 +563,8 @@ export class Run {
         const args = shortArgs(c.tool === 'run_script' || c.tool === 'task' ? {} : a)
         const ok = c.ok !== false
         const last = this.calls_[this.calls_.length - 1]
-        if (last && last.tool === tool && last.args === args && last.ok === ok) { last.count++; last.t = c.t; last.ms += Number(c.duration_ms) || 0; continue }
-        this.calls_.push({ t: c.t, step: this.stepAt(c.t), tool, args, ok, ms: Number(c.duration_ms) || 0, count: 1, error: ok ? undefined : String(c.error ?? '') })
+        if (last && last.tool === tool && last.args === args && last.ok === ok) { last.count++; last.t = c.t; last.ms += Number(c.duration_ms) || 0; last.rec = c; continue }
+        this.calls_.push({ t: c.t, step: this.stepAt(c.t), tool, args, ok, ms: Number(c.duration_ms) || 0, count: 1, error: ok ? undefined : String(c.error ?? ''), rec: c })
       }
     }
     const i = upper(this.calls_, at)

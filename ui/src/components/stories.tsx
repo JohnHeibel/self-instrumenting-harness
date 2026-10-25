@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import type { RoomItem, Run } from '../data/model'
+import type { CallItem, RoomItem, Run } from '../data/model'
 import { big, hms, span } from '../util'
 
 const DASH = '—'
@@ -99,7 +99,7 @@ export function Reasoning({ run, at, now }: { run: Run; at: number; now: number 
 
 /** Every tool call the agent made itself, in order: step, time, tool (kept script name for run_script), short arguments,
  *  failed or ok, duration. Identical consecutive calls are folded. */
-export function Calls({ run, at }: { run: Run; at: number }) {
+export function Calls({ run, at, onOpen, open }: { run: Run; at: number; onOpen?: (c: CallItem) => void; open?: number }) {
   const items = run.calls(at, 90)
   const box = useRef<HTMLDivElement>(null)
   const newest = items[items.length - 1]?.t
@@ -111,7 +111,8 @@ export function Calls({ run, at }: { run: Run; at: number }) {
         <table>
           <tbody>
             {items.map(c => (
-              <tr key={c.t + c.tool} className={c.ok ? '' : 'fail'} title={c.error || undefined}>
+              <tr key={c.t + c.tool} className={`${c.ok ? '' : 'fail'}${onOpen ? ' click' : ''}${open === c.t ? ' open' : ''}`} title={onOpen ? undefined : c.error || undefined}
+                onClick={onOpen ? () => onOpen(c) : undefined}>
                 <td className="st">{c.step}</td><td className="tm">{hms(c.t - run.t0)}</td>
                 <td className="tn">{c.tool}{c.count > 1 && <span className="ct"> ×{c.count}</span>}</td>
                 <td className="ta">{c.args}</td>

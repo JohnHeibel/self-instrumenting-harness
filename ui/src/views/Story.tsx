@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Run, TRec } from '../data/model'
+import type { CallItem, Run, TRec } from '../data/model'
 import type { Spectator } from '../data/source'
 import { Backdrop } from '../Backdrop'
 import { HookDetail } from '../components/HookDetail'
 import { Event, Header, Kits, Ledger, Screen } from '../components/panels'
 import { Calls, Climb, Figures, MilestoneList, Reasoning, Room } from '../components/stories'
-import { DemoHeader, DemoMetrics, GoalBox, ReasonStrip, Scrubber, TaskLog, ToolTiles, ToolWindow, VideoHero, HowDrawer } from '../components/demo'
+import { CallWindow, DemoHeader, DemoMetrics, GoalBox, ReasonStrip, Scrubber, TaskLog, ToolTiles, ToolWindow, VideoHero, HowDrawer } from '../components/demo'
 import { MetricCharts } from '../components/MetricCharts'
 import { span } from '../util'
 import { Timeline } from '../components/Timeline'
@@ -34,6 +34,9 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   const [speed, setSpeed] = useState(60)
   const [tool, setTool] = useState<string | null>(() => params.get('tool'))
   const [help, setHelp] = useState(false)
+  const [call, setCall] = useState<CallItem | null>(null)
+  // #call=last opens the newest task-log row (for linking a moment with its detail open).
+  useEffect(() => { if (params.get('call') === 'last') setCall(run.calls(at).slice(-1)[0] ?? null) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   const [open, setOpen] = useState<string | null>(() => params.get('hook'))
   const scale = useFit()
 
@@ -59,7 +62,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
       // Space toggles playback, except when a button or field has focus (there it presses the button or types).
       const el = e.target instanceof Element ? e.target.closest('button, input, textarea, select, a, [contenteditable]') : null
       if (e.key === ' ' && !el) { e.preventDefault(); setPlaying(p => !p) }
-      if (e.key === 'Escape') { setOpen(null); setTool(null); setHelp(false) }
+      if (e.key === 'Escape') { setOpen(null); setTool(null); setHelp(false); setCall(null) }
       const i = SPEEDS.indexOf(speed)
       if (e.key === ']' && i < SPEEDS.length - 1) setSpeed(SPEEDS[i + 1])
       if (e.key === '[' && i > 0) setSpeed(SPEEDS[i - 1])
@@ -122,9 +125,10 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
         </div>
         <div className="right">
           <DemoMetrics run={run} at={at} compare={compare} />
-          <TaskLog run={run} at={at} />
-          <ToolTiles run={run} at={at} open={tool} onOpen={k => setTool(t => (t === k ? null : k))} />
+          <TaskLog run={run} at={at} open={call?.t} onOpen={c => { setTool(null); setCall(o => (o?.t === c.t ? null : c)) }} />
+          <ToolTiles run={run} at={at} open={tool} onOpen={k => { setCall(null); setTool(t => (t === k ? null : k)) }} />
         </div>
+        {call && <CallWindow run={run} call={call} onClose={() => setCall(null)} />}
         {tool && <ToolWindow key={tool} run={run} at={at} kitId={tool} onClose={() => setTool(null)} />}
         {help && <HowDrawer onClose={() => setHelp(false)} />}
       </div>

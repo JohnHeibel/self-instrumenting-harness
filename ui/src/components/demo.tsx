@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Kit, Run, TRec } from '../data/model'
+import type { CallItem, Kit, Run, TRec } from '../data/model'
 import { source, type Spectator, type VideoInfo } from '../data/source'
-import { Event, Screen } from './panels'
+import { Cropped, Event, Screen } from './panels'
 import { MetricCharts } from './MetricCharts'
 import { Calls } from './stories'
 import { SPEEDS, diffLines, hms, span } from '../util'
@@ -21,7 +21,7 @@ export function DemoHeader({ run, at, speed, onSpeed, onHelp }: { run: Run; at: 
   }
   return (
     <header className="dh">
-      <span className="dtitle">Sisyphus</span>
+      <span className="dtitle">Sisyphean</span>
       <select className="runs" value={current} onChange={e => go(e.target.value)} aria-label="Run">
         {(runs.includes(current) ? runs : [current, ...runs]).map(r => <option key={r} value={r}>{r}</option>)}
       </select>
@@ -34,6 +34,10 @@ export function DemoHeader({ run, at, speed, onSpeed, onHelp }: { run: Run; at: 
     </header>
   )
 }
+
+/** Saved frames are captures of the host window, title bar included: by default crop the top 5.6% (21 px of a 380 px
+ *  frame). video.json `frame_crop` overrides it per run; `crop` crops the video. */
+const FRAME_CROP = (_w: number, h: number) => ({ top: Math.round(h * 0.056), left: 0, right: 0, bottom: 0 })
 
 /** The recorded video, on the event log's clock: `at` is the master time. At speeds a video can play (≤16×) it plays at
  *  that rate and is nudged back when it drifts more than a second; faster, or paused, it is seeked to `at` (at most five
@@ -66,9 +70,10 @@ export function VideoHero({ run, runName, at, now, playing, speed, following, sp
   const inRange = video && at >= video.start
   return (
     <div className="hero">
-      {video && <video ref={el} src={video.url} muted playsInline preload="auto" onLoadedMetadata={() => { lastSeek.current = 0; setReady(n => n + 1) }}
-        style={{ visibility: inRange ? 'visible' : 'hidden' }} />}
-      {(!video || !inRange) && <Screen run={run} at={at} now={now} following={following} spectator={spectator} imageUrl={imageUrl} />}
+      {video && <div style={{ position: 'absolute', inset: 0, visibility: inRange ? 'visible' : 'hidden' }}>
+        <Cropped src={video.url} video crop={video.crop} videoRef={el} onMeta={() => { lastSeek.current = 0; setReady(n => n + 1) }} />
+      </div>}
+      {(!video || !inRange) && <Screen run={run} at={at} now={now} following={following} spectator={spectator} imageUrl={imageUrl} crop={video?.frameCrop ?? FRAME_CROP} />}
       <Event run={run} at={at} />
     </div>
   )
@@ -114,7 +119,7 @@ export function GoalBox({ run, at }: { run: Run; at: number }) {
   const done = ms.filter(m => m.t !== undefined).length
   return (
     <section className="goalbox">
-      <div className="gl1"><h1>{g?.text ?? (run.goalTitle || DASH)}</h1><span className="gcount">{ms.length ? `${done} / ${ms.length}` : DASH}</span></div>
+      <div className="gl1"><h1 className={(g?.text ?? run.goalTitle).length > 80 ? 'long' : ''}>{g?.text ?? (run.goalTitle || DASH)}</h1><span className="gcount">{ms.length ? `${done} / ${ms.length}` : DASH}</span></div>
       <ul className="mlist">
         {ms.map(m => <li key={m.id} className={m.t !== undefined ? 'on' : ''} title={m.t !== undefined ? `${m.name} · ${hms(m.t - run.t0)}` : m.name}>
           <i aria-hidden="true" /><span>{m.name}</span></li>)}
@@ -138,7 +143,33 @@ export function DemoMetrics({ run, at, compare }: { run: Run; at: number; compar
   return <MetricCharts run={run} at={at} compare={compare} widths={[334, 334, 334, 334]} />
 }
 
-export function TaskLog({ run, at }: { run: Run; at: number }) { return <Calls run={run} at={at} /> }
+export function TaskLog({ run, at, open, onOpen }: { run: Run; at: number; open?: number; onOpen: (c: CallItem) => void }) {
+  return <Calls run={run} at={at} open={open} onOpen={onOpen} />
+}
+
+/** One task-log row in detail: tool, step and time, duration, the full arguments, and the result or the error. */
+export function CallWindow({ run, call: c, onClose }: { run: Run; call: CallItem; onClose: () => void }) {
+  const r = c.rec
+  const args = r.args && Object.keys(r.args).length ? Object.entries(r.args as Record<string, unknown>).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n') : ''
+  const result = c.ok ? String(r.summary ?? '') : String(r.error ?? '')
+  return (
+    <div className="twin cwin" role="dialog" aria-label={c.tool}>
+      <div className="twh">
+        <b>{c.tool}</b>
+        <span>step {c.step}</span><span>{hms(r.t - run.t0)}</span>
+        <span>{c.ms >= 1000 ? `${(c.ms / 1000).toFixed(1)}s` : `${Math.round(c.ms)}ms`}</span>
+        {c.count > 1 && <span>×{c.count}</span>}
+        <span className={c.ok ? 'okc' : 'failc'}>{c.ok ? 'ok' : 'failed'}</span>
+        <span className="nav"><button onClick={onClose} aria-label="Close">✕</button></span>
+      </div>
+      <div className="cbody">
+        {result && <pre className={`cres ${c.ok ? '' : 'fail'}`}>{result}</pre>}
+        {args && <pre className="cargs">{args}</pre>}
+        {!args && !result && <p className="quiet">{DASH}</p>}
+      </div>
+    </div>
+  )
+}
 
 const kitKey = (k: Kit) => `${k.kind}:${k.name}`
 const lastChange = (k: Kit) => k.versions[k.versions.length - 1]?.t ?? -Infinity
