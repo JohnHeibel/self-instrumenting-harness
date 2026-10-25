@@ -75,6 +75,72 @@ function Line({ item: i, run }: { item: RoomItem; run: Run }) {
   )
 }
 
+/** The agent's own words, one entry per step that had any, newest at the bottom, cut at the replay position. */
+export function Reasoning({ run, at, now }: { run: Run; at: number; now: number }) {
+  const items = run.thoughts(at)
+  const box = useRef<HTMLDivElement>(null)
+  const newest = items[items.length - 1]?.t
+  useEffect(() => { const el = box.current; if (el) el.scrollTop = el.scrollHeight }, [items.length, newest])
+  return (
+    <section className="paper reason" aria-label="Reasoning">
+      <div className="ph"><h2>Reasoning</h2><StateLine run={run} at={at} now={now} /></div>
+      <div className="pbody" ref={box}>
+        {items.map(i => (
+          <div key={i.t + i.kind} className={`th k-${i.kind}`} title={i.full}>
+            <span className="st">{i.step}</span><time>{hms(i.t - run.t0)}</time>
+            <p>{i.kind === 'goal' && <b>goal </b>}{i.text}</p>
+          </div>
+        ))}
+        {!items.length && <p className="quiet">{DASH}</p>}
+      </div>
+    </section>
+  )
+}
+
+/** Every tool call the agent made itself, in order: step, time, tool (kept script name for run_script), short arguments,
+ *  failed or ok, duration. Identical consecutive calls are folded. */
+export function Calls({ run, at }: { run: Run; at: number }) {
+  const items = run.calls(at, 90)
+  const box = useRef<HTMLDivElement>(null)
+  const newest = items[items.length - 1]?.t
+  useEffect(() => { const el = box.current; if (el) el.scrollTop = el.scrollHeight }, [items.length, newest])
+  return (
+    <section className="paper calls" aria-label="Tool calls">
+      <div className="ph"><h2>Tool calls</h2><span className="pc">{run.stepAt(at)} steps</span></div>
+      <div className="pbody" ref={box}>
+        <table>
+          <tbody>
+            {items.map(c => (
+              <tr key={c.t + c.tool} className={c.ok ? '' : 'fail'} title={c.error || undefined}>
+                <td className="st">{c.step}</td><td className="tm">{hms(c.t - run.t0)}</td>
+                <td className="tn">{c.tool}{c.count > 1 && <span className="ct"> ×{c.count}</span>}</td>
+                <td className="ta">{c.args}</td>
+                <td className="ok">{c.ok ? '' : 'failed'}</td>
+                <td className="du">{c.ms >= 1000 ? `${(c.ms / 1000).toFixed(c.ms < 10000 ? 1 : 0)}s` : `${Math.round(c.ms)}ms`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <p className="quiet">{DASH}</p>}
+      </div>
+    </section>
+  )
+}
+
+/** Milestones reached of those announced; opens to the whole set by name, reached ones with their run time. */
+export function MilestoneList({ run, at }: { run: Run; at: number }) {
+  const ms = run.milestones(at)
+  const done = ms.filter(m => m.t !== undefined).length
+  return (
+    <details className="mslist">
+      <summary><b>{ms.length ? done : DASH}</b>{ms.length > 0 && <span> / {ms.length}</span>} <em>milestones</em></summary>
+      <ol>
+        {ms.map(m => <li key={m.id} className={m.t !== undefined ? 'on' : ''}><span>{m.name}</span>{m.t !== undefined && <time>{hms(m.t - run.t0)}</time>}</li>)}
+      </ol>
+    </details>
+  )
+}
+
 /** The climb: milestones reached over run time as a stepped slope, each stretch labelled with the cache-weighted tokens it
  *  cost, deaths marked under the base, the stone at the moment shown. Click or drag to seek. */
 export function Climb({ run, at, w, h, onSeek, labels = true }: { run: Run; at: number; w: number; h: number; onSeek: (t: number) => void; labels?: boolean }) {

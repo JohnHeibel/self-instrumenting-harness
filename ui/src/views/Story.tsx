@@ -4,14 +4,14 @@ import type { Spectator } from '../data/source'
 import { Backdrop } from '../Backdrop'
 import { HookDetail } from '../components/HookDetail'
 import { Event, Header, Kits, Ledger, Screen } from '../components/panels'
-import { Climb, Figures, Room } from '../components/stories'
+import { Calls, Climb, Figures, MilestoneList, Reasoning, Room } from '../components/stories'
 import { MetricCharts } from '../components/MetricCharts'
 import { span } from '../util'
 import { Timeline } from '../components/Timeline'
 import { SPEEDS, useNow } from '../util'
 
 /** Three directions, chosen with #v=a|b|c: a broadsheet front page, the room first, the climb. */
-type V = 'a' | 'b' | 'c' | 'a1' | 'a2' | 'a3'
+type V = 'a' | 'b' | 'c' | 'a1' | 'a2' | 'a3' | 's1' | 's2' | 's3'
 
 /** A run, live or finished: follows the newest moment by default; scrub, play at timelapse speed, jump between
  *  key moments, open any hook. `t=live` in the URL means following. */
@@ -90,7 +90,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
 
   const hooks = run.hooks(at)
   const openHook = open ? hooks.find(h => h.name === open) : undefined
-  const v = (['a', 'b', 'c', 'a1', 'a2', 'a3'].includes(params.get('v') ?? '') ? params.get('v') : 'a1') as V
+  const v = (['a', 'b', 'c', 'a1', 'a2', 'a3', 's1', 's2', 's3'].includes(params.get('v') ?? '') ? params.get('v') : 's1') as V
   const seek = (t: number) => setAt(Math.max(run.t0, Math.min(run.t1, t)))
   const active = !(following && !live) && run.handsActive(at)
   const g = run.latest('goal', at)
@@ -109,12 +109,27 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   )
   return (
     <div className="stage-fit">
-      <div className={`canvas v-${v}${v.length === 2 ? ' v-at' : ''}`} style={{ transform: `scale(${scale})` }}>
+      <div className={`canvas v-${v}${v[0] === 'a' && v.length === 2 ? ' v-at' : ''}${v[0] === 's' ? ' v-st' : ''}`} style={{ transform: `scale(${scale})` }}>
         {v.length === 2 && <Backdrop active={active} />}
         <Header run={run} at={at} now={now} onJump={jumpLive} />
-        {v.length === 2 && <>
+        {v[0] === 's' && <>
           {headline}
           <aside className="stats">
+            <MilestoneList run={run} at={at} />
+            <Figures run={run} at={at} />
+            <section className="climbbox"><Climb run={run} at={at} w={374} h={170} onSeek={seek} /></section>
+            <Ledger run={run} at={at} />
+            <Kits run={run} at={at} onOpen={setOpen} />
+          </aside>
+          <div className="lead">{game}</div>
+          <Reasoning run={run} at={at} now={now} />
+          <Calls run={run} at={at} />
+          <div className="tl paper">{timeline}</div>
+        </>}
+        {v[0] === 'a' && v.length === 2 && <>
+          {headline}
+          <aside className="stats">
+            <MilestoneList run={run} at={at} />
             {v === 'a2'
               ? <><section className="climbbox"><Climb run={run} at={at} w={374} h={300} onSeek={seek} /></section><Figures run={run} at={at} /></>
               : <><Figures run={run} at={at} /><section className="climbbox"><Climb run={run} at={at} w={374} h={200} onSeek={seek} /></section></>}

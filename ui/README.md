@@ -26,9 +26,7 @@ Both produce the same records, so nothing above `src/data/source.ts` knows which
 
 ## Layout and numbers
 
-Three directions in one codebase, chosen with `#v=`: **a** a broadsheet front page (the goal as the headline, the game as the lead photo, the headline metrics as a table of figures, the room as dispatches), **b** the room first (the conversation between the player and its watchers in the middle, the game and charts around it), **c** the climb (the milestone climb with the cost of each stretch across the top, the numbers as a tablet, the room as inscriptions, Gruvbox dark). Palette: Gruvbox (github.com/morhetz/gruvbox); type: one Times-style serif (Times New Roman, Tinos, Liberation Serif). Every number comes from a record; a dash where the run has none.
-
-The room (`Run.room`) reads: `agent_message` (player, cut at a sentence end), `goal` (player, new goal), `marker` `supervisor_nudge` (supervisor, its `text`), `idle_nudge`, `context_handoff` / `context_reset` and any other `marker` with `text` (runner), `notice` with `source: harness` (tool review), urgent task `notice`s (harness: stuck, repeated failure, failed; task results that are only "ok" or "stopped" are left out), grader `milestone` and `marker` `agent_died`.
+`#v=s1|s2|s3` (default s1): the broadsheet with the two step panels. **Reasoning**: the agent's own words (`agent_message`) and new goals (`goal`), numbered by step (the count of `usage` records by then); Claude Code's thinking blocks are redacted in the raw stream (empty text, signature only), so nothing else is available. **Tool calls**: every call the agent made itself (not those inside its scripts or tasks) with step, time, tool (`run_script <kept name>`), short arguments, failed, duration; identical consecutive calls folded. Stats on the left over Sisyphus (the slope runs from the bottom edge to the top edge; the mountain's base, top and right side are off screen), the milestone count opening to the whole set. Palettes: s1 Gruvbox, s2 Flexoki, s3 Rosé Pine Dawn (hex values in styles.css). Older directions stay available: `a`, `b`, `c`, `a1`–`a3`.
 
 | Shown | Source |
 |---|---|

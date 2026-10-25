@@ -111,6 +111,11 @@ export type RoomItem = {
   t: number; from: RoomFrom; kind: 'say' | 'goal' | 'nudge' | 'stuck' | 'failed' | 'review' | 'idle' | 'handoff' | 'reset' | 'note' | 'milestone' | 'death'
   text: string; full?: string; missing?: string
 }
+/** A model step's words (agent_message) or new goal (goal record), numbered by the step (usage record) it came in. */
+export type ThoughtItem = { t: number; step: number; kind: 'say' | 'goal'; text: string; full: string }
+/** One of the agent's own tool calls (not those inside its scripts or tasks), numbered by step; identical consecutive calls
+ *  are folded into `count`. */
+export type CallItem = { t: number; step: number; tool: string; args: string; ok: boolean; ms: number; count: number; error?: string }
 export type UsageInfo = { requests: number; input: number; cached: number; output: number; reasoning: number; contextWindow?: number; t: number }
 
 const AGENT_STATES: Record<string, string> = {
@@ -154,6 +159,8 @@ export class Run {
   private preSums_?: Sums
   private handsMerged_?: Span[]
   private room_?: RoomItem[]
+  private thoughts_?: ThoughtItem[]
+  private calls_?: CallItem[]
   private spans_?: { hands: Span[]; tools: Span[]; off: Span[] }
 
   constructor(records: Rec[]) {
@@ -506,6 +513,47 @@ export class Run {
     }
   }
 
+  /** The step a moment belongs to: the number of model requests (usage records) made by then. */
+  stepAt(t: number): number { return upper(this.of('usage'), t) }
+
+  /** The agent's words and goals up to `at`, oldest first, at most `n`. */
+  thoughts(at: number, n = 60): ThoughtItem[] {
+    if (!this.thoughts_) {
+      this.thoughts_ = []
+      for (const r of this.recs) {
+        if (r.type === 'agent_message' && r.text) {
+          const last = this.thoughts_[this.thoughts_.length - 1]
+          if (last && last.full === r.text && r.t - last.t < 5000) continue  // the same words recorded twice
+          this.thoughts_.push({ t: r.t, step: this.stepAt(r.t), kind: 'say', text: sentence(String(r.text), 260), full: String(r.text) })
+        } else if (r.type === 'goal' && r.text) {
+          this.thoughts_.push({ t: r.t, step: this.stepAt(r.t), kind: 'goal', text: String(r.text), full: String(r.text) })
+        }
+      }
+    }
+    const i = upper(this.thoughts_, at)
+    return this.thoughts_.slice(Math.max(0, i - n), i)
+  }
+
+  /** The agent's own tool calls up to `at`, oldest first, at most `n` rows. */
+  calls(at: number, n = 80): CallItem[] {
+    if (!this.calls_) {
+      this.calls_ = []
+      for (const c of this.of('tool_call')) {
+        const via = String(c.via ?? '')
+        if (!byAgent(c) || via === 'script' || via === 'forward' || via.startsWith('task:') || c.tool === 'costs') continue
+        const a = (c.args ?? {}) as Record<string, unknown>
+        const tool = c.tool === 'run_script' ? (a.name ? `run_script ${a.name}` : 'run_script') : c.tool === 'task' && a.id ? `task ${a.id}` : String(c.tool)
+        const args = shortArgs(c.tool === 'run_script' || c.tool === 'task' ? {} : a)
+        const ok = c.ok !== false
+        const last = this.calls_[this.calls_.length - 1]
+        if (last && last.tool === tool && last.args === args && last.ok === ok) { last.count++; last.t = c.t; last.ms += Number(c.duration_ms) || 0; continue }
+        this.calls_.push({ t: c.t, step: this.stepAt(c.t), tool, args, ok, ms: Number(c.duration_ms) || 0, count: 1, error: ok ? undefined : String(c.error ?? '') })
+      }
+    }
+    const i = upper(this.calls_, at)
+    return this.calls_.slice(Math.max(0, i - n), i)
+  }
+
   /** The room up to `at`, oldest first, at most `n` lines. Built once for the whole run, then cut at `at`. */
   room(at: number, n = 80): RoomItem[] {
     if (!this.room_) this.room_ = this.buildRoom()
@@ -802,6 +850,21 @@ export class Run {
     ]
     return ms.sort((a, b) => a.t - b.t)
   }
+}
+
+/** Tool arguments in short form: up to three `key=value` pairs, values compact (numbers, short strings, short arrays);
+ *  code and long text are left out. */
+export function shortArgs(a: Record<string, unknown>): string {
+  const out: string[] = []
+  for (const [k, v] of Object.entries(a)) {
+    if (out.length >= 3) break
+    if (k === 'code' || v == null) continue
+    let s = typeof v === 'string' ? v : JSON.stringify(v)
+    s = s.replace(/\s+/g, ' ').replace(/(\d+\.\d)\d+/g, '$1')
+    if (s.length > 24) s = s.slice(0, 23) + '…'
+    out.push(`${k}=${s}`)
+  }
+  return out.join(' ')
 }
 
 /** The text up to the last sentence end within `n` characters (or cut at a word, with an ellipsis), whitespace and
