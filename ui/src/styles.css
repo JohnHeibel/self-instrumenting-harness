@@ -519,6 +519,9 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .gcount { font-size: 38px; font-weight: 700; color: var(--green); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .mlist { display: grid; grid-template-columns: repeat(4, 1fr); column-gap: 20px; row-gap: 3px; font-size: 15px; line-height: 19px; color: var(--faint); }
 .mlist li { display: flex; gap: 7px; min-width: 0; }
+.mlist li { position: relative; }
+.mlist li:hover::after { content: attr(data-full); position: absolute; left: 10px; bottom: -4px; z-index: 5; width: max-content; max-width: 460px; padding: 3px 7px; background: var(--panel2); border: 2px solid var(--rule-hi); color: var(--ink); white-space: normal; }
+.mlist li:nth-child(4n):hover::after, .mlist li:nth-child(4n-1):hover::after { left: auto; right: 0; }
 .mlist li span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .mlist li i { flex: none; width: 10px; height: 10px; margin-top: 3px; border: 2px solid var(--faint); display: inline-block; }
 .mlist li.on { color: var(--ink); } .mlist li.on i { background: var(--gold); border-color: var(--gold); }
