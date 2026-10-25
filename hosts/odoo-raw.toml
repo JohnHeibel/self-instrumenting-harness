@@ -1,0 +1,42 @@
+# Host config for Odoo Community 19.0, for baseline runs with input tools only (no API, no extensions, no scripts).
+# Same Odoo, database, users, rights, simulator and grader as odoo-hero.toml; what differs is how the agent reaches
+# it: through ONE browser window showing Odoo's web UI, with screenshots and the mouse and keyboard, as a person would.
+# Modeled on ksp-raw.toml. Launch with ~/sisyphus-work/run-odoo-raw.command (a copy: hosts/odoo/run-odoo-raw.command.example),
+# which also starts the browser (hosts/odoo/browser.py) and the screen recording (hosts/odoo/obsctl.py).
+#
+# {run_dir}: this run's directory; {config_dir}: this file's directory; {python}: the harness's Python.
+# Commands run from {config_dir}. The agent has a web password in a raw run only (hostctl --agent-web-password);
+# the API and the logging proxy on 8070 are not used, and the agent's sandbox is not given any port (agent_ports unset)
+# or key file.
+
+[host]
+name = "odoo"
+# One window of the dedicated "Google Chrome for Testing" (hosts/odoo/browser.py: app mode, 1600x960 points, fresh
+# profile, no address bar or tabs). The window title follows the Odoo page, so the match is on the owning process,
+# which no other app has: your own Chrome is "Google Chrome". When this window is not on screen the tools report it
+# (input) or capture the whole screen (screenshot), so the run script checks it first.
+window_title = ""
+process = "Google Chrome for Testing"
+capture = "window"
+up_check = ["{python}", "odoo/hostctl.py", "check", "--run-dir", "{run_dir}"]
+start = ["{python}", "odoo/hostctl.py", "start", "--run-dir", "{run_dir}"]
+stop = ["{python}", "odoo/hostctl.py", "stop", "--run-dir", "{run_dir}"]
+start_timeout_s = 900
+notes = """
+Odoo Community 19.0 runs on this machine with one database, which has Sales, Purchase, Inventory and Invoicing and a
+generic chart of accounts, and no demo data. You see it only as a person would: your screenshots show one browser window
+with Odoo's web interface, and you act with the mouse and keyboard. The window has no address bar and no tabs; you
+move around with Odoo's own menus, links and buttons.
+The window starts at Odoo's login page. Log in once with the login `sisyphus_agent` and the password
+`sisyphus-agent-raw`. You are that user: Sales, Purchase, Inventory and Invoicing rights, not Settings or Administration.
+Odoo refuses what your rights or the record rules refuse. If the session ends, log in the same way.
+The company, its customers, vendors and bank act on their own clock while you work: new quotations arrive, vendors
+deliver and bill, customers pay, and the bank statements appear on their own.
+"""
+
+[extensions]
+# No in-host extension: this run has no extension tools.
+reload_timeout_s = 30
+
+[extensions.reload]
+none = []

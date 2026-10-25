@@ -8,7 +8,7 @@ What it does (the agent never sees any of it):
      base, sale_management, purchase, stock, account (Invoicing), then loads the generic chart of accounts (template generic_coa)
   2. in an `odoo shell` in a one-off container: sets a random admin
      password, and creates users without passwords (they can only be used through their API keys):
-       sisyphus_agent   Sales (all documents), Purchase, Inventory and Invoicing user rights, plus creating
+       sisyphus_agent   (web password only with --agent-web-password, for raw runs) Sales (all documents), Purchase, Inventory and Invoicing user rights, plus creating
                         contacts and products; not Settings or Administration
        sisyphus_auditor a read-only group made here (read access to the models the grader looks at, nothing else)
        sisyphus_intake  Sales (own documents): the customer side; graders/odoo/demand.py creates quotations as it
@@ -18,6 +18,7 @@ What it does (the agent never sees any of it):
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import secrets
@@ -73,6 +74,9 @@ agent = make("sisyphus_agent", "Sisyphus Agent", groups(
     "base.group_user", "sales_team.group_sale_salesman_all_leads", "purchase.group_purchase_user",
     "stock.group_stock_user", "account.group_account_invoice", "base.group_partner_manager",
     "product.group_product_manager"))
+AGENT_WEB_PASSWORD = %(agent_web_password)r   # raw (input-only) runs: the agent logs in through the web UI
+if AGENT_WEB_PASSWORD:
+    agent.password = AGENT_WEB_PASSWORD
 auditor = make("sisyphus_auditor", "Sisyphus Auditor", [auditor_group.id, ref("base.group_user").id])
 intake = make("sisyphus_intake", "Sisyphus Customer Intake", groups("base.group_user", "sales_team.group_sale_salesman", "base.group_partner_manager"))
 
@@ -116,6 +120,10 @@ print(%(mark)r + json.dumps({"admin_password": admin_pw, "keys": keys,
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--agent-web-password", default="",
+                    help="give sisyphus_agent this web password (raw, input-only runs); same rights as without it")
+    a = ap.parse_args()
     h.prepare()
     h.KEYS.unlink(missing_ok=True)
     h.compose("up", "-d", "--wait", "db")
@@ -132,7 +140,7 @@ def main() -> int:
     print("creating users...", flush=True)
     r = subprocess.run(["docker", "compose", "-f", str(h.HERE / "docker-compose.yml"), "run", "--rm", "--no-deps", "-T",
                         "odoo", "odoo", "shell", "-d", h.DB, "--no-http"],
-                       input=SHELL % {"mark": MARK}, text=True, capture_output=True,
+                       input=SHELL % {"mark": MARK, "agent_web_password": a.agent_web_password}, text=True, capture_output=True,
                        env={**os.environ, "ODOO_CONF": str(h.CONF)})
     line = next((ln for ln in r.stdout.splitlines() if ln.startswith(MARK)), None)
     if r.returncode != 0 or not line:
@@ -143,6 +151,8 @@ def main() -> int:
     for who, login in (("agent", "sisyphus_agent"), ("auditor", "sisyphus_auditor"), ("intake", "sisyphus_intake"),
                      ("world", "sisyphus_world")):
         keys[who] = {"login": login, "key": out["keys"][login], "uid": out["uids"][login]}
+    if a.agent_web_password:
+        keys["agent"]["password"] = a.agent_web_password   # web login for raw runs (a throwaway local password)
     keys["observer"] = {"login": "sisyphus_observer", "password": out["observer_password"]}   # web login only, no API key
     h.KEYS.write_text(json.dumps(keys, indent=2))
     os.chmod(h.KEYS, 0o600)

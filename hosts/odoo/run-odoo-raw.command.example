@@ -1,0 +1,81 @@
+#!/bin/zsh
+printf "\e[2t"
+# Odoo RAW baseline run: the Live Company (goals/odoo-live-raw.md) played through screenshots + mouse/keyboard ONLY,
+# by GPT 6.1 Sol through John's runner (Codex in Docker): no shell, no files, no API, no extensions, no scripts.
+# Same Odoo database, seed (1), simulator (2 wall min per sim day) and grader (--milestones live) as the hero run.
+# What is different: a web password for the agent user (hostctl --agent-web-password), one dedicated browser window
+# (hosts/odoo/browser.py) instead of the API proxy and the follow-the-agent camera, that window recorded with OBS
+# (hosts/odoo/obsctl.py), the raw Codex config and brief, and --without-tools.
+# THE MAC IS NOT USABLE DURING THE RUN: every click, key press and scroll the agent makes is posted to the whole
+# system (it focuses the browser window and moves the real mouse), so keep your hands off it for the whole hour.
+# Env overrides: RUN_NAME (odoo-raw-01), RUN_MIN (60), DAY_MIN (2), MODEL (gpt-6.1-sol),
+#   RECORDER (obs | screencapture; default obs).
+# Stop early: touch $R/STOP. Run from a checkout of nazeem/odoo-raw (or main once it has these files); the
+# repo path below is that checkout. NEVER start this while another run uses Odoo on :8069 (reset wipes its database).
+RUN_NAME="${RUN_NAME:-odoo-raw-01}"
+RUN_MIN="${RUN_MIN:-60}"
+DAY_MIN="${DAY_MIN:-2}"
+MODEL="${MODEL:-gpt-6.1-sol}"
+RECORDER="${RECORDER:-obs}"
+REPO="${REPO:-$HOME/Projects/harness-odoo-raw}"
+AGENT_PW="sisyphus-agent-raw"   # a throwaway local password: Odoo listens on 127.0.0.1 and the database is rebuilt each run
+cd "$REPO" || exit 1
+R=$HOME/sisyphus-runs/$RUN_NAME
+HC=(uv run --project toolserver python hosts/odoo/hostctl.py)
+PY=(uv run --project toolserver python)
+OBSCTL=(uv run --project toolserver --with obsws-python python hosts/odoo/obsctl.py)
+BR=(uv run --project toolserver python hosts/odoo/browser.py)
+[ -e "$R" ] && { echo "$R already exists: every run starts fresh, pick a new RUN_NAME."; exit 1; }
+[ -f "$HOME/.codex/auth.json" ] || { echo "no ~/.codex/auth.json: run codex login"; exit 1; }
+if [ -n "$(docker ps --filter name=harness-agent- --format '{{.Names}}' 2>/dev/null)" ]; then
+  echo "another agent container is running ($(docker ps --filter name=harness-agent- --format '{{.Names}}')): it may be using Odoo. Not starting."; exit 1
+fi
+if [ "$RECORDER" = obs ] && pgrep -x OBS >/dev/null; then echo "OBS is already open: quit it first (the run starts it with its own profile)."; exit 1; fi
+docker image inspect harness-agent:codex-0.164.0 >/dev/null 2>&1 || docker build -t harness-agent:codex-0.164.0 agent || exit 1
+mkdir -p "$R/injector" "$R/workspace" "$R/codex-home"
+cp agent/codex-config-raw.toml "$R/codex-home/config.toml"   # screenshot + input tools only: no shell, code or files
+
+pkill -f "graders/odoo/grader.py"; pkill -f "graders/odoo/livesim.py"; pkill -f "hosts/odoo/apiproxy.py"; pkill -f "hosts/odoo/cam.py"
+"${HC[@]}" reset || { echo "odoo reset failed"; exit 1; }
+"${HC[@]}" start --timeout 900 --agent-web-password "$AGENT_PW" > "$R/hostctl-start.out" 2>&1 \
+  || { echo "odoo start/bootstrap failed, see $R/hostctl-start.out"; exit 1; }
+"${PY[@]}" graders/odoo/livesim.py --setup-only --seed 1 --day-minutes "$DAY_MIN" --run-dir "$R" > "$R/injector/setup.out" 2>&1 \
+  || { echo "world setup failed, see $R/injector/setup.out"; exit 1; }
+nohup "${PY[@]}" graders/odoo/grader.py --run-dir "$R" --milestones live > "$R/grader.out" 2>&1 &
+sleep 2
+nohup "${PY[@]}" graders/odoo/livesim.py --seed 1 --day-minutes "$DAY_MIN" --run-dir "$R" > "$R/injector/loop.out" 2>&1 &
+
+cleanup() {
+  touch "$R/STOP"
+  sleep 3
+  if [ "$RECORDER" = obs ]; then "${OBSCTL[@]}" stop --run-dir "$R" --quit >> "$R/injector/rec.out" 2>&1
+  elif [ -n "$REC_PID" ]; then kill -INT $REC_PID 2>/dev/null; wait $REC_PID 2>/dev/null; fi
+  "${BR[@]}" close --run-dir "$R" >/dev/null 2>&1
+  pkill -f "graders/odoo/grader.py"; pkill -f "graders/odoo/livesim.py"
+  "${HC[@]}" start --timeout 300 >> "$R/hostctl-start.out" 2>&1   # bring Odoo back (the runner's host stop stopped it)
+}
+trap cleanup EXIT
+
+# The agent's browser window (login page), then the recording of exactly that window.
+"${BR[@]}" open --run-dir "$R" > "$R/injector/browser.out" 2>&1 || { echo "browser did not open, see $R/injector/browser.out"; exit 1; }
+sleep 3
+if [ "$RECORDER" = obs ]; then
+  "${OBSCTL[@]}" start --run-dir "$R" > "$R/injector/rec.out" 2>&1 || { echo "recording did not start, see $R/injector/rec.out"; exit 1; }
+else
+  WID=$("${PY[@]}" -c "import json,sys; print(json.loads(open('$R/injector/browser.out').read().splitlines()[-1])['id'])")
+  screencapture -v -x -l "$WID" "$R/odoo-raw.mov" &
+  REC_PID=$!
+  "${PY[@]}" -c "import json,datetime; json.dump({'file':'odoo-raw.mov','start_utc':datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]+'Z','recorder':'screencapture'}, open('$R/video.json','w'), indent=2)"
+fi
+osascript -e 'tell application "Google Chrome for Testing" to activate' >/dev/null 2>&1
+sleep 4   # recording running, window in front, before the agent acts
+
+# The deadline counts from here, after the Odoo bootstrap (a few minutes).
+UNTIL="${UNTIL:-$(date -u -v+${RUN_MIN}M +%Y-%m-%dT%H:%M:%SZ)}"
+ARGS=(--host-config hosts/odoo-raw.toml --run-dir "$R" --goal-file goals/odoo-live-raw.md
+      --brief-file prompts/brief-raw.md --without-tools load_extension,list_hooks,call_hook,run_script,task,wait,watch
+      --model "$MODEL" --until "$UNTIL")
+uv run --project runner runner "${ARGS[@]}" > "$R/runner.out" 2>&1
+RC=$?
+echo "run ended rc=$RC"
+exit $RC
