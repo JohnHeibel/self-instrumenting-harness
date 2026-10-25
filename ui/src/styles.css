@@ -418,3 +418,39 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .mslist li { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid var(--p-rule, var(--rule)); font-size: 15px; color: var(--p-muted, var(--muted)); }
 .mslist li.on { color: var(--p-ink, var(--ink)); font-weight: 700; }
 .mslist li time { font-weight: 400; font-variant-numeric: tabular-nums; }
+
+/* ---------- Muted takes (#v=m1, m2, m3) ----------
+   m1 Gruvbox Material (github.com/sainnhe/gruvbox-material, dark palette): page bg_diff_green #34381b (olive), panels
+   bg_visual_green #3b4439, text fg0 #d4be98, fg1 #ddc7a1, secondary grey2 #a89984, rules bg5 #5a524c, accent orange
+   #e78a4e, game frame bg_dim #1b1b1b.
+   m2 Gruvbox Material: page bg_visual_yellow #4f422e (ochre/clay), panels bg1 #32302f, text fg0 #d4be98, secondary grey2
+   #a89984, rules bg5 #5a524c, accent green #a9b665, game frame bg_dim #1b1b1b.
+   m3 Kanagawa Dragon (github.com/rebelot/kanagawa.nvim): page dragonBlack5 #393836 (warm stone), panels dragonBlack4
+   #282727, text dragonWhite #c5c9c5, headings dragonGreen2 #8a9a7b (sage), secondary dragonGray2 #9e9b93, rules
+   dragonBlack6 #625e5a, accent dragonYellow #c4b28a, game frame dragonBlack1 #12120f.
+   Panels are 90% opaque so the outline figure shows faintly through them; text keeps full contrast. */
+.v-m1 { --bg: #34381b; --ink: #ddc7a1; --ink2: #d4be98; --muted: #a89984; --faint: #a89984; --rule: #5a524c; --rule-hi: #7c6f64;
+  --panel: transparent; --panel2: #3b4439; --wash: #3b4439; --accent: #e78a4e; --frame: #1b1b1b; --outline: #ddc7a1;
+  --p-bg: #3b4439e6; --p-bg2: #45403d; --p-wash: #45403d; --p-rule: #5a524c; --p-ink: #ddc7a1; --p-ink2: #d4be98; --p-muted: #a89984; --p-accent: #e78a4e; }
+.v-m2 { --bg: #4f422e; --ink: #ddc7a1; --ink2: #d4be98; --muted: #a89984; --faint: #a89984; --rule: #5a524c; --rule-hi: #7c6f64;
+  --panel: transparent; --panel2: #45403d; --wash: #45403d; --accent: #a9b665; --frame: #1b1b1b; --outline: #ddc7a1;
+  --p-bg: #32302fe6; --p-bg2: #45403d; --p-wash: #45403d; --p-rule: #5a524c; --p-ink: #ddc7a1; --p-ink2: #d4be98; --p-muted: #a89984; --p-accent: #a9b665; }
+.v-m3 { --bg: #393836; --ink: #c5c9c5; --ink2: #c5c9c5; --muted: #9e9b93; --faint: #9e9b93; --rule: #625e5a; --rule-hi: #737c73;
+  --panel: transparent; --panel2: #282727; --wash: #282727; --accent: #c4b28a; --frame: #12120f; --outline: #c5c9c5;
+  --p-bg: #282727e6; --p-bg2: #393836; --p-wash: #393836; --p-rule: #625e5a; --p-ink: #c5c9c5; --p-ink2: #c5c9c5; --p-muted: #9e9b93; --p-accent: #c4b28a; }
+.v-m3 h2, .v-m3 .ph h2 { color: #8a9a7b; }
+.v-mt { color-scheme: dark; grid-template-columns: 390px 820px 1fr; grid-template-rows: 64px 64px 461px 1fr 56px;
+  grid-template-areas: "head head head" "stats headline calls" "stats game calls" "stats reason calls" "stats tl calls"; }
+.v-mt.v-m2 { grid-template-columns: 390px 840px 1fr; grid-template-rows: 64px 64px 473px 1fr 56px;
+  grid-template-areas: "head head head" "stats headline reason" "stats game reason" "stats calls calls" "stats tl tl"; }
+.v-mt.v-m3 { grid-template-columns: 390px 1fr 765px; grid-template-rows: 64px 64px 430px 1fr 56px;
+  grid-template-areas: "head head head" "stats headline headline" "stats reason game" "stats reason calls" "stats tl tl"; }
+.v-mt .paper { color-scheme: dark; border: 1px solid var(--p-rule); }
+/* The figure as line art: fills drop out, the incised lines and contours take the outline colour; clipped to what lies
+   above the slope's surface, which the .slope line carries on from screen edge to screen edge. */
+.v-mt > .backdrop { left: 0; top: 835px; width: 480px; height: 270px; opacity: .5;
+  --sisy-ground: transparent !important; --sisy-figure: transparent !important; --sisy-line: var(--outline) !important;
+  --sisy-mottle: transparent !important; --sisy-ray: transparent !important; --sisy-halo: transparent !important;
+  clip-path: polygon(0 0, 97.6% 0, 25.4% 100%, 0 100%); }
+.v-mt > .slope { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; }
+.v-mt > .slope line { stroke: var(--outline); stroke-width: 1.2; opacity: .5; }

@@ -11,7 +11,7 @@ import { Timeline } from '../components/Timeline'
 import { SPEEDS, useNow } from '../util'
 
 /** Three directions, chosen with #v=a|b|c: a broadsheet front page, the room first, the climb. */
-type V = 'a' | 'b' | 'c' | 'a1' | 'a2' | 'a3' | 's1' | 's2' | 's3'
+type V = 'a' | 'b' | 'c' | 'a1' | 'a2' | 'a3' | 's1' | 's2' | 's3' | 'm1' | 'm2' | 'm3'
 
 /** A run, live or finished: follows the newest moment by default; scrub, play at timelapse speed, jump between
  *  key moments, open any hook. `t=live` in the URL means following. */
@@ -90,7 +90,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
 
   const hooks = run.hooks(at)
   const openHook = open ? hooks.find(h => h.name === open) : undefined
-  const v = (['a', 'b', 'c', 'a1', 'a2', 'a3', 's1', 's2', 's3'].includes(params.get('v') ?? '') ? params.get('v') : 's1') as V
+  const v = (['a', 'b', 'c', 'a1', 'a2', 'a3', 's1', 's2', 's3', 'm1', 'm2', 'm3'].includes(params.get('v') ?? '') ? params.get('v') : 'm1') as V
   const seek = (t: number) => setAt(Math.max(run.t0, Math.min(run.t1, t)))
   const active = !(following && !live) && run.handsActive(at)
   const g = run.latest('goal', at)
@@ -109,10 +109,11 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   )
   return (
     <div className="stage-fit">
-      <div className={`canvas v-${v}${v[0] === 'a' && v.length === 2 ? ' v-at' : ''}${v[0] === 's' ? ' v-st' : ''}`} style={{ transform: `scale(${scale})` }}>
+      <div className={`canvas v-${v}${v[0] === 'a' && v.length === 2 ? ' v-at' : ''}${v[0] === 's' || v[0] === 'm' ? ' v-st' : ''}${v[0] === 'm' ? ' v-mt' : ''}`} style={{ transform: `scale(${scale})` }}>
         {v.length === 2 && <Backdrop active={active} />}
+        {v[0] === 'm' && <Slope />}
         <Header run={run} at={at} now={now} onJump={jumpLive} />
-        {v[0] === 's' && <>
+        {(v[0] === 's' || v[0] === 'm') && <>
           {headline}
           <aside className="stats">
             <MilestoneList run={run} at={at} />
@@ -181,6 +182,12 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
       </div>
     </div>
   )
+}
+
+/** The slope Sisyphus climbs, as one line from the bottom edge of the screen to the top edge, continuing the surface of the
+ *  asset's slope under his feet (the figure is placed so it stands on it; see .v-mt > .backdrop in styles.css). */
+function Slope() {
+  return <svg className="slope" width={1920} height={1080} viewBox="0 0 1920 1080" aria-hidden="true"><line x1={152.5} y1={1080} x2={1538.6} y2={0} /></svg>
 }
 
 function useFit(): number {
