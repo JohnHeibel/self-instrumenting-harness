@@ -57,14 +57,14 @@ def test_delivery_refuses_below_moq_and_ships_short_sometimes():
 
 def test_customer_payment_plans():
     cust = {c["name"]: c for c in SC["customers"]}
-    assert L.pay_plan(SC, 1, 5, cust["Brightwater School"], 3.0, 0)["status"] == "pay"
-    assert L.pay_plan(SC, 1, 5, cust["Dunmore Hotel"], 3.0, 0)["status"] == "pay"        # pays until it defaults
-    assert L.pay_plan(SC, 1, 5, cust["Dunmore Hotel"], 12.0, 0)["status"] == "default"   # invoice due after day 14
-    d = L.pay_plan(SC, 1, 5, cust["Fenwick Clinic"], 7.0, 0)
+    assert L.pay_plan(SC, 1, 5, cust["Brightwater School"], 3.0, False)["status"] == "pay"
+    assert L.pay_plan(SC, 1, 5, cust["Dunmore Hotel"], 3.0, False)["status"] == "pay"        # pays until it defaults
+    assert L.pay_plan(SC, 1, 5, cust["Dunmore Hotel"], 12.0, False)["status"] == "default"   # invoice due after day 14
+    d = L.pay_plan(SC, 1, 5, cust["Fenwick Clinic"], 7.0, False)
     assert d["status"] == "dispute" and d["frac"] == 0.7
-    assert L.pay_plan(SC, 1, 6, cust["Fenwick Clinic"], 8.0, 1)["status"] == "pay"       # only the first is disputed
-    assert L.pay_plan(SC, 1, 6, cust["Fenwick Clinic"], 3.0, 0)["status"] == "pay"       # before the dispute day
-    late = [L.pay_plan(SC, 1, i, cust["Cobalt Dental Group"], 0.0, 0)["pay_at"] for i in range(100)]
+    assert L.pay_plan(SC, 1, 6, cust["Fenwick Clinic"], 8.0, True)["status"] == "pay"       # only the first is disputed
+    assert L.pay_plan(SC, 1, 6, cust["Fenwick Clinic"], 3.0, False)["status"] == "pay"       # before the dispute day
+    late = [L.pay_plan(SC, 1, i, cust["Cobalt Dental Group"], 0.0, False)["pay_at"] for i in range(100)]
     assert max(late) > 20 + 5 and min(late) < 20 + 3.01                                  # some pay late
     assert L.recovery(SC, "x", {"status": "default", "frac": 0}, 0) == 0
 

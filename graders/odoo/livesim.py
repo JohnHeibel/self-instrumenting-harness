@@ -160,7 +160,7 @@ def line_delivery(sc: dict, seed: int, po: str, v: dict, item: str, qty: float) 
     return float(qty), ""
 
 
-def pay_plan(sc: dict, seed: int, inv_id: int, cust: dict, now_day: float, n_prior_invoices: int) -> dict:
+def pay_plan(sc: dict, seed: int, inv_id: int, cust: dict, now_day: float, already_disputed: bool) -> dict:
     """When and how much a customer pays on an invoice first seen at `now_day`.
     status: pay | default (never) | dispute (pays a fraction, the rest is lost)."""
     rng = random.Random(f"{seed}:pay:{inv_id}")
@@ -169,7 +169,7 @@ def pay_plan(sc: dict, seed: int, inv_id: int, cust: dict, now_day: float, n_pri
     if dd and (now_day >= dd - 1 or pay_at >= dd - 1):
         return {"status": "default", "pay_at": None, "frac": 0.0}
     da = cust.get("dispute_after_day")
-    if da and now_day >= da and n_prior_invoices == 0:
+    if da and now_day >= da and not already_disputed:
         return {"status": "dispute", "pay_at": pay_at + 5, "frac": cust.get("dispute_pays", 0.7)}
     return {"status": "pay", "pay_at": pay_at, "frac": 1.0}
 
@@ -224,11 +224,13 @@ class World:
     # --- state and logs ---
     def _load(self, day_seconds: float) -> dict:
         if self.dir and (self.dir / "livesim-state.json").exists():
-            return json.loads((self.dir / "livesim-state.json").read_text())
+            st = json.loads((self.dir / "livesim-state.json").read_text())
+            st.setdefault("disputed", [])
+            return st
         return {"seed": self.seed, "t0": self.clock(), "day_secs": day_seconds, "setup": False, "closed": 0,
                 "cash": float(self.sc["start_cash"]), "covenant": self.sc["covenant"], "started": False, "injected": {}, "orders": {}, "pos": {}, "bills": {},
                 "recv": {}, "pay_seen": {}, "flows": {}, "intro": [], "events": {}, "fraud": [],
-                "fraud_losses": [], "so_streak": {}, "invoices_per_cust": {}, "bankrupt": {}, "received": {}}
+                "fraud_losses": [], "so_streak": {}, "disputed": [], "bankrupt": {}, "received": {}}
 
     def save(self) -> None:
         if self.dir:
@@ -486,9 +488,9 @@ class World:
             dom.append(("id", "not in", seen))
         for inv in self.w.search_read("account.move", dom, ["partner_id", "amount_total"]):
             cname = inv["partner_id"][1]
-            n = self.state["invoices_per_cust"].get(cname, 0)
-            plan = pay_plan(self.sc, self.seed, inv["id"], custs[cname], now, n)
-            self.state["invoices_per_cust"][cname] = n + 1
+            plan = pay_plan(self.sc, self.seed, inv["id"], custs[cname], now, cname in self.state["disputed"])
+            if plan["status"] == "dispute":
+                self.state["disputed"].append(cname)
             self.state["recv"][str(inv["id"])] = {"customer": cname, "seen_sim": round(now, 2), **plan, "paid": False}
             self.emit("invoice_scheduled", invoice=inv["id"], customer=cname, amount=inv["amount_total"], plan=plan["status"],
                       pay_at=None if plan["pay_at"] is None else round(plan["pay_at"], 2))
