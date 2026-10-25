@@ -28,7 +28,7 @@ Both produce the same records, so nothing above `src/data/source.ts` knows which
 
 Three directions in one codebase, chosen with `#v=`: **a** a broadsheet front page (the goal as the headline, the game as the lead photo, the headline metrics as a table of figures, the room as dispatches), **b** the room first (the conversation between the player and its watchers in the middle, the game and charts around it), **c** the climb (the milestone climb with the cost of each stretch across the top, the numbers as a tablet, the room as inscriptions, Gruvbox dark). Palette: Gruvbox (github.com/morhetz/gruvbox); type: one Times-style serif (Times New Roman, Tinos, Liberation Serif). Every number comes from a record; a dash where the run has none.
 
-The room (`Run.room`) reads: `agent_message` (player, cut at a sentence end, with the agent's own calls since its previous message), `goal` (player, new goal), `marker` `supervisor_nudge` (supervisor, its `text`), `idle_nudge`, `context_handoff` / `context_reset` and any other `marker` with `text` (runner), `notice` with `source: harness` (tool review), urgent task `notice`s (harness: stuck, repeated failure, failed, finished), grader `milestone` and `marker` `agent_died`.
+The room (`Run.room`) reads: `agent_message` (player, cut at a sentence end), `goal` (player, new goal), `marker` `supervisor_nudge` (supervisor, its `text`), `idle_nudge`, `context_handoff` / `context_reset` and any other `marker` with `text` (runner), `notice` with `source: harness` (tool review), urgent task `notice`s (harness: stuck, repeated failure, failed; task results that are only "ok" or "stopped" are left out), grader `milestone` and `marker` `agent_died`.
 
 | Shown | Source |
 |---|---|

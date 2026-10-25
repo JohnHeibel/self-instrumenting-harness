@@ -170,7 +170,6 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .rl p { font-size: 17px; line-height: 1.28; }
 .rl p em { font-style: italic; color: var(--muted); }
 .rl .serves { color: var(--muted); }
-.rl .did { font-size: 13px; color: var(--muted); font-style: italic; margin-top: 2px; }
 .rl.verdict { display: flex; justify-content: center; gap: 10px; align-items: baseline; font-size: 14px; color: var(--muted); margin: 8px 0 12px; }
 .rl.verdict span { font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .rl.verdict.milestone span, .rl.verdict.death span { color: var(--accent); }
@@ -178,7 +177,6 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .rl.from-supervisor .who span { color: var(--ink); }
 
 /* A: letters to the editor */
-.room-letters .rl.own .who span::after { content: " writes"; text-transform: none; letter-spacing: 0; font-weight: 400; font-style: italic; }
 .room-letters .rl.watch { padding-left: 14px; border-left: 1px solid var(--rule-hi); }
 .room-letters .rl.watch p { font-style: italic; }
 
@@ -186,7 +184,7 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .room-chat { background: var(--panel); border: 1px solid var(--rule); padding: 14px 18px 0; }
 .room-chat .rl { max-width: 78%; }
 .room-chat .rl p { font-size: 19px; padding: 7px 12px 8px; background: var(--bg); border: 1px solid var(--rule); }
-.room-chat .rl.own .who, .room-chat .rl.own .did { padding-left: 2px; }
+.room-chat .rl.own .who { padding-left: 2px; }
 .room-chat .rl.watch { margin-left: auto; }
 .room-chat .rl.watch .who { justify-content: flex-end; }
 .room-chat .rl.watch p { background: var(--wash); border-color: var(--wash); }
@@ -210,7 +208,6 @@ button.kn:hover, .hk button:hover span { text-decoration: underline; }
 .v-a .headline .deck { font-size: 20px; }
 .v-a .lead { grid-area: lead; display: flex; flex-direction: column; gap: 6px; }
 .v-a .lead .game { height: 563px; }
-.v-a .caption { font-size: 15px; font-style: italic; color: var(--muted); }
 .v-a .hk { grid-template-columns: repeat(6, 1fr); }
 .v-a .tl .timeline { border: 1px solid var(--rule); background: var(--panel); }
 .v-a .tl .kits { overflow: hidden; }

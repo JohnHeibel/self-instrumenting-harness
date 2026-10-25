@@ -6,7 +6,7 @@ import { HookDetail } from '../components/HookDetail'
 import { Event, Header, Kits, Ledger, Screen } from '../components/panels'
 import { Climb, Figures, Room } from '../components/stories'
 import { MetricCharts } from '../components/MetricCharts'
-import { hms, span } from '../util'
+import { span } from '../util'
 import { Timeline } from '../components/Timeline'
 import { SPEEDS, useNow } from '../util'
 
@@ -104,7 +104,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
   const headline = (
     <section className="headline">
       <h1>{g?.text ?? (run.goalTitle || '—')}</h1>
-      <p className="deck">{g ? <>{g.serves && <>for {g.serves} · </>}set {span(at - g.t)} ago</> : 'run goal; no set_goal yet'}</p>
+      {g && <p className="deck">{g.serves && <>for {g.serves} · </>}set {span(at - g.t)} ago</p>}
     </section>
   )
   return (
@@ -113,12 +113,12 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
         <Header run={run} at={at} now={now} onJump={jumpLive} />
         {v === 'a' && <>
           {headline}
-          <div className="lead">{game}<p className="caption">{run.started?.host ?? 'host'} · {hms(at - run.t0)} into the run</p></div>
+          <div className="lead">{game}</div>
           <div className="tl"><Kits run={run} at={at} onOpen={setOpen} />{timeline}</div>
           <aside className="stats">
             <Backdrop active={active} />
             <Figures run={run} at={at} />
-            <section className="climbbox"><h2>The climb</h2><Climb run={run} at={at} w={388} h={190} onSeek={seek} labels={false} /></section>
+            <section className="climbbox"><Climb run={run} at={at} w={388} h={190} onSeek={seek} labels={false} /></section>
             <Ledger run={run} at={at} />
           </aside>
           <Room run={run} at={at} now={now} variant="letters" />
@@ -134,7 +134,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
             <Backdrop active={active} />
             {headline}
             <section className="climbbox"><Climb run={run} at={at} w={454} h={230} onSeek={seek} /></section>
-            <Figures run={run} at={at} title="Score" />
+            <Figures run={run} at={at} />
             <Ledger run={run} at={at} />
           </aside>
           <div className="tl">{timeline}</div>
@@ -147,7 +147,7 @@ export function Story({ run, compare, spectator, imageUrl }: { run: Run; compare
           </section>
           {game}
           <Room run={run} at={at} now={now} variant="inscriptions" />
-          <section className="tablet"><Figures run={run} at={at} title="Tablet" /><Kits run={run} at={at} onOpen={setOpen} /><Ledger run={run} at={at} /></section>
+          <section className="tablet"><Figures run={run} at={at} /><Kits run={run} at={at} onOpen={setOpen} /><Ledger run={run} at={at} /></section>
           <div className="tl">{timeline}</div>
         </>}
         {openHook && <HookDetail hook={openHook} run={run} onClose={() => setOpen(null)} />}

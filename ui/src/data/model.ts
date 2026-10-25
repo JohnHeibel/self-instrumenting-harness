@@ -109,7 +109,7 @@ export type Kit = {
 export type RoomFrom = 'player' | 'supervisor' | 'harness' | 'tool review' | 'runner' | 'grader'
 export type RoomItem = {
   t: number; from: RoomFrom; kind: 'say' | 'goal' | 'nudge' | 'stuck' | 'failed' | 'review' | 'idle' | 'handoff' | 'reset' | 'note' | 'milestone' | 'death'
-  text: string; full?: string; did?: { n: number; top: [string, number][] }; missing?: string
+  text: string; full?: string; missing?: string
 }
 export type UsageInfo = { requests: number; input: number; cached: number; output: number; reasoning: number; contextWindow?: number; t: number }
 
@@ -515,24 +515,12 @@ export class Run {
   private buildRoom(): RoomItem[] {
     const out: RoomItem[] = []
     const names = new Map(this.milestonesDefined.map(m => [m.id, m.name]))
-    let calls = new Map<string, number>(), nCalls = 0
-    const flushDid = () => {
-      const top = [...calls.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
-      const did = nCalls ? { n: nCalls, top } : undefined
-      calls = new Map(); nCalls = 0
-      return did
-    }
     const seenMs = new Set<string>()
     for (const r of this.recs) {
-      if (r.type === 'tool_call') {  // the agent's own calls (not inside its scripts or tasks), summarised on its next message
-        const via = String(r.via ?? '')
-        if (!byAgent(r) || via === 'script' || via === 'forward' || via.startsWith('task:') || r.tool === 'costs') continue
-        const name = r.tool === 'run_script' ? 'run_script' : String(r.tool)
-        calls.set(name, (calls.get(name) ?? 0) + 1); nCalls++
-      } else if (r.type === 'agent_message' && r.text) {
+      if (r.type === 'agent_message' && r.text) {
         const prev = [...out].reverse().find(x => x.from === 'player' && x.kind === 'say')
         if (prev && prev.full === r.text && r.t - prev.t < 5000) continue  // the same words recorded twice (commentary, then final)
-        out.push({ t: r.t, from: 'player', kind: 'say', text: sentence(r.text, 170), full: r.text, did: flushDid() })
+        out.push({ t: r.t, from: 'player', kind: 'say', text: sentence(r.text, 170), full: r.text })
       } else if (r.type === 'goal' && r.text) {
         out.push({ t: r.t, from: 'player', kind: 'goal', text: String(r.text), full: r.serves ? `for ${r.serves}` : undefined })
       } else if (r.type === 'marker') {
@@ -560,11 +548,11 @@ export class Run {
         else if (r.urgent) {
           const stuck = /^(t\d+) \((.+?)\) has held your hands ([\d.]+) min and keeps making the same acting call \((\d+) times: (\S+)/.exec(text)
           const again = /This is the (\w+) time (\S+) failed with this same error/.exec(text)
-          out.push(stuck ? { t: r.t, from: 'harness', kind: 'stuck', text: `${stuck[1]} (${stuck[2]}) repeated ${stuck[5]} ${stuck[4]}× in ${stuck[3]} min. Stuck?`, full: text }
-            : again ? { t: r.t, from: 'harness', kind: 'failed', text: `${again[1]} identical failure of ${again[2]}. Look before rerunning.`, full: text }
-            : /^ok:/.test(text) ? { t: r.t, from: 'harness', kind: 'note', text: `${r.source} finished.`, full: text }
-            : /^stopped:/.test(text) ? { t: r.t, from: 'harness', kind: 'note', text: `${r.source} stopped.`, full: text }
-            : { t: r.t, from: 'harness', kind: 'failed', text: `${r.source} ${sentence(text.replace(/^failed:\s*/, 'failed: '), 150)}`, full: text })
+          const item: RoomItem | null = stuck ? { t: r.t, from: 'harness', kind: 'stuck', text: `${stuck[1]} (${stuck[2]}): ${stuck[5]} ${stuck[4]}× in ${stuck[3]} min`, full: text }
+            : again ? { t: r.t, from: 'harness', kind: 'failed', text: `${again[2]}: same failure, ${again[1]} time`, full: text }
+            : /^(ok|stopped):/.test(text) ? null
+            : { t: r.t, from: 'harness', kind: 'failed', text: `${r.source} ${sentence(text.replace(/^failed:\s*/, 'failed: '), 150)}`, full: text }
+          if (item) out.push(item)
         }
       } else if (r.type === 'milestone' && !seenMs.has(r.id)) {
         seenMs.add(r.id)

@@ -252,7 +252,7 @@ export function Event({ run, at }: { run: Run; at: number }) {
     <div className={`event ${a.kind}`} aria-live="polite">
       <span className="etag">{NOTICE_LABEL[a.kind]}{st.queue.length > 0 && <small> +{st.queue.length}</small>}</span>
       <b>{a.title}</b>
-      {a.body && <span className="ebody">{a.body}</span>}
+      {a.body && (a.kind === 'break' || a.kind === 'repair') && <span className="ebody">{a.body}</span>}
     </div>
   )
 }

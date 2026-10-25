@@ -36,7 +36,7 @@ export function Room({ run, at, now, variant }: { run: Run; at: number; now: num
   useEffect(() => { const el = box.current; if (el) el.scrollTop = el.scrollHeight }, [last?.t, items.length])
   return (
     <section className={`room room-${variant}`} aria-label="The room">
-      <div className="roomhead"><h2>{variant === 'letters' ? 'Dispatches' : 'The room'}</h2><StateLine run={run} at={at} now={now} /></div>
+      <div className="roomhead"><StateLine run={run} at={at} now={now} /></div>
       <div className="roombody" ref={box}>
         {items.map(i => <Line key={`${i.t}${i.kind}${i.text.slice(0, 12)}`} item={i} run={run} />)}
         {!items.length && <p className="quiet">{DASH}</p>}
@@ -53,8 +53,7 @@ function Line({ item: i, run }: { item: RoomItem; run: Run }) {
   return (
     <div className={`rl ${own ? 'own' : 'watch'} from-${i.from.replace(' ', '-')} k-${i.kind}`} title={i.full}>
       <div className="who"><span>{FROM_LABEL[i.from]}</span><time>{hms(i.t - run.t0)}</time></div>
-      <p>{i.kind === 'goal' ? <><em>new goal</em> {i.text}{i.full && <span className="serves"> ({i.full})</span>}</> : i.text}</p>
-      {i.did && <div className="did">{i.did.n} call{i.did.n === 1 ? '' : 's'}: {i.did.top.map(([k, n]) => `${k} ${n}`).join(', ')}</div>}
+      <p>{i.kind === 'goal' ? <><em>goal</em> {i.text}</> : i.text}</p>
     </div>
   )
 }
@@ -88,7 +87,6 @@ export function Climb({ run, at, w, h, onSeek, labels = true }: { run: Run; at: 
       onMouseDown={e => { seek(e.clientX); const mv = (ev: MouseEvent) => seek(ev.clientX); const up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up) }; addEventListener('mousemove', mv); addEventListener('mouseup', up) }}>
       <defs><clipPath id={`past${w}`}><rect x={0} y={0} width={px} height={h} /></clipPath></defs>
       {[0.25, 0.5, 0.75, 1].map(f => <line key={f} x1={X0} x2={X1} y1={fy(total * f)} y2={fy(total * f)} className="grid" />)}
-      <text x={X1} y={TOP - 8} className="lab end">{total} milestones</text>
       <path d={`${g.d}V${BASE}H${X0}Z`} className="hill ghost" />
       <g clipPath={`url(#past${w})`}><path d={`${g.d}V${BASE}H${X0}Z`} className="hill" /></g>
       <path d={g.d} className="ridge" />
@@ -109,7 +107,7 @@ export function Climb({ run, at, w, h, onSeek, labels = true }: { run: Run; at: 
 }
 
 /** The headline as a table of figures: the run so far, the last 15-minute bin, and the first one, for comparison. */
-export function Figures({ run, at, title = 'Figures' }: { run: Run; at: number; title?: string }) {
+export function Figures({ run, at }: { run: Run; at: number }) {
   const m = run.metrics(at), s = run.metricSeries(at)
   const segs = run.segments(at).filter(x => x.id)
   const bins = s?.bins ?? []
@@ -123,7 +121,6 @@ export function Figures({ run, at, title = 'Figures' }: { run: Run; at: number; 
   ]
   return (
     <section className="figures" aria-label="Headline figures">
-      <h2>{title}</h2>
       <table>
         <thead><tr><th /><th>run</th><th>latest</th><th>first</th></tr></thead>
         <tbody>{rows.map(([k, a, b, c, how]) => <tr key={k} title={how}><th>{k}</th><td className="big">{a}</td><td>{b}</td><td>{c}</td></tr>)}</tbody>
